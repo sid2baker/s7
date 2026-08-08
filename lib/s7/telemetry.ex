@@ -13,7 +13,8 @@ defmodule S7.Telemetry do
     [:s7, :request, :queued],
     [:s7, :request, :rejected],
     [:s7, :request, :start],
-    [:s7, :request, :stop]
+    [:s7, :request, :stop],
+    [:s7, :userdata, :unhandled]
   ]
 
   @doc """

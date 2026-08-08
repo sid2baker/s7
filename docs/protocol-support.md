@@ -12,9 +12,9 @@ interoperability targets have passed; decoding a capture alone is not enough.
 | Partial and concatenated TPKT frames | Implemented | Supported |
 | Bounded TPKT lengths | Implemented | Supported |
 | COTP Connection Request/Confirm | Implemented | Supported |
-| COTP Data TPDU reassembly | Implemented | Supported |
+| COTP Data TPDU segmentation/reassembly | Implemented | Supported |
 | COTP class | Class 0 | Class 0 |
-| COTP Disconnect TPDU | TCP close only | Evidence-driven |
+| COTP DR/DC/ER codecs | Implemented; runtime close uses TCP FIN | Evidence-driven |
 
 ## S7 Services
 
@@ -28,7 +28,8 @@ interoperability targets have passed; decoding a capture alone is not enough.
 | Automatic PDU packing | Implemented | Supported |
 | Concurrent jobs | Implemented, defaults to one | Bounded by negotiation |
 | SZL and CPU metadata | Not implemented | Post-1.0 |
-| Userdata and diagnostics | Not implemented | Post-1.0 |
+| Common userdata envelope and request routing | Implemented | Supported |
+| Userdata diagnostics/services | Not implemented | Post-1.0 |
 | Block upload/download | Not implemented | Separate opt-in surface |
 | PLC control | Not implemented | Separate opt-in surface |
 | Alarms | Not implemented | Post-1.0 |

@@ -11,7 +11,7 @@ defmodule S7.Connection do
 
   alias S7.{Address, Error, Result, Telemetry, TSAP}
   alias S7.Connection.{Drain, Reconnect, Request, Stream}
-  alias S7.Protocol.{PDU, PDUPlanner, ReadVar, SetupCommunication, WriteVar}
+  alias S7.Protocol.{PDU, PDUPlanner, ReadVar, SetupCommunication, UserData, WriteVar}
   alias S7.Transport.{COTP, TPKT}
 
   alias S7.Transport.COTP.{
@@ -139,6 +139,12 @@ defmodule S7.Connection do
           {:ok, [Result.t()]} | {:error, Error.t(), [Result.t()]}
   def write_multi(connection, items) do
     :gen_statem.call(connection, {:write_multi, items}, :infinity)
+  end
+
+  @doc false
+  @spec userdata(pid(), UserData.t(), atom()) :: {:ok, UserData.t()} | {:error, Error.t()}
+  def userdata(connection, message, operation \\ :userdata) do
+    :gen_statem.call(connection, {:userdata, message, operation}, :infinity)
   end
 
   @doc false
@@ -278,6 +284,14 @@ defmodule S7.Connection do
 
   def handle_event({:call, from}, {:write_multi, _items} = operation, :ready, data),
     do: submit_request(from, operation, data)
+
+  def handle_event(
+        {:call, from},
+        {:userdata, _message, _request_operation} = operation,
+        :ready,
+        data
+      ),
+      do: submit_request(from, operation, data)
 
   def handle_event({:call, from}, {:close, opts}, :ready, data) do
     case close_options(opts, data.timeout) do
@@ -1065,6 +1079,19 @@ defmodule S7.Connection do
     end
   end
 
+  defp build_request(from, {:userdata, %UserData{} = message, operation}, _data)
+       when is_atom(operation) do
+    case UserData.validate(message) do
+      :ok -> {:ok, new_request(from, :userdata, operation, [[message]])}
+      {:error, reason} -> {:error, Error.new(:s7, operation, reason)}
+    end
+  end
+
+  defp build_request(_from, {:userdata, _message, operation}, _data) do
+    operation = if is_atom(operation), do: operation, else: :userdata
+    {:error, Error.new(:s7, operation, :invalid_userdata)}
+  end
+
   defp plan_read(addresses, data) do
     PDUPlanner.plan_read(addresses, data.pdu_size, maximum_items: data.max_items_per_pdu)
   end
@@ -1195,6 +1222,9 @@ defmodule S7.Connection do
        when kind in [:write, :write_multi],
        do: WriteVar.request_many(batch, reference)
 
+  defp encode_batch(%Request{kind: :userdata}, [%UserData{} = message], reference),
+    do: UserData.to_pdu(message, reference)
+
   defp allocate_reference(data), do: allocate_reference(data, data.reference, 0)
 
   defp allocate_reference(data, candidate, attempts) when attempts < 0xFFFF do
@@ -1221,7 +1251,27 @@ defmodule S7.Connection do
 
   defp handle_received_pdus([], data), do: {:ok, data}
 
-  defp handle_received_pdus([pdu | pdus], data) do
+  defp handle_received_pdus(
+         [%PDU{header: %{rosctr: :userdata}} = pdu | pdus],
+         data
+       ) do
+    case UserData.from_pdu(pdu) do
+      {:ok, %UserData{parameter: %{type: :indication}} = message} ->
+        telemetry_unhandled_userdata(message, pdu)
+        handle_received_pdus(pdus, data)
+
+      {:ok, _message} ->
+        handle_correlatable_pdu(pdu, pdus, data)
+
+      {:error, %Error{} = error} ->
+        {:disconnect, error, data}
+    end
+  end
+
+  defp handle_received_pdus([pdu | pdus], data),
+    do: handle_correlatable_pdu(pdu, pdus, data)
+
+  defp handle_correlatable_pdu(pdu, pdus, data) do
     reference = pdu.header.pdu_reference
 
     case take_pending(data, reference) do
@@ -1284,6 +1334,16 @@ defmodule S7.Connection do
     WriteVar.decode_responses(pdu, Enum.count(request.current_batch), request.reference)
   end
 
+  defp decode_batch_response(
+         %Request{kind: :userdata, current_batch: [%UserData{} = message]} = request,
+         pdu
+       ) do
+    case UserData.decode_response(pdu, message, request.reference) do
+      {:ok, response} -> {:ok, [response]}
+      {:error, %Error{} = error} -> {:error, error}
+    end
+  end
+
   defp handle_batch_results(data, request, item_results) do
     if caller_alive?(request) and not request.cancelled do
       handle_active_batch_results(data, request, item_results)
@@ -1300,6 +1360,11 @@ defmodule S7.Connection do
 
   defp handle_active_batch_results(data, %Request{kind: :write} = request, [result]) do
     finish_request(request, result)
+    data
+  end
+
+  defp handle_active_batch_results(data, %Request{kind: :userdata} = request, [response]) do
+    finish_request(request, {:ok, response})
     data
   end
 
@@ -1329,9 +1394,9 @@ defmodule S7.Connection do
     enqueue_request(data, request)
   end
 
-  defp request_failure_reply(%Request{kind: kind}, error, _send_state)
-       when kind in [:read, :write],
-       do: {:error, with_operation(error, kind)}
+  defp request_failure_reply(%Request{kind: kind, operation: operation}, error, _send_state)
+       when kind in [:read, :write, :userdata],
+       do: {:error, with_operation(error, operation)}
 
   defp request_failure_reply(%Request{kind: :read_multi} = request, error, send_state) do
     error = with_operation(error, request.operation)
@@ -1412,6 +1477,22 @@ defmodule S7.Connection do
       [:s7, :connection, :disconnected],
       %{system_time: System.system_time()},
       metadata
+    )
+  end
+
+  defp telemetry_unhandled_userdata(message, pdu) do
+    parameter = message.parameter
+
+    Telemetry.execute(
+      [:s7, :userdata, :unhandled],
+      %{system_time: System.system_time(), payload_size: byte_size(message.payload.data)},
+      %{
+        connection: self(),
+        reference: pdu.header.pdu_reference,
+        function_group: parameter.function_group,
+        subfunction: parameter.subfunction,
+        sequence: parameter.sequence
+      }
     )
   end
 
@@ -1602,16 +1683,21 @@ defmodule S7.Connection do
   defp send_pdu(data, pdu, operation) do
     payload = pdu |> PDU.encode() |> IO.iodata_to_binary()
 
-    with {:ok, tpdus} <- COTP.segment_data(payload, data.tpdu_size) do
-      Enum.reduce_while(tpdus, :ok, fn tpdu, :ok ->
-        case send_cotp(data, tpdu, operation) do
-          :ok -> {:cont, :ok}
-          {:error, %Error{} = error} -> {:halt, {:error, error}}
-        end
-      end)
-    else
+    case COTP.segment_data(payload, data.tpdu_size) do
+      {:ok, tpdus} ->
+        send_data_tpdus(data, tpdus, operation)
+
       {:error, reason} ->
         {:error, Error.new(:cotp, operation, reason, details: %{tpdu_size: data.tpdu_size})}
+    end
+  end
+
+  defp send_data_tpdus(_data, [], _operation), do: :ok
+
+  defp send_data_tpdus(data, [tpdu | tpdus], operation) do
+    case send_cotp(data, tpdu, operation) do
+      :ok -> send_data_tpdus(data, tpdus, operation)
+      {:error, %Error{} = error} -> {:error, error}
     end
   end
 
@@ -1837,6 +1923,8 @@ defmodule S7.Connection do
               :malformed_response,
               :unexpected_pdu_reference,
               :unexpected_rosctr,
+              :unexpected_userdata_service,
+              :unexpected_userdata_type,
               :unexpected_tpdu,
               :unexpected_tpdu_number
             ],
@@ -1844,6 +1932,7 @@ defmodule S7.Connection do
 
   defp response_action(error), do: connection_action(error)
 
+  defp operation_name({:userdata, _message, operation}) when is_atom(operation), do: operation
   defp operation_name({operation, _address, _value}), do: operation
   defp operation_name({operation, _items}) when operation in [:write_multi], do: operation
   defp operation_name(operation) when is_atom(operation), do: operation

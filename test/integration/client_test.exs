@@ -3,6 +3,7 @@ defmodule S7.ClientIntegrationTest do
 
   alias S7.{Address, Client, Error, Result}
   alias S7.Connection
+  alias S7.Protocol.UserData
   alias S7.Test.MockPLC
 
   test "connects, negotiates, reads, writes, verifies, and disconnects" do
@@ -67,6 +68,44 @@ defmodule S7.ClientIntegrationTest do
     assert Process.alive?(client)
     assert %{state: :disconnected} = Client.info(client)
     assert {:error, %Error{reason: :not_connected}} = Client.read(client, "DB1.DBW0")
+    assert Client.close(client) == :ok
+  end
+
+  test "routes correlated userdata without letting an indication consume the request" do
+    server = start_server(userdata_fault: :indication_before_response)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+    assert {:ok, request} = UserData.request(:cpu, 1, <<0x00, 0x11, 0x00, 0x00>>)
+
+    assert {:ok, %UserData{payload: %{data: <<0x00, 0x11, 0x00, 0x00>>}}} =
+             Connection.userdata(client, request)
+
+    assert %{state: :ready, in_flight_requests: 0} = Client.info(client)
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert Client.close(client) == :ok
+  end
+
+  test "userdata parameter errors preserve their raw code and the session" do
+    server = start_server(userdata_fault: :parameter_error)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+    assert {:ok, request} = UserData.request(:cpu, 1, <<>>)
+
+    assert {:error, %Error{operation: :read_szl, reason: :userdata_error, code: 0xD041}} =
+             Connection.userdata(client, request, :read_szl)
+
+    assert %{state: :ready} = Client.info(client)
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert Client.close(client) == :ok
+  end
+
+  test "a mismatched userdata service invalidates the session" do
+    server = start_server(userdata_fault: :wrong_service)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+    assert {:ok, request} = UserData.request(:cpu, 1, <<>>)
+
+    assert {:error, %Error{reason: :unexpected_userdata_service}} =
+             Connection.userdata(client, request)
+
+    assert %{state: :disconnected} = Client.info(client)
     assert Client.close(client) == :ok
   end
 

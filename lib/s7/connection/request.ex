@@ -23,14 +23,14 @@ defmodule S7.Connection.Request do
     cancelled: false
   ]
 
-  @type kind :: :read | :read_multi | :write | :write_multi
+  @type kind :: :read | :read_multi | :write | :write_multi | :userdata
 
   @type t :: %__MODULE__{
           id: reference(),
           from: :gen_statem.from() | nil,
           monitor: reference() | nil,
           kind: kind(),
-          operation: :read | :read_multi | :write | :write_multi,
+          operation: atom(),
           raw?: boolean() | nil,
           reference: 0..0xFFFF | nil,
           timer: reference() | nil,

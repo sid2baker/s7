@@ -2,7 +2,8 @@ defmodule S7.Test.MockPLC do
   @moduledoc false
 
   alias S7.Connection
-  alias S7.Protocol.{DataItem, Item, PDU, SetupCommunication}
+  alias S7.Protocol.{DataItem, Item, PDU, SetupCommunication, UserData}
+  alias S7.Protocol.UserData.{Parameter, Payload}
   alias S7.Transport.{COTP, TPKT}
   alias S7.Transport.COTP.{ConnectionConfirm, ConnectionRequest, Data}
 
@@ -44,6 +45,7 @@ defmodule S7.Test.MockPLC do
       buffer: <<>>,
       options: opts,
       read_fault: Keyword.get(opts, :read_fault),
+      userdata_fault: Keyword.get(opts, :userdata_fault),
       deferred_reads: [],
       memory: initial_memory()
     }
@@ -146,6 +148,11 @@ defmodule S7.Test.MockPLC do
 
   defp serve(state) do
     case receive_pdu(state) do
+      {:ok, %PDU{header: %{rosctr: :userdata}} = request_pdu, state} ->
+        {:ok, request} = UserData.from_pdu(request_pdu)
+        state = handle_userdata(state, request_pdu, request)
+        serve(state)
+
       {:ok, %PDU{parameters: <<0x04, count, item_binary::binary>>} = request, state}
       when count > 0 ->
         {:ok, items, <<>>} = decode_request_items(item_binary, count, [])
@@ -176,6 +183,64 @@ defmodule S7.Test.MockPLC do
         send(state.owner, :mock_plc_closed)
         :ok
     end
+  end
+
+  defp handle_userdata(
+         %{userdata_fault: :indication_before_response} = state,
+         request_pdu,
+         request
+       ) do
+    indication = %UserData{
+      parameter: %Parameter{
+        method: 0x12,
+        type: :indication,
+        function_group: :cpu,
+        subfunction: 3,
+        sequence: 9
+      },
+      payload: %Payload{data: "event"}
+    }
+
+    {:ok, indication_pdu} = UserData.to_pdu(indication, 0)
+    :ok = send_pdu(state, indication_pdu)
+    send_userdata_response(%{state | userdata_fault: nil}, request_pdu, request)
+  end
+
+  defp handle_userdata(%{userdata_fault: :parameter_error} = state, request_pdu, request) do
+    send_userdata_response(%{state | userdata_fault: nil}, request_pdu, request,
+      error_code: 0xD041
+    )
+  end
+
+  defp handle_userdata(%{userdata_fault: :wrong_service} = state, request_pdu, request) do
+    send_userdata_response(%{state | userdata_fault: nil}, request_pdu, request,
+      subfunction: request.parameter.subfunction + 1
+    )
+  end
+
+  defp handle_userdata(state, request_pdu, request),
+    do: send_userdata_response(state, request_pdu, request)
+
+  defp send_userdata_response(state, request_pdu, request, opts \\ []) do
+    request_parameter = request.parameter
+
+    response = %UserData{
+      parameter: %Parameter{
+        method: 0x12,
+        type: :response,
+        function_group: request_parameter.function_group,
+        subfunction: Keyword.get(opts, :subfunction, request_parameter.subfunction),
+        sequence: request_parameter.sequence,
+        data_unit_reference: 1,
+        last_data_unit: 0,
+        error_code: Keyword.get(opts, :error_code, 0)
+      },
+      payload: %Payload{data: request.payload.data}
+    }
+
+    {:ok, response_pdu} = UserData.to_pdu(response, request_pdu.header.pdu_reference)
+    :ok = send_pdu(state, response_pdu)
+    state
   end
 
   defp handle_read(%{read_fault: :wrong_reference} = state, request, _item_binary) do

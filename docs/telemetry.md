@@ -13,6 +13,7 @@ native monotonic time units unless noted otherwise.
 | `[:s7, :request, :rejected]` | `system_time`, `queue_depth`, `queue_duration` | request metadata plus `reason` |
 | `[:s7, :request, :start]` | `system_time`, `queue_duration`, `request_size`, `in_flight` | request metadata |
 | `[:s7, :request, :stop]` | `duration`, `request_size`, `response_size` | request metadata plus outcome fields |
+| `[:s7, :userdata, :unhandled]` | `system_time`, `payload_size` | connection, reference, group, subfunction, sequence |
 
 Request metadata contains `connection`, opaque `request_id`, `operation`, PDU
 `reference`, batch `item_count`, and `raw`. Stop metadata adds `outcome`,
