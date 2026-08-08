@@ -25,7 +25,14 @@ peer input.
 A local validation error does not affect the connection. A valid PLC item
 error also leaves the connection usable. Loss of framing, a transport timeout,
 socket closure, or an ambiguous in-flight response disconnects the session so
-that stale bytes cannot be associated with a later request.
+that stale bytes cannot be associated with a later request. Session loss fails
+every in-flight and queued caller; each returned error retains that caller's
+operation. A timed-out reference is never silently forgotten on a live socket.
+
+When the configured caller queue is full, new work fails locally with
+`:queue_full` and no bytes are sent. If a waiting caller exits, its queued work
+is removed. If its PDU is already in flight, the response is still consumed and
+correlated, but no additional batch is scheduled for that caller.
 
 ## Retry Contract
 

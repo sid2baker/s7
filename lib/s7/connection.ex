@@ -2,14 +2,15 @@ defmodule S7.Connection do
   @moduledoc """
   Stateful S7 connection process.
 
-  This `:gen_statem` owns the TCP socket and serializes v0.1 requests. Callers
-  interact through `S7.Client`; protocol modules remain independent of this
-  lifecycle layer.
+  This `:gen_statem` owns the TCP socket, queues callers, and correlates active
+  requests by S7 PDU reference. Callers interact through `S7.Client`; protocol
+  modules remain independent of this lifecycle layer.
   """
 
   @behaviour :gen_statem
 
   alias S7.{Address, Error, Result, TSAP}
+  alias S7.Connection.{Request, Stream}
   alias S7.Protocol.{PDU, PDUPlanner, ReadVar, SetupCommunication, WriteVar}
   alias S7.Transport.{COTP, TPKT}
   alias S7.Transport.COTP.{ConnectionConfirm, ConnectionRequest, Data}
@@ -19,6 +20,7 @@ defmodule S7.Connection do
   @default_tpdu_size 1024
   @default_pdu_size 480
   @default_maximum_items 20
+  @default_queue_limit 64
   @maximum_fragments 64
   @maximum_tpkt_size 0xFFFF
   @maximum_receive_buffer_size 1_048_576
@@ -33,13 +35,20 @@ defmodule S7.Connection do
     :tpdu_size,
     :remote_reference,
     :requested_setup,
+    :negotiated_setup,
     :pdu_size,
     :max_jobs,
     :max_items_per_pdu,
+    :max_queue_size,
     :reference,
     :receive_buffer_limit,
+    :stream,
     receive_buffer: <<>>,
-    max_tpkt_size: @maximum_tpkt_size
+    max_tpkt_size: @maximum_tpkt_size,
+    queue: {[], []},
+    queued_count: 0,
+    pending: %{},
+    request_index: %{}
   ]
 
   @type state_name ::
@@ -141,7 +150,16 @@ defmodule S7.Connection do
 
     case negotiate_s7(data, reference) do
       {:ok, data} ->
-        {:next_state, :ready, data, [{:reply, from, :ok}]}
+        case activate_socket(data) do
+          {:ok, data} ->
+            {:next_state, :ready, data, [{:reply, from, :ok}]}
+
+          {:error, error} ->
+            {:next_state, :disconnected, close_socket(data),
+             [
+               {:reply, from, {:error, error}}
+             ]}
+        end
 
       {:error, error, data} ->
         {:next_state, :disconnected, close_socket(data), [{:reply, from, {:error, error}}]}
@@ -153,65 +171,17 @@ defmodule S7.Connection do
     {:keep_state_and_data, [{:reply, from, {:error, error}}]}
   end
 
-  def handle_event({:call, from}, {:read, address, raw?}, :ready, data) do
-    reference = data.reference
-    data = %{data | reference: next_reference(reference)}
+  def handle_event({:call, from}, {:read, _address, _raw?} = operation, :ready, data),
+    do: submit_request(from, operation, data)
 
-    case perform_read(data, address, raw?, reference) do
-      {:ok, value, data} ->
-        {:keep_state, data, [{:reply, from, {:ok, value}}]}
+  def handle_event({:call, from}, {:write, _address, _value} = operation, :ready, data),
+    do: submit_request(from, operation, data)
 
-      {:error, error, data, :keep} ->
-        {:keep_state, data, [{:reply, from, {:error, error}}]}
+  def handle_event({:call, from}, {:read_multi, _addresses, _raw?} = operation, :ready, data),
+    do: submit_request(from, operation, data)
 
-      {:error, error, data, :disconnect} ->
-        {:next_state, :disconnected, close_socket(data), [{:reply, from, {:error, error}}]}
-    end
-  end
-
-  def handle_event({:call, from}, {:write, address, value}, :ready, data) do
-    reference = data.reference
-    data = %{data | reference: next_reference(reference)}
-
-    case perform_write(data, address, value, reference) do
-      {:ok, data} ->
-        {:keep_state, data, [{:reply, from, :ok}]}
-
-      {:error, error, data, :keep} ->
-        {:keep_state, data, [{:reply, from, {:error, error}}]}
-
-      {:error, error, data, :disconnect} ->
-        {:next_state, :disconnected, close_socket(data), [{:reply, from, {:error, error}}]}
-    end
-  end
-
-  def handle_event({:call, from}, {:read_multi, addresses, raw?}, :ready, data) do
-    case perform_read_multi(data, addresses, raw?) do
-      {:ok, results, data} ->
-        {:keep_state, data, [{:reply, from, {:ok, results}}]}
-
-      {:error, error, results, data, :keep} ->
-        {:keep_state, data, [{:reply, from, {:error, error, results}}]}
-
-      {:error, error, results, data, :disconnect} ->
-        reply = {:error, error, results}
-        {:next_state, :disconnected, close_socket(data), [{:reply, from, reply}]}
-    end
-  end
-
-  def handle_event({:call, from}, {:write_multi, items}, :ready, data) do
-    case perform_write_multi(data, items) do
-      {:ok, results, data} ->
-        {:keep_state, data, [{:reply, from, {:ok, results}}]}
-
-      {:error, error, results, data, :keep} ->
-        {:keep_state, data, [{:reply, from, {:error, error, results}}]}
-
-      {:error, error, results, data, :disconnect} ->
-        reply = {:error, error, results}
-        {:next_state, :disconnected, close_socket(data), [{:reply, from, reply}]}
-    end
-  end
+  def handle_event({:call, from}, {:write_multi, _items} = operation, :ready, data),
+    do: submit_request(from, operation, data)
 
   def handle_event({:call, from}, operation, state, _data)
       when state != :ready and operation != :close and operation != :info do
@@ -229,23 +199,61 @@ defmodule S7.Connection do
       pdu_size: data.pdu_size,
       max_jobs: data.max_jobs,
       max_items_per_pdu: data.max_items_per_pdu,
+      queue_limit: data.max_queue_size,
+      queued_requests: data.queued_count,
+      in_flight_requests: map_size(data.pending),
       tpdu_size: data.tpdu_size,
-      next_reference: data.reference
+      next_reference: data.reference,
+      socket_mode: if(data.socket, do: :active_once, else: :closed)
     }
 
     {:keep_state_and_data, [{:reply, from, info}]}
   end
 
   def handle_event({:call, from}, :close, _state, data) do
-    {:stop_and_reply, :normal, [{:reply, from, :ok}], close_socket(data)}
+    error = Error.new(:client, :request, :connection_closed)
+    data = data |> fail_all_requests(error) |> close_socket()
+    {:stop_and_reply, :normal, [{:reply, from, :ok}], data}
+  end
+
+  def handle_event(:info, {:tcp, socket, bytes}, :ready, %{socket: socket} = data) do
+    case receive_active_bytes(data, bytes) do
+      {:ok, data} ->
+        case schedule_requests(data) do
+          {:ok, data} -> rearm_or_disconnect(data)
+          {:disconnect, error, data} -> disconnect_with_error(data, error)
+        end
+
+      {:disconnect, error, data} ->
+        disconnect_with_error(data, error)
+    end
+  end
+
+  def handle_event(:info, {:request_timeout, reference, token}, :ready, data) do
+    case data.pending do
+      %{^reference => %Request{timer_token: ^token} = request} ->
+        error = Error.new(:tcp, request.operation, :timeout)
+        disconnect_with_error(data, error)
+
+      _other ->
+        :keep_state_and_data
+    end
+  end
+
+  def handle_event(:info, {:DOWN, monitor, :process, _pid, _reason}, :ready, data) do
+    {:keep_state, cancel_request(data, monitor)}
   end
 
   def handle_event(:info, {:tcp_closed, socket}, _state, %{socket: socket} = data) do
-    {:next_state, :disconnected, %{data | socket: nil, receive_buffer: <<>>}}
+    error = Error.new(:tcp, :request, :connection_closed)
+    data = data |> fail_all_requests(error) |> reset_connection()
+    {:next_state, :disconnected, data}
   end
 
-  def handle_event(:info, {:tcp_error, socket, _reason}, _state, %{socket: socket} = data) do
-    {:next_state, :disconnected, close_socket(data)}
+  def handle_event(:info, {:tcp_error, socket, reason}, _state, %{socket: socket} = data) do
+    error = tcp_error(:request, reason)
+    data = data |> fail_all_requests(error) |> close_socket()
+    {:next_state, :disconnected, data}
   end
 
   def handle_event(_event_type, _event_content, _state, _data), do: :keep_state_and_data
@@ -267,8 +275,16 @@ defmodule S7.Connection do
          {:ok, tpdu_size} <- tpdu_size(opts),
          {:ok, pdu_size} <- positive_option(opts, :pdu_size, @default_pdu_size, 0xFFFF),
          :ok <- validate_minimum_pdu(pdu_size),
+         {:ok, max_jobs} <- positive_option(opts, :max_jobs, 1, 0xFFFF),
          {:ok, max_items_per_pdu} <-
            positive_option(opts, :max_items_per_pdu, @default_maximum_items, 0xFF),
+         {:ok, max_queue_size} <-
+           nonnegative_option(
+             opts,
+             :queue_limit,
+             @default_queue_limit,
+             @maximum_receive_buffer_size
+           ),
          {:ok, src_tsap} <- source_tsap(opts),
          {:ok, dst_tsap} <- destination_tsap(opts),
          {:ok, reference} <- initial_reference(opts) do
@@ -280,13 +296,19 @@ defmodule S7.Connection do
          src_tsap: src_tsap,
          dst_tsap: dst_tsap,
          tpdu_size: tpdu_size,
-         requested_setup: %SetupCommunication{pdu_length: pdu_size},
+         requested_setup: %SetupCommunication{
+           max_amq_calling: max_jobs,
+           max_amq_called: max_jobs,
+           pdu_length: pdu_size
+         },
          pdu_size: pdu_size,
-         max_jobs: 1,
+         max_jobs: max_jobs,
          max_items_per_pdu: max_items_per_pdu,
+         max_queue_size: max_queue_size,
          reference: reference,
          receive_buffer_limit: receive_buffer_limit,
-         max_tpkt_size: max_tpkt_size
+         max_tpkt_size: max_tpkt_size,
+         stream: Stream.new()
        }}
     end
   end
@@ -313,6 +335,17 @@ defmodule S7.Connection do
     value = Keyword.get(opts, key, default)
 
     if is_integer(value) and value > 0 and (maximum == :infinity or value <= maximum) do
+      {:ok, value}
+    else
+      {:error,
+       Error.new(:client, :connect, :invalid_option, details: %{option: key, value: value})}
+    end
+  end
+
+  defp nonnegative_option(opts, key, default, maximum) do
+    value = Keyword.get(opts, key, default)
+
+    if is_integer(value) and value >= 0 and value <= maximum do
       {:ok, value}
     else
       {:error,
@@ -398,6 +431,75 @@ defmodule S7.Connection do
     end
   end
 
+  defp activate_socket(data) do
+    case :inet.setopts(data.socket, active: :once) do
+      :ok ->
+        stream = Stream.new(data.receive_buffer)
+        {:ok, %{data | receive_buffer: <<>>, stream: stream}}
+
+      {:error, reason} ->
+        {:error, tcp_error(:connect, reason)}
+    end
+  end
+
+  defp rearm_or_disconnect(data) do
+    case :inet.setopts(data.socket, active: :once) do
+      :ok -> {:keep_state, data}
+      {:error, reason} -> disconnect_with_error(data, tcp_error(:request, reason))
+    end
+  end
+
+  defp disconnect_with_error(data, error) do
+    data = data |> fail_all_requests(error) |> close_socket()
+    {:next_state, :disconnected, data}
+  end
+
+  defp fail_all_requests(data, error) do
+    Enum.each(data.pending, fn {_reference, request} ->
+      finish_request(request, request_failure_reply(request, error, :sent))
+    end)
+
+    data.queue
+    |> :queue.to_list()
+    |> Enum.each(fn request ->
+      finish_request(request, request_failure_reply(request, error, :not_sent))
+    end)
+
+    %{
+      data
+      | pending: %{},
+        queue: :queue.new(),
+        queued_count: 0,
+        request_index: %{}
+    }
+  end
+
+  defp cancel_request(data, monitor) do
+    case Map.pop(data.request_index, monitor) do
+      {nil, _request_index} ->
+        data
+
+      {{:queued, request_id}, request_index} ->
+        requests = :queue.to_list(data.queue)
+        remaining = Enum.reject(requests, &(&1.id == request_id))
+
+        %{
+          data
+          | queue: :queue.from_list(remaining),
+            queued_count: Enum.count(remaining),
+            request_index: request_index
+        }
+
+      {{:pending, reference}, request_index} ->
+        pending =
+          Map.update!(data.pending, reference, fn request ->
+            %{request | from: nil, cancelled: true, batches: []}
+          end)
+
+        %{data | pending: pending, request_index: request_index}
+    end
+  end
+
   defp normalize_host(host) when is_binary(host), do: String.to_charlist(host)
   defp normalize_host(host), do: host
 
@@ -452,12 +554,20 @@ defmodule S7.Connection do
          {:ok, setup} <- SetupCommunication.decode_response(response, reference) do
       pdu_size = min(data.requested_setup.pdu_length, setup.pdu_length)
 
+      max_jobs =
+        Enum.min([
+          data.requested_setup.max_amq_calling,
+          data.requested_setup.max_amq_called,
+          setup.max_amq_calling,
+          setup.max_amq_called
+        ])
+
       {:ok,
        %{
          data
          | pdu_size: pdu_size,
-           max_jobs: 1,
-           requested_setup: setup
+           max_jobs: max_jobs,
+           negotiated_setup: setup
        }}
     else
       {:error, %Error{} = error, data} -> {:error, error, data}
@@ -465,124 +575,353 @@ defmodule S7.Connection do
     end
   end
 
-  defp perform_read(data, address, raw?, reference) do
-    with {:ok, request} <- ReadVar.request(address, reference),
-         :ok <- ensure_pdu_size(request, data, :read),
-         :ok <- ensure_read_response_size(address, data),
-         :ok <- send_pdu(data, request, :read),
-         {:ok, response, data} <- receive_pdu(data, :read) do
-      decoder = if raw?, do: &ReadVar.decode_raw_response/3, else: &ReadVar.decode_response/3
+  defp submit_request(from, operation, data) do
+    with {:ok, request} <- build_request(from, operation, data),
+         :ok <- admit_request(data, request) do
+      request = monitor_request(request)
+      data = enqueue_request(data, request)
 
-      case decoder.(response, address, reference) do
-        {:ok, value} -> {:ok, value, data}
-        {:error, error} -> {:error, error, data, response_action(error)}
+      case schedule_requests(data) do
+        {:ok, data} -> {:keep_state, data}
+        {:disconnect, error, data} -> disconnect_with_error(data, error)
       end
     else
-      {:error, %Error{} = error, data} -> {:error, error, data, :disconnect}
-      {:error, %Error{} = error} -> {:error, error, data, connection_action(error)}
+      {:error, %Error{} = error} ->
+        {:keep_state_and_data, [{:reply, from, {:error, error}}]}
     end
   end
 
-  defp perform_write(data, address, value, reference) do
-    with {:ok, request} <- WriteVar.request(address, value, reference),
-         :ok <- ensure_pdu_size(request, data, :write),
-         :ok <- send_pdu(data, request, :write),
-         {:ok, response, data} <- receive_pdu(data, :write) do
-      case WriteVar.decode_response(response, reference) do
-        :ok -> {:ok, data}
-        {:error, error} -> {:error, error, data, response_action(error)}
-      end
+  defp build_request(from, {:read, address, raw?}, data) do
+    with {:ok, batches} <- plan_read([address], data) do
+      {:ok, new_request(from, :read, :read, batches, raw?)}
+    end
+  end
+
+  defp build_request(from, {:read_multi, addresses, raw?}, data) do
+    with {:ok, batches} <- plan_read(addresses, data) do
+      {:ok, new_request(from, :read_multi, :read_multi, batches, raw?)}
+    end
+  end
+
+  defp build_request(from, {:write, address, value}, data) do
+    with {:ok, batches} <- plan_write([{address, value}], data) do
+      {:ok, new_request(from, :write, :write, batches)}
+    end
+  end
+
+  defp build_request(from, {:write_multi, items}, data) do
+    with {:ok, batches} <- plan_write(items, data) do
+      {:ok, new_request(from, :write_multi, :write_multi, batches)}
+    end
+  end
+
+  defp plan_read(addresses, data) do
+    PDUPlanner.plan_read(addresses, data.pdu_size, maximum_items: data.max_items_per_pdu)
+  end
+
+  defp plan_write(items, data) do
+    PDUPlanner.plan_write(items, data.pdu_size, maximum_items: data.max_items_per_pdu)
+  end
+
+  defp new_request(from, kind, operation, batches, raw? \\ nil) do
+    %Request{
+      id: make_ref(),
+      from: from,
+      monitor: nil,
+      kind: kind,
+      operation: operation,
+      batches: batches,
+      raw?: raw?
+    }
+  end
+
+  defp admit_request(data, request) do
+    if map_size(data.pending) >= data.max_jobs and data.queued_count >= data.max_queue_size do
+      {:error,
+       Error.new(:client, request.operation, :queue_full, details: %{limit: data.max_queue_size})}
     else
-      {:error, %Error{} = error, data} -> {:error, error, data, :disconnect}
-      {:error, %Error{} = error} -> {:error, error, data, connection_action(error)}
+      :ok
     end
   end
 
-  defp perform_read_multi(data, addresses, raw?) do
-    case PDUPlanner.plan_read(addresses, data.pdu_size, maximum_items: data.max_items_per_pdu) do
-      {:ok, batches} -> execute_read_batches(data, batches, raw?, [])
-      {:error, %Error{} = error} -> {:error, error, [], data, :keep}
-    end
+  defp monitor_request(%Request{from: {pid, _tag}} = request) do
+    %{request | monitor: Process.monitor(pid)}
   end
 
-  defp execute_read_batches(data, [], _raw?, results),
-    do: {:ok, Enum.reverse(results), data}
+  defp enqueue_request(data, request) do
+    queue = :queue.in(request, data.queue)
+    request_index = Map.put(data.request_index, request.monitor, {:queued, request.id})
 
-  defp execute_read_batches(data, [batch | batches], raw?, results) do
-    case perform_read_batch(data, batch, raw?) do
-      {:ok, item_results, data} ->
-        batch_results = read_results(batch, item_results)
-        execute_read_batches(data, batches, raw?, prepend_results(batch_results, results))
-
-      {:error, error, data, action} ->
-        failed = failed_results(batch, :error, error)
-        remaining = failed_results(List.flatten(batches), :not_attempted, error)
-        all_results = Enum.reverse(results) ++ failed ++ remaining
-        {:error, error, all_results, data, action}
-    end
+    %{
+      data
+      | queue: queue,
+        queued_count: data.queued_count + 1,
+        request_index: request_index
+    }
   end
 
-  defp perform_read_batch(data, addresses, raw?) do
-    reference = data.reference
-    data = %{data | reference: next_reference(reference)}
+  defp schedule_requests(data)
+       when map_size(data.pending) >= data.max_jobs or data.queued_count == 0,
+       do: {:ok, data}
 
-    with {:ok, request} <- ReadVar.request_many(addresses, reference),
-         :ok <- ensure_pdu_size(request, data, :read),
-         :ok <- send_pdu(data, request, :read),
-         {:ok, response, data} <- receive_pdu(data, :read) do
-      decoder = if raw?, do: &ReadVar.decode_raw_responses/3, else: &ReadVar.decode_responses/3
+  defp schedule_requests(data) do
+    {{:value, request}, queue} = :queue.out(data.queue)
 
-      case decoder.(response, addresses, reference) do
-        {:ok, item_results} -> {:ok, item_results, data}
-        {:error, error} -> {:error, error, data, response_action(error)}
-      end
+    data = %{
+      data
+      | queue: queue,
+        queued_count: data.queued_count - 1,
+        request_index: Map.delete(data.request_index, request.monitor)
+    }
+
+    if caller_alive?(request) do
+      schedule_dispatched_request(dispatch_request(data, request))
     else
-      {:error, %Error{} = error, data} -> {:error, error, data, :disconnect}
-      {:error, %Error{} = error} -> {:error, error, data, connection_action(error)}
+      finish_request(request, nil)
+      schedule_requests(data)
     end
   end
 
-  defp perform_write_multi(data, items) do
-    case PDUPlanner.plan_write(items, data.pdu_size, maximum_items: data.max_items_per_pdu) do
-      {:ok, batches} -> execute_write_batches(data, batches, [])
-      {:error, %Error{} = error} -> {:error, error, [], data, :keep}
+  defp schedule_dispatched_request(result) do
+    case result do
+      {:ok, data} ->
+        schedule_requests(data)
+
+      {:error, error, request, data} ->
+        finish_request(request, request_failure_reply(request, error, :not_sent))
+        schedule_requests(data)
+
+      {:disconnect, error, request, data} ->
+        finish_request(request, request_failure_reply(request, error, :sent))
+        {:disconnect, error, data}
     end
   end
 
-  defp execute_write_batches(data, [], results), do: {:ok, Enum.reverse(results), data}
+  defp dispatch_request(data, %Request{batches: [batch | batches]} = request) do
+    {reference, data} = allocate_reference(data)
 
-  defp execute_write_batches(data, [batch | batches], results) do
-    case perform_write_batch(data, batch) do
-      {:ok, item_results, data} ->
-        batch_results = write_results(batch, item_results)
-        execute_write_batches(data, batches, prepend_results(batch_results, results))
+    request = %{
+      request
+      | reference: reference,
+        current_batch: batch,
+        batches: batches
+    }
 
-      {:error, error, data, action} ->
-        failed = failed_write_results(batch, error)
-        remaining_items = List.flatten(batches)
-        remaining = failed_write_results(remaining_items, error, :not_attempted)
-        all_results = Enum.reverse(results) ++ failed ++ remaining
-        {:error, error, all_results, data, action}
-    end
-  end
+    with {:ok, pdu} <- encode_batch(request, batch, reference),
+         :ok <- ensure_pdu_size(pdu, data, request.operation),
+         :ok <- send_pdu(data, pdu, request.operation) do
+      token = make_ref()
+      timer = Process.send_after(self(), {:request_timeout, reference, token}, data.timeout)
 
-  defp perform_write_batch(data, items) do
-    reference = data.reference
-    data = %{data | reference: next_reference(reference)}
+      request = %{request | timer: timer, timer_token: token}
 
-    with {:ok, request} <- WriteVar.request_many(items, reference),
-         :ok <- ensure_pdu_size(request, data, :write),
-         :ok <- send_pdu(data, request, :write),
-         {:ok, response, data} <- receive_pdu(data, :write) do
-      case WriteVar.decode_responses(response, length(items), reference) do
-        {:ok, item_results} -> {:ok, item_results, data}
-        {:error, error} -> {:error, error, data, response_action(error)}
-      end
+      pending = Map.put(data.pending, reference, request)
+      request_index = Map.put(data.request_index, request.monitor, {:pending, reference})
+      {:ok, %{data | pending: pending, request_index: request_index}}
     else
-      {:error, %Error{} = error, data} -> {:error, error, data, :disconnect}
-      {:error, %Error{} = error} -> {:error, error, data, connection_action(error)}
+      {:error, %Error{layer: :tcp} = error} -> {:disconnect, error, request, data}
+      {:error, %Error{} = error} -> {:error, error, request, data}
     end
   end
+
+  defp encode_batch(%Request{kind: kind}, batch, reference)
+       when kind in [:read, :read_multi],
+       do: ReadVar.request_many(batch, reference)
+
+  defp encode_batch(%Request{kind: kind}, batch, reference)
+       when kind in [:write, :write_multi],
+       do: WriteVar.request_many(batch, reference)
+
+  defp allocate_reference(data), do: allocate_reference(data, data.reference, 0)
+
+  defp allocate_reference(data, candidate, attempts) when attempts < 0xFFFF do
+    if Map.has_key?(data.pending, candidate) do
+      allocate_reference(data, next_reference(candidate), attempts + 1)
+    else
+      {candidate, %{data | reference: next_reference(candidate)}}
+    end
+  end
+
+  defp receive_active_bytes(data, bytes) do
+    opts = [
+      max_tpkt_size: data.max_tpkt_size,
+      receive_buffer_limit: data.receive_buffer_limit,
+      pdu_size: data.pdu_size
+    ]
+
+    case Stream.push(data.stream, bytes, opts) do
+      {:ok, pdus, stream} -> handle_received_pdus(pdus, %{data | stream: stream})
+      {:error, %Error{} = error} -> {:disconnect, error, data}
+    end
+  end
+
+  defp handle_received_pdus([], data), do: {:ok, data}
+
+  defp handle_received_pdus([pdu | pdus], data) do
+    reference = pdu.header.pdu_reference
+
+    case take_pending(data, reference) do
+      {:ok, request, data} ->
+        handle_correlated_pdu(decode_batch_response(request, pdu), request, pdus, data)
+
+      :error ->
+        error =
+          Error.new(:s7, :request, :unexpected_pdu_reference,
+            details: %{received: reference, pending: Map.keys(data.pending)}
+          )
+
+        {:disconnect, error, data}
+    end
+  end
+
+  defp handle_correlated_pdu({:ok, item_results}, request, pdus, data) do
+    data = handle_batch_results(data, request, item_results)
+    handle_received_pdus(pdus, data)
+  end
+
+  defp handle_correlated_pdu({:error, %Error{} = error}, request, pdus, data) do
+    finish_request(request, request_failure_reply(request, error, :sent))
+
+    case response_action(error) do
+      :disconnect -> {:disconnect, error, data}
+      :keep -> handle_received_pdus(pdus, data)
+    end
+  end
+
+  defp take_pending(data, reference) do
+    case Map.pop(data.pending, reference) do
+      {nil, _pending} ->
+        :error
+
+      {%Request{} = request, pending} ->
+        cancel_timer(request.timer)
+
+        data = %{
+          data
+          | pending: pending,
+            request_index: Map.delete(data.request_index, request.monitor)
+        }
+
+        {:ok, %{request | timer: nil, timer_token: nil}, data}
+    end
+  end
+
+  defp decode_batch_response(%Request{kind: kind, raw?: raw?} = request, pdu)
+       when kind in [:read, :read_multi] do
+    decoder = if raw?, do: &ReadVar.decode_raw_responses/3, else: &ReadVar.decode_responses/3
+    decoder.(pdu, request.current_batch, request.reference)
+  end
+
+  defp decode_batch_response(%Request{kind: kind} = request, pdu)
+       when kind in [:write, :write_multi] do
+    WriteVar.decode_responses(pdu, Enum.count(request.current_batch), request.reference)
+  end
+
+  defp handle_batch_results(data, request, item_results) do
+    if caller_alive?(request) and not request.cancelled do
+      handle_active_batch_results(data, request, item_results)
+    else
+      finish_request(request, nil)
+      data
+    end
+  end
+
+  defp handle_active_batch_results(data, %Request{kind: :read} = request, [result]) do
+    finish_request(request, result)
+    data
+  end
+
+  defp handle_active_batch_results(data, %Request{kind: :write} = request, [result]) do
+    finish_request(request, result)
+    data
+  end
+
+  defp handle_active_batch_results(data, %Request{kind: :read_multi} = request, item_results) do
+    results = prepend_results(read_results(request.current_batch, item_results), request.results)
+    continue_or_finish(data, %{request | results: results})
+  end
+
+  defp handle_active_batch_results(data, %Request{kind: :write_multi} = request, item_results) do
+    results = prepend_results(write_results(request.current_batch, item_results), request.results)
+    continue_or_finish(data, %{request | results: results})
+  end
+
+  defp continue_or_finish(data, %Request{batches: []} = request) do
+    finish_request(request, {:ok, Enum.reverse(request.results)})
+    data
+  end
+
+  defp continue_or_finish(data, request) do
+    request = %{request | reference: nil, current_batch: nil}
+    enqueue_request(data, request)
+  end
+
+  defp request_failure_reply(%Request{kind: kind}, error, _send_state)
+       when kind in [:read, :write],
+       do: {:error, with_operation(error, kind)}
+
+  defp request_failure_reply(%Request{kind: :read_multi} = request, error, send_state) do
+    error = with_operation(error, request.operation)
+    results = failed_multi_results(request, error, send_state, :error)
+    {:error, error, results}
+  end
+
+  defp request_failure_reply(%Request{kind: :write_multi} = request, error, send_state) do
+    error = with_operation(error, request.operation)
+    results = failed_multi_results(request, error, send_state, :indeterminate)
+    {:error, error, results}
+  end
+
+  defp failed_multi_results(request, error, send_state, sent_status) do
+    completed = Enum.reverse(request.results)
+
+    current =
+      case {send_state, request.current_batch} do
+        {:sent, batch} when is_list(batch) ->
+          failed_batch(request.kind, batch, sent_status, error)
+
+        _other ->
+          []
+      end
+
+    remaining_batches =
+      case {send_state, request.current_batch} do
+        {:not_sent, batch} when is_list(batch) -> [batch | request.batches]
+        _other -> request.batches
+      end
+
+    remaining = failed_batch(request.kind, List.flatten(remaining_batches), :not_attempted, error)
+    completed ++ current ++ remaining
+  end
+
+  defp failed_batch(kind, items, status, error) when kind in [:read, :read_multi],
+    do: failed_results(items, status, error)
+
+  defp failed_batch(kind, items, status, error) when kind in [:write, :write_multi],
+    do: failed_write_results(items, error, status)
+
+  defp finish_request(request, reply) do
+    cancel_timer(request.timer)
+
+    if request.monitor do
+      Process.demonitor(request.monitor, [:flush])
+    end
+
+    if request.from && not request.cancelled && reply do
+      :gen_statem.reply(request.from, reply)
+    end
+
+    :ok
+  end
+
+  defp caller_alive?(%Request{from: {pid, _tag}}), do: Process.alive?(pid)
+  defp caller_alive?(_request), do: false
+
+  defp cancel_timer(nil), do: :ok
+  defp cancel_timer(timer), do: Process.cancel_timer(timer, async: false, info: false)
+
+  defp prepend_results(new_results, results),
+    do: Enum.reduce(new_results, results, fn result, acc -> [result | acc] end)
 
   defp read_results(addresses, item_results) do
     Enum.zip_with(addresses, item_results, fn
@@ -604,14 +943,11 @@ defmodule S7.Connection do
   defp failed_results(addresses, status, error),
     do: Enum.map(addresses, &%Result{address: &1, status: status, error: error})
 
-  defp failed_write_results(items, error, status \\ :indeterminate) do
+  defp failed_write_results(items, error, status) do
     Enum.map(items, fn {address, _value} ->
       %Result{address: address, status: status, error: error}
     end)
   end
-
-  defp prepend_results(new_results, results),
-    do: Enum.reduce(new_results, results, fn result, acc -> [result | acc] end)
 
   defp ensure_pdu_size(pdu, data, operation) do
     size = PDU.encoded_size(pdu)
@@ -623,19 +959,6 @@ defmodule S7.Connection do
        Error.new(:s7, operation, :pdu_too_large,
          details: %{size: size, negotiated_size: data.pdu_size}
        )}
-    end
-  end
-
-  defp ensure_read_response_size(address, data) do
-    with {:ok, size} <- ReadVar.response_size(address) do
-      if size <= data.pdu_size do
-        :ok
-      else
-        {:error,
-         Error.new(:s7, :read, :pdu_too_large,
-           details: %{size: size, negotiated_size: data.pdu_size}
-         )}
-      end
     end
   end
 
@@ -809,12 +1132,24 @@ defmodule S7.Connection do
     max(deadline - System.monotonic_time(:millisecond), 0)
   end
 
-  defp close_socket(%__MODULE__{socket: nil} = data), do: data
+  defp close_socket(%__MODULE__{socket: nil} = data), do: reset_connection(data)
 
   defp close_socket(%__MODULE__{socket: socket} = data) do
     :gen_tcp.close(socket)
-    %{data | socket: nil, receive_buffer: <<>>}
+    reset_connection(data)
   end
+
+  defp reset_connection(data) do
+    %{
+      data
+      | socket: nil,
+        remote_reference: nil,
+        receive_buffer: <<>>,
+        stream: Stream.new()
+    }
+  end
+
+  defp with_operation(%Error{} = error, operation), do: %{error | operation: operation}
 
   defp connection_action(%Error{layer: :tcp}), do: :disconnect
   defp connection_action(_error), do: :keep

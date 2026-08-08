@@ -43,6 +43,7 @@ defmodule S7.Test.MockPLC do
       buffer: <<>>,
       options: opts,
       read_fault: Keyword.get(opts, :read_fault),
+      deferred_reads: [],
       memory: initial_memory()
     }
 
@@ -104,10 +105,11 @@ defmodule S7.Test.MockPLC do
   defp send_setup_response(state, request) do
     {:ok, requested_setup} = SetupCommunication.decode(request.parameters)
     negotiated_pdu = Keyword.get(state.options, :negotiated_pdu, 240)
+    negotiated_jobs = Keyword.get(state.options, :negotiated_jobs, 1)
 
     response_setup = %SetupCommunication{
-      max_amq_calling: min(requested_setup.max_amq_calling, 1),
-      max_amq_called: min(requested_setup.max_amq_called, 1),
+      max_amq_calling: min(requested_setup.max_amq_calling, negotiated_jobs),
+      max_amq_called: min(requested_setup.max_amq_called, negotiated_jobs),
       pdu_length: min(requested_setup.pdu_length, negotiated_pdu)
     }
 
@@ -146,6 +148,7 @@ defmodule S7.Test.MockPLC do
       {:ok, %PDU{parameters: <<0x04, count, item_binary::binary>>} = request, state}
       when count > 0 ->
         {:ok, items, <<>>} = decode_request_items(item_binary, count, [])
+        state = notify_request(state, :read, request)
 
         next_state =
           case items do
@@ -158,6 +161,7 @@ defmodule S7.Test.MockPLC do
       {:ok, %PDU{parameters: <<0x05, count, item_binary::binary>>} = request, state}
       when count > 0 ->
         {:ok, items, <<>>} = decode_request_items(item_binary, count, [])
+        state = notify_request(state, :write, request)
 
         next_state =
           case items do
@@ -254,7 +258,36 @@ defmodule S7.Test.MockPLC do
         :error -> failed_read_response(request, 0x0A)
       end
 
-    :ok = send_pdu(state, response)
+    send_or_defer_read(state, response)
+  end
+
+  defp send_or_defer_read(state, response) do
+    case Keyword.get(state.options, :reverse_read_groups) do
+      count when is_integer(count) and count > 1 ->
+        defer_read(state, response, count)
+
+      _other ->
+        :ok = send_pdu(state, response)
+        state
+    end
+  end
+
+  defp defer_read(state, response, count) do
+    deferred_reads = [response | state.deferred_reads]
+
+    if Enum.count(deferred_reads) == count do
+      Enum.each(deferred_reads, fn deferred -> :ok = send_pdu(state, deferred) end)
+      %{state | deferred_reads: []}
+    else
+      %{state | deferred_reads: deferred_reads}
+    end
+  end
+
+  defp notify_request(state, operation, request) do
+    if Keyword.get(state.options, :notify_requests, false) do
+      send(state.owner, {:mock_plc_request, operation, request.header.pdu_reference})
+    end
+
     state
   end
 

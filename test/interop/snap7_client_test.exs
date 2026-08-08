@@ -8,15 +8,22 @@ defmodule S7.Snap7ClientInteropTest do
   setup do
     host = System.fetch_env!("S7_TEST_HOST")
     port = System.fetch_env!("S7_TEST_PORT") |> String.to_integer()
-    {:ok, client} = Client.connect(host, port: port, timeout: 2_000)
+    {:ok, client} = Client.connect(host, port: port, timeout: 2_000, max_jobs: 4)
     on_exit(fn -> Client.close(client) end)
     {:ok, client: client}
   end
 
   test "negotiates and reads and writes every v0.1 area and scalar type", %{client: client} do
-    assert %{state: :ready, pdu_size: 480, max_jobs: 1} = Client.info(client)
+    assert %{state: :ready, pdu_size: 480, max_jobs: 4} = Client.info(client)
     assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
     assert Client.read(client, "I0.7") == {:ok, true}
+
+    concurrent_reads =
+      for _index <- 1..4 do
+        Task.async(fn -> Client.read(client, "DB1.DBW0") end)
+      end
+
+    assert Enum.map(concurrent_reads, &Task.await/1) == List.duplicate({:ok, 1234}, 4)
 
     values = [
       {"DB1.DBX20.3", true},

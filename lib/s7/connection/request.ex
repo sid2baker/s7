@@ -1,0 +1,40 @@
+defmodule S7.Connection.Request do
+  @moduledoc false
+
+  alias S7.Result
+
+  @enforce_keys [:id, :from, :monitor, :kind, :operation, :batches]
+  defstruct [
+    :id,
+    :from,
+    :monitor,
+    :kind,
+    :operation,
+    :raw?,
+    :reference,
+    :timer,
+    :timer_token,
+    :current_batch,
+    batches: [],
+    results: [],
+    cancelled: false
+  ]
+
+  @type kind :: :read | :read_multi | :write | :write_multi
+
+  @type t :: %__MODULE__{
+          id: reference(),
+          from: :gen_statem.from() | nil,
+          monitor: reference() | nil,
+          kind: kind(),
+          operation: :read | :read_multi | :write | :write_multi,
+          raw?: boolean() | nil,
+          reference: 0..0xFFFF | nil,
+          timer: reference() | nil,
+          timer_token: reference() | nil,
+          current_batch: list() | nil,
+          batches: [list()],
+          results: [Result.t()],
+          cancelled: boolean()
+        }
+end

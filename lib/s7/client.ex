@@ -2,8 +2,9 @@ defmodule S7.Client do
   @moduledoc """
   Public API for a single classic S7comm connection.
 
-  One request is outstanding at a time in v0.1. The returned client is a PID
-  whose process owns the TCP socket.
+  The returned client is a PID whose process owns the TCP socket. Requests are
+  queued and correlated by PDU reference, with concurrency bounded by Setup
+  Communication negotiation.
   """
 
   alias S7.{Address, Connection, Data, Error, Result}
@@ -21,7 +22,7 @@ defmodule S7.Client do
   Options include `:rack` (default `0`), `:slot` (default `2`), `:port`
   (default `102`), `:timeout` in milliseconds (default `5000`),
   `:connection_type`, explicit `:src_tsap`/`:dst_tsap`, `:tpdu_size`, and the
-  requested S7 `:pdu_size`.
+  requested S7 `:pdu_size`, requested `:max_jobs`, and local `:queue_limit`.
   """
   @spec connect(:inet.hostname() | :inet.ip_address(), keyword()) ::
           {:ok, t()} | {:error, Error.t()}

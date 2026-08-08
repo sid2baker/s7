@@ -36,8 +36,8 @@ One connection process owns one socket. A request is complete only after its
 response has been correlated by PDU reference and fully validated at every
 layer. No caller receives the socket or mutable connection state.
 
-The `1.0` runtime will use `active: :once` socket delivery and maintain bounded
-state for:
+The runtime uses `active: :once` socket delivery and maintains bounded state
+for:
 
 - incremental TPKT bytes;
 - COTP fragment reassembly;
@@ -45,9 +45,10 @@ state for:
 - in-flight requests indexed by PDU reference;
 - request timers and caller monitors.
 
-The current `0.1` implementation deliberately allows one blocking request at a
-time. It will remain the reference behavior until the asynchronous request
-engine passes the same interoperability tests.
+Each logical multi-item operation has at most one PDU batch in flight. Different
+callers may run concurrently up to the conservative minimum of the requested
+and peer-returned AMQ limits. The default request remains one concurrent job.
+Callers above that limit enter a bounded FIFO queue.
 
 ## Protocol Invariants
 

@@ -131,6 +131,12 @@ defmodule S7.ClientIntegrationTest do
 
     assert {:error, %Error{reason: :invalid_pdu_reference}} =
              Client.connect({127, 0, 0, 1}, initial_reference: -1)
+
+    assert {:error, %Error{reason: :invalid_option}} =
+             Client.connect({127, 0, 0, 1}, max_jobs: 0)
+
+    assert {:error, %Error{reason: :invalid_option}} =
+             Client.connect({127, 0, 0, 1}, queue_limit: -1)
   end
 
   test "supports hostname strings, explicit TSAPs, and linked connection startup" do
@@ -150,6 +156,83 @@ defmodule S7.ClientIntegrationTest do
     assert {:ok, linked} = Connection.start_link(~c"127.0.0.1", port: second.port)
     assert :ok = Connection.connect(linked)
     assert :ok = Connection.close(linked)
+  end
+
+  test "correlates concurrent responses that arrive out of order" do
+    server =
+      start_server(
+        negotiated_jobs: 2,
+        reverse_read_groups: 2,
+        notify_requests: true
+      )
+
+    assert {:ok, client} =
+             Client.connect({127, 0, 0, 1}, port: server.port, max_jobs: 2, timeout: 1_000)
+
+    first = Task.async(fn -> Client.read(client, "DB1.DBW0") end)
+    second = Task.async(fn -> Client.read(client, "DB1.DBB1") end)
+
+    assert_receive {:mock_plc_request, :read, first_reference}, 500
+    assert_receive {:mock_plc_request, :read, second_reference}, 500
+    refute first_reference == second_reference
+
+    assert Task.await(first) == {:ok, 1234}
+    assert Task.await(second) == {:ok, 0xA5}
+
+    assert %{
+             max_jobs: 2,
+             in_flight_requests: 0,
+             queued_requests: 0,
+             socket_mode: :active_once
+           } = Client.info(client)
+
+    assert Client.close(client) == :ok
+  end
+
+  test "bounds the caller queue while a request is in flight" do
+    server = start_server(read_fault: :silence, notify_requests: true)
+
+    assert {:ok, client} =
+             Client.connect({127, 0, 0, 1},
+               port: server.port,
+               queue_limit: 1,
+               timeout: 1_000
+             )
+
+    first = Task.async(fn -> Client.read(client, "DB1.DBW0") end)
+    assert_receive {:mock_plc_request, :read, _reference}, 500
+
+    second = Task.async(fn -> Client.read(client, "DB1.DBW2") end)
+    assert %{queued_requests: 1, in_flight_requests: 1} = await_queue(client, 1)
+
+    assert {:error, %Error{layer: :client, reason: :queue_full, details: %{limit: 1}}} =
+             Client.read(client, "DB1.DBB1")
+
+    assert Client.close(client) == :ok
+    assert {:error, %Error{reason: :connection_closed}} = Task.await(first)
+    assert {:error, %Error{reason: :connection_closed}} = Task.await(second)
+  end
+
+  test "stops queued work for a caller that exits and correlates its in-flight response" do
+    server =
+      start_server(
+        negotiated_jobs: 2,
+        reverse_read_groups: 2,
+        notify_requests: true
+      )
+
+    assert {:ok, client} =
+             Client.connect({127, 0, 0, 1}, port: server.port, max_jobs: 2, timeout: 1_000)
+
+    caller = spawn(fn -> Client.read(client, "DB1.DBW0") end)
+    monitor = Process.monitor(caller)
+    assert_receive {:mock_plc_request, :read, _reference}, 500
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^caller, :killed}, 500
+
+    assert Client.read(client, "DB1.DBB1") == {:ok, 0xA5}
+    assert %{state: :ready, in_flight_requests: 0, queued_requests: 0} = Client.info(client)
+    assert Client.close(client) == :ok
   end
 
   test "connection refusal and dead clients return structured errors" do
@@ -431,4 +514,19 @@ defmodule S7.ClientIntegrationTest do
     on_exit(fn -> MockPLC.stop(server) end)
     server
   end
+
+  defp await_queue(client, expected, attempts \\ 50)
+
+  defp await_queue(client, expected, attempts) when attempts > 0 do
+    case Client.info(client) do
+      %{queued_requests: ^expected} = info ->
+        info
+
+      _other ->
+        Process.sleep(5)
+        await_queue(client, expected, attempts - 1)
+    end
+  end
+
+  defp await_queue(client, _expected, 0), do: Client.info(client)
 end

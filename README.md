@@ -1,12 +1,12 @@
 # S7
 
-An Elixir client for classic S7comm over RFC 1006. The initial protocol surface is deliberately
-small: COTP connection setup, S7 Setup Communication, and one-item Read Var and Write Var jobs.
-One S7ANY item may represent either a scalar or a fixed-count range.
+An Elixir client for classic S7comm over RFC 1006. The protocol surface is deliberately focused:
+COTP connection setup, S7 Setup Communication, and single- or multi-item Read Var and Write Var
+jobs. One S7ANY item may represent either a scalar or a fixed-count range.
 
 The implementation keeps protocol codecs pure and gives the TCP socket to one `:gen_statem`
-process. Calls are serialized, PDU references are correlated, and negotiated PDU limits are kept
-in connection state.
+process. Its `active: :once` request engine correlates responses by PDU reference, bounds queued
+and in-flight work, and keeps negotiated limits in connection state.
 
 ## Status
 
@@ -66,11 +66,15 @@ The client returned by `connect/2` is the PID that owns the socket. All public f
 | `:timeout` | `5000` | Connect and request timeout in milliseconds |
 | `:tpdu_size` | `1024` | Requested COTP TPDU size |
 | `:pdu_size` | `480` | Requested S7 PDU size |
+| `:max_jobs` | `1` | Requested and local maximum number of concurrent S7 jobs |
+| `:queue_limit` | `64` | Maximum callers waiting behind in-flight jobs; `0` disables waiting |
 | `:max_tpkt_size` | `65535` | Maximum accepted TPKT frame size |
 | `:receive_buffer_limit` | derived | Maximum buffered TCP bytes; at least `:max_tpkt_size` |
 | `:max_items_per_pdu` | `20` | Conservative peer-compatible Read/Write Var item limit |
 
-The PLC may negotiate a smaller S7 PDU. Inspect the active values with `S7.Client.info/1`.
+The PLC may negotiate smaller PDU or job limits. `S7.Client.info/1` reports negotiated limits,
+the next reference, and current queue/in-flight counts. The default remains one job for broad PLC
+compatibility; opt into concurrency with `max_jobs: n` only when the peer supports it.
 
 ## Addresses And Values
 
@@ -124,7 +128,8 @@ Each entry is an `%S7.Result{}` with status `:ok`, `:error`, `:indeterminate`, o
 
 ```text
 S7.Client
-  -> S7.Connection (:gen_statem, passive :gen_tcp owner)
+  -> S7.Connection (:gen_statem, active-once :gen_tcp owner)
+    -> bounded queue / PDU-reference correlation / request timers
     -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar}
       -> S7.Protocol.PDU / Header / Item / DataItem
         -> S7.Transport.COTP
@@ -132,8 +137,8 @@ S7.Client
 ```
 
 TPKT decoding supports incomplete and concatenated frames. The connection also reassembles bounded
-COTP Data fragments. v0.1 permits one outstanding request, even if the peer negotiates a larger
-job queue.
+COTP Data fragments. PDU references are not reused while in flight, responses may arrive out of
+order, and a request timeout invalidates the session so late bytes cannot affect later work.
 
 The tracked design contract is documented in:
 
