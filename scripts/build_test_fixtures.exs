@@ -1,0 +1,18 @@
+fixtures = %{
+  "test/fixtures/cotp/connection_request.bin" => "11E00000000100C1020100C2020102C0010A",
+  "test/fixtures/cotp/connection_confirm.bin" => "11D00001000100C1020102C2020100C0010A",
+  "test/fixtures/cotp/data.bin" => "02F08032010000FFFF00080000F000000100010780",
+  "test/fixtures/setup/request.bin" => "32010000FFFF00080000F000000100010780",
+  "test/fixtures/setup/response.bin" => "32030000FFFF000800000000F0000001000100F0",
+  "test/fixtures/read/db1_64_bytes_request.bin" =>
+    "320100000000000E00000401120A10020040000184000000",
+  "test/fixtures/read/object_not_found_response.bin" => "32030000000000020004000004010A000000",
+  "test/fixtures/write/m1_0_request.bin" =>
+    "320100000001000E00050501120A100100010000830000080003000100",
+  "test/fixtures/write/success_response.bin" => "3203000000010002000100000501FF"
+}
+
+Enum.each(fixtures, fn {path, hex} ->
+  File.mkdir_p!(Path.dirname(path))
+  File.write!(path, Base.decode16!(hex))
+end)

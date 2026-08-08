@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Erlang and Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.1"
+          elixir-version: "1.19.1"
+
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-otp-28.1-elixir-1.19.1-${{ hashFiles('mix.lock') }}
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Run quality suite
+        run: mix ci
+
+      - name: Run Snap7 packet interoperability suite
+        run: S7_CAPTURE_FILE="${RUNNER_TEMP}/s7-snap7.pcap" bash scripts/run_snap7_packet_check.sh
+
+      - name: Upload S7 packet capture
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: s7-snap7-pcap
+          path: ${{ runner.temp }}/s7-snap7.pcap
+          if-no-files-found: ignore
+          retention-days: 7
