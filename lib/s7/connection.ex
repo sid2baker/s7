@@ -13,7 +13,14 @@ defmodule S7.Connection do
   alias S7.Connection.{Drain, Reconnect, Request, Stream}
   alias S7.Protocol.{PDU, PDUPlanner, ReadVar, SetupCommunication, WriteVar}
   alias S7.Transport.{COTP, TPKT}
-  alias S7.Transport.COTP.{ConnectionConfirm, ConnectionRequest, Data}
+
+  alias S7.Transport.COTP.{
+    ConnectionConfirm,
+    ConnectionRequest,
+    Data,
+    DisconnectRequest,
+    ErrorTPDU
+  }
 
   @default_port 102
   @default_timeout 5_000
@@ -404,6 +411,7 @@ defmodule S7.Connection do
          :ok <- validate_minimum_tpkt(max_tpkt_size),
          {:ok, receive_buffer_limit} <- receive_buffer_limit(opts, max_tpkt_size),
          {:ok, tpdu_size} <- tpdu_size(opts),
+         :ok <- validate_transport_sizes(max_tpkt_size, tpdu_size),
          {:ok, pdu_size} <- positive_option(opts, :pdu_size, @default_pdu_size, 0xFFFF),
          :ok <- validate_minimum_pdu(pdu_size),
          {:ok, max_jobs} <- positive_option(opts, :max_jobs, 1, 0xFFFF),
@@ -591,6 +599,21 @@ defmodule S7.Connection do
 
   defp validate_minimum_tpkt(size),
     do: {:error, Error.new(:tpkt, :connect, :invalid_tpkt_size, details: %{max_tpkt_size: size})}
+
+  defp validate_transport_sizes(max_tpkt_size, tpdu_size)
+       when max_tpkt_size >= tpdu_size + 4,
+       do: :ok
+
+  defp validate_transport_sizes(max_tpkt_size, tpdu_size) do
+    {:error,
+     Error.new(:tpkt, :connect, :invalid_tpkt_size,
+       details: %{
+         max_tpkt_size: max_tpkt_size,
+         minimum: tpdu_size + 4,
+         tpdu_size: tpdu_size
+       }
+     )}
+  end
 
   defp receive_buffer_limit(opts, max_tpkt_size) do
     limit =
@@ -1186,7 +1209,8 @@ defmodule S7.Connection do
     opts = [
       max_tpkt_size: data.max_tpkt_size,
       receive_buffer_limit: data.receive_buffer_limit,
-      pdu_size: data.pdu_size
+      pdu_size: data.pdu_size,
+      tpdu_size: data.tpdu_size
     ]
 
     case Stream.push(data.stream, bytes, opts) do
@@ -1577,7 +1601,18 @@ defmodule S7.Connection do
 
   defp send_pdu(data, pdu, operation) do
     payload = pdu |> PDU.encode() |> IO.iodata_to_binary()
-    send_cotp(data, %Data{payload: payload}, operation)
+
+    with {:ok, tpdus} <- COTP.segment_data(payload, data.tpdu_size) do
+      Enum.reduce_while(tpdus, :ok, fn tpdu, :ok ->
+        case send_cotp(data, tpdu, operation) do
+          :ok -> {:cont, :ok}
+          {:error, %Error{} = error} -> {:halt, {:error, error}}
+        end
+      end)
+    else
+      {:error, reason} ->
+        {:error, Error.new(:cotp, operation, reason, details: %{tpdu_size: data.tpdu_size})}
+    end
   end
 
   defp send_cotp(data, tpdu, operation) do
@@ -1626,8 +1661,9 @@ defmodule S7.Connection do
 
   defp receive_cotp_data(data, deadline, operation, parts, count, size) do
     with {:ok, packet, data} <- receive_tpkt(data, deadline, operation),
+         :ok <- validate_received_tpdu_size(packet.payload, data, operation),
          {:ok, tpdu} <- decode_cotp(packet.payload, operation),
-         {:ok, payload, eot} <- cotp_data(tpdu, operation, rem(count, 0x80)),
+         {:ok, payload, eot} <- cotp_data(tpdu, operation),
          :ok <- validate_reassembled_size(size + byte_size(payload), data, operation) do
       parts = [payload | parts]
       size = size + byte_size(payload)
@@ -1643,18 +1679,45 @@ defmodule S7.Connection do
     end
   end
 
-  defp cotp_data(%Data{payload: payload, eot: eot, tpdu_number: expected}, _operation, expected),
+  defp cotp_data(%Data{payload: payload, eot: eot, tpdu_number: 0}, _operation),
     do: {:ok, payload, eot}
 
-  defp cotp_data(%Data{tpdu_number: received}, operation, expected),
+  defp cotp_data(%Data{tpdu_number: received}, operation),
     do:
       {:error,
        Error.new(:cotp, operation, :unexpected_tpdu_number,
-         details: %{expected: expected, received: received}
+         details: %{expected: 0, received: received}
        )}
 
-  defp cotp_data(_tpdu, operation, _expected),
+  defp cotp_data(%DisconnectRequest{} = request, operation),
+    do:
+      {:error,
+       Error.new(:cotp, operation, :remote_disconnect,
+         code: request.reason,
+         details: %{additional_information: request.additional_information}
+       )}
+
+  defp cotp_data(%ErrorTPDU{} = tpdu, operation),
+    do:
+      {:error,
+       Error.new(:cotp, operation, :protocol_error,
+         code: tpdu.reject_cause,
+         details: %{invalid_tpdu: tpdu.invalid_tpdu}
+       )}
+
+  defp cotp_data(_tpdu, operation),
     do: {:error, Error.new(:cotp, operation, :unexpected_tpdu)}
+
+  defp validate_received_tpdu_size(payload, data, _operation)
+       when byte_size(payload) <= data.tpdu_size,
+       do: :ok
+
+  defp validate_received_tpdu_size(payload, data, operation) do
+    {:error,
+     Error.new(:cotp, operation, :tpdu_too_large,
+       details: %{size: byte_size(payload), negotiated_size: data.tpdu_size}
+     )}
+  end
 
   defp validate_reassembled_size(size, data, _operation) when size <= data.pdu_size, do: :ok
 

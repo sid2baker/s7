@@ -238,8 +238,8 @@ defmodule S7.Test.MockPLC do
   end
 
   defp handle_read(%{read_fault: :too_many_fragments} = state, _request, _item_binary) do
-    for number <- 0..63 do
-      :ok = send_tpdu(state, %Data{payload: <<>>, eot: false, tpdu_number: number})
+    for _number <- 0..63 do
+      :ok = send_tpdu(state, %Data{payload: <<>>, eot: false, tpdu_number: 0})
     end
 
     %{state | read_fault: nil}
@@ -457,11 +457,27 @@ defmodule S7.Test.MockPLC do
   end
 
   defp receive_pdu(state) do
-    case receive_tpkt(state) do
-      {:ok, packet, state} ->
-        {:ok, %Data{payload: payload, eot: true}} = COTP.decode(packet.payload)
+    case receive_cotp_data(state, [], 0) do
+      {:ok, payload, state} ->
         {:ok, pdu, <<>>} = PDU.decode(payload)
         {:ok, pdu, state}
+
+      {:error, :closed} = error ->
+        error
+    end
+  end
+
+  defp receive_cotp_data(state, parts, count) when count < 64 do
+    case receive_tpkt(state) do
+      {:ok, packet, state} ->
+        {:ok, %Data{payload: payload, eot: eot, tpdu_number: 0}} = COTP.decode(packet.payload)
+        parts = [payload | parts]
+
+        if eot do
+          {:ok, parts |> Enum.reverse() |> IO.iodata_to_binary(), state}
+        else
+          receive_cotp_data(state, parts, count + 1)
+        end
 
       {:error, :closed} ->
         {:error, :closed}
@@ -489,7 +505,7 @@ defmodule S7.Test.MockPLC do
       <<first::binary-size(split), second::binary>> = payload
 
       :ok = send_tpdu(state, %Data{payload: first, eot: false})
-      send_tpdu(state, %Data{payload: second, tpdu_number: 1})
+      send_tpdu(state, %Data{payload: second, tpdu_number: 0})
     else
       send_tpdu(state, %Data{payload: payload})
     end

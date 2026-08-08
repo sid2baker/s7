@@ -8,10 +8,20 @@ defmodule S7.Transport.COTP do
 
   import Bitwise
 
-  alias S7.Transport.COTP.{ConnectionConfirm, ConnectionRequest, Data}
+  alias S7.Transport.COTP.{
+    ConnectionConfirm,
+    ConnectionRequest,
+    Data,
+    DisconnectConfirm,
+    DisconnectRequest,
+    ErrorTPDU
+  }
 
   @connection_request 0xE0
   @connection_confirm 0xD0
+  @disconnect_request 0x80
+  @disconnect_confirm 0xC0
+  @error 0x70
   @data 0xF0
 
   @tpdu_size_codes %{
@@ -26,7 +36,13 @@ defmodule S7.Transport.COTP do
 
   @code_to_tpdu_size Map.new(@tpdu_size_codes, fn {size, code} -> {code, size} end)
 
-  @type t :: ConnectionRequest.t() | ConnectionConfirm.t() | Data.t()
+  @type t ::
+          ConnectionRequest.t()
+          | ConnectionConfirm.t()
+          | DisconnectRequest.t()
+          | DisconnectConfirm.t()
+          | ErrorTPDU.t()
+          | Data.t()
   @type decode_error ::
           :invalid_cotp
           | :invalid_header_length
@@ -44,6 +60,10 @@ defmodule S7.Transport.COTP do
 
   def encode(%ConnectionConfirm{} = confirm),
     do: encode_connection(@connection_confirm, confirm)
+
+  def encode(%DisconnectRequest{} = request), do: encode_disconnect_request(request)
+  def encode(%DisconnectConfirm{} = confirm), do: encode_disconnect_confirm(confirm)
+  def encode(%ErrorTPDU{} = error), do: encode_error(error)
 
   def encode(%Data{payload: payload, eot: eot, tpdu_number: number})
       when is_binary(payload) and is_boolean(eot) and number in 0..0x7F do
@@ -76,6 +96,15 @@ defmodule S7.Transport.COTP do
       type in [@connection_request, @connection_confirm] ->
         decode_connection(length, type, rest)
 
+      type == @disconnect_request ->
+        decode_disconnect_request(length, rest)
+
+      type == @disconnect_confirm ->
+        decode_disconnect_confirm(length, rest)
+
+      type == @error ->
+        decode_error(length, rest)
+
       true ->
         {:error, :unsupported_tpdu}
     end
@@ -86,6 +115,33 @@ defmodule S7.Transport.COTP do
   @doc false
   @spec valid_tpdu_size?(term()) :: boolean()
   def valid_tpdu_size?(size), do: Map.has_key?(@tpdu_size_codes, size)
+
+  @doc """
+  Splits an S7 PDU into class-0 COTP Data TPDUs.
+
+  The negotiated TPDU size includes the three-byte Data TPDU header. Class 0
+  requires the TPDU number to remain zero for every fragment.
+  """
+  @spec segment_data(binary(), pos_integer()) ::
+          {:ok, [Data.t()]} | {:error, :invalid_payload | :invalid_tpdu_size}
+  def segment_data(payload, tpdu_size)
+      when is_binary(payload) and is_map_key(@tpdu_size_codes, tpdu_size) do
+    maximum_payload = tpdu_size - 3
+    chunks = split_binary(payload, maximum_payload, [])
+    last = length(chunks) - 1
+
+    {:ok,
+     chunks
+     |> Enum.with_index()
+     |> Enum.map(fn {chunk, index} ->
+       %Data{payload: chunk, eot: index == last, tpdu_number: 0}
+     end)}
+  end
+
+  def segment_data(payload, _tpdu_size) when not is_binary(payload),
+    do: {:error, :invalid_payload}
+
+  def segment_data(_payload, _tpdu_size), do: {:error, :invalid_tpdu_size}
 
   defp encode_connection(type, connection) do
     validate_connection!(type, connection)
@@ -138,6 +194,69 @@ defmodule S7.Transport.COTP do
   defp encode_unknown_parameter(_parameter),
     do: raise(ArgumentError, "invalid unknown COTP parameter")
 
+  defp encode_disconnect_request(request) do
+    validate_reference!(request.destination_reference)
+    validate_reference!(request.source_reference)
+    validate_byte!(request.reason)
+
+    parameters = [
+      encode_optional_parameter(0xE0, request.additional_information),
+      Enum.map(request.unknown_parameters, &encode_unknown_parameter/1)
+    ]
+
+    encode_control_header(
+      <<@disconnect_request, request.destination_reference::unsigned-big-16,
+        request.source_reference::unsigned-big-16, request.reason>>,
+      parameters
+    )
+  end
+
+  defp encode_disconnect_confirm(confirm) do
+    validate_reference!(confirm.destination_reference)
+    validate_reference!(confirm.source_reference)
+    parameters = Enum.map(confirm.unknown_parameters, &encode_unknown_parameter/1)
+
+    encode_control_header(
+      <<@disconnect_confirm, confirm.destination_reference::unsigned-big-16,
+        confirm.source_reference::unsigned-big-16>>,
+      parameters
+    )
+  end
+
+  defp encode_error(error) do
+    validate_reference!(error.destination_reference)
+    validate_byte!(error.reject_cause)
+
+    parameters = [
+      encode_optional_parameter(0xC1, error.invalid_tpdu),
+      Enum.map(error.unknown_parameters, &encode_unknown_parameter/1)
+    ]
+
+    encode_control_header(
+      <<@error, error.destination_reference::unsigned-big-16, error.reject_cause>>,
+      parameters
+    )
+  end
+
+  defp encode_optional_parameter(_code, nil), do: []
+
+  defp encode_optional_parameter(code, value)
+       when is_binary(value) and byte_size(value) <= 0xFF,
+       do: [<<code, byte_size(value)>>, value]
+
+  defp encode_optional_parameter(_code, _value),
+    do: raise(ArgumentError, "invalid COTP control parameter")
+
+  defp encode_control_header(fixed, parameters) do
+    length = byte_size(fixed) + IO.iodata_length(parameters)
+
+    if length > 0xFF do
+      raise ArgumentError, "COTP control header is too large"
+    end
+
+    [<<length>>, fixed, parameters]
+  end
+
   defp encode_tpdu_size(nil), do: []
 
   defp encode_tpdu_size(size) do
@@ -181,6 +300,110 @@ defmodule S7.Transport.COTP do
   end
 
   defp decode_connection(_length, _type, _rest), do: {:error, :invalid_header_length}
+
+  defp decode_disconnect_request(length, rest) when length >= 6 do
+    parameter_size = length - 6
+
+    case rest do
+      <<destination_reference::unsigned-big-16, source_reference::unsigned-big-16, reason,
+        parameters::binary-size(parameter_size)>> ->
+        with {:ok, decoded} <-
+               decode_control_parameters(parameters, 0xE0, :additional_information) do
+          {:ok,
+           struct!(DisconnectRequest, %{
+             destination_reference: destination_reference,
+             source_reference: source_reference,
+             reason: reason,
+             additional_information: decoded.known,
+             unknown_parameters: decoded.unknown
+           })}
+        end
+
+      _ ->
+        {:error, :unexpected_payload}
+    end
+  end
+
+  defp decode_disconnect_request(_length, _rest), do: {:error, :invalid_header_length}
+
+  defp decode_disconnect_confirm(length, rest) when length >= 5 do
+    parameter_size = length - 5
+
+    case rest do
+      <<destination_reference::unsigned-big-16, source_reference::unsigned-big-16,
+        parameters::binary-size(parameter_size)>> ->
+        with {:ok, decoded} <- decode_control_parameters(parameters, nil, nil) do
+          {:ok,
+           %DisconnectConfirm{
+             destination_reference: destination_reference,
+             source_reference: source_reference,
+             unknown_parameters: decoded.unknown
+           }}
+        end
+
+      _ ->
+        {:error, :unexpected_payload}
+    end
+  end
+
+  defp decode_disconnect_confirm(_length, _rest), do: {:error, :invalid_header_length}
+
+  defp decode_error(length, rest) when length >= 4 do
+    parameter_size = length - 4
+
+    case rest do
+      <<destination_reference::unsigned-big-16, reject_cause,
+        parameters::binary-size(parameter_size)>> ->
+        with {:ok, decoded} <- decode_control_parameters(parameters, 0xC1, :invalid_tpdu) do
+          {:ok,
+           %ErrorTPDU{
+             destination_reference: destination_reference,
+             reject_cause: reject_cause,
+             invalid_tpdu: decoded.known,
+             unknown_parameters: decoded.unknown
+           }}
+        end
+
+      _ ->
+        {:error, :unexpected_payload}
+    end
+  end
+
+  defp decode_error(_length, _rest), do: {:error, :invalid_header_length}
+
+  defp decode_control_parameters(parameters, known_code, known_key) do
+    decode_control_parameters(parameters, known_code, known_key, %{known: nil, unknown: []})
+  end
+
+  defp decode_control_parameters(<<>>, _known_code, _known_key, decoded) do
+    {:ok, %{decoded | unknown: Enum.reverse(decoded.unknown)}}
+  end
+
+  defp decode_control_parameters(
+         <<code, length, rest::binary>>,
+         known_code,
+         known_key,
+         decoded
+       )
+       when byte_size(rest) >= length do
+    <<value::binary-size(length), remaining::binary>> = rest
+
+    if code == known_code do
+      case decoded.known do
+        nil ->
+          decode_control_parameters(remaining, known_code, known_key, %{decoded | known: value})
+
+        _existing ->
+          {:error, :malformed_parameters}
+      end
+    else
+      decoded = %{decoded | unknown: [{code, value} | decoded.unknown]}
+      decode_control_parameters(remaining, known_code, known_key, decoded)
+    end
+  end
+
+  defp decode_control_parameters(_parameters, _known_code, _known_key, _decoded),
+    do: {:error, :malformed_parameters}
 
   defp decode_parameters(parameters) do
     initial = %{src_tsap: nil, dst_tsap: nil, tpdu_size: nil, unknown_parameters: []}
@@ -272,4 +495,16 @@ defmodule S7.Transport.COTP do
 
   defp validate_byte!(value) when value in 0..0xFF, do: :ok
   defp validate_byte!(_value), do: raise(ArgumentError, "invalid COTP class/option byte")
+
+  defp split_binary(<<>>, _maximum_payload, []), do: [<<>>]
+  defp split_binary(<<>>, _maximum_payload, chunks), do: Enum.reverse(chunks)
+
+  defp split_binary(binary, maximum_payload, chunks)
+       when byte_size(binary) <= maximum_payload,
+       do: Enum.reverse([binary | chunks])
+
+  defp split_binary(binary, maximum_payload, chunks) do
+    <<chunk::binary-size(maximum_payload), remaining::binary>> = binary
+    split_binary(remaining, maximum_payload, [chunk | chunks])
+  end
 end

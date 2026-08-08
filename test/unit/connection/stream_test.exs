@@ -5,9 +5,9 @@ defmodule S7.Connection.StreamTest do
   alias S7.Error
   alias S7.Protocol.PDU
   alias S7.Transport.{COTP, TPKT}
-  alias S7.Transport.COTP.{ConnectionConfirm, Data}
+  alias S7.Transport.COTP.{ConnectionConfirm, Data, DisconnectRequest, ErrorTPDU}
 
-  @opts [max_tpkt_size: 1024, receive_buffer_limit: 2048, pdu_size: 480]
+  @opts [max_tpkt_size: 1024, receive_buffer_limit: 2048, pdu_size: 480, tpdu_size: 512]
 
   test "decodes fragmented TCP input and concatenated TPKT frames" do
     first = PDU.new(:ack_data, 11, <<0x05, 1>>, <<0xFF>>, error_class: 0, error_code: 0)
@@ -26,7 +26,7 @@ defmodule S7.Connection.StreamTest do
     assert decoded == [first, second]
   end
 
-  test "reassembles numbered COTP data fragments" do
+  test "reassembles class-0 COTP data fragments" do
     pdu = PDU.new(:ack_data, 42, <<0x05, 1>>, <<0xFF>>, error_class: 0, error_code: 0)
     payload = pdu |> PDU.encode() |> IO.iodata_to_binary()
     split = div(byte_size(payload), 2)
@@ -34,7 +34,7 @@ defmodule S7.Connection.StreamTest do
 
     binary =
       frame_tpdu(%Data{payload: first, eot: false, tpdu_number: 0}) <>
-        frame_tpdu(%Data{payload: second, eot: true, tpdu_number: 1})
+        frame_tpdu(%Data{payload: second, eot: true, tpdu_number: 0})
 
     assert {:ok, [^pdu], %Stream{fragment_count: 0}} =
              Stream.push(Stream.new(), binary, @opts)
@@ -53,6 +53,15 @@ defmodule S7.Connection.StreamTest do
     assert {:error, %Error{layer: :cotp, reason: :unexpected_tpdu_number}} =
              Stream.push(Stream.new(), frame_tpdu(%Data{payload: <<0>>, tpdu_number: 1}), @opts)
 
+    tpdu_opts = Keyword.put(@opts, :tpdu_size, 128)
+
+    assert {:error, %Error{layer: :cotp, reason: :tpdu_too_large}} =
+             Stream.push(
+               Stream.new(),
+               frame_tpdu(%Data{payload: :binary.copy(<<0>>, 126)}),
+               tpdu_opts
+             )
+
     oversized_opts = Keyword.put(@opts, :pdu_size, 8)
 
     assert {:error, %Error{layer: :s7, reason: :pdu_too_large}} =
@@ -61,6 +70,26 @@ defmodule S7.Connection.StreamTest do
                frame_tpdu(%Data{payload: :binary.copy(<<0>>, 9)}),
                oversized_opts
              )
+  end
+
+  test "surfaces COTP disconnect and error diagnostics" do
+    disconnect = %DisconnectRequest{reason: 0x80, additional_information: "maintenance"}
+
+    assert {:error,
+            %Error{
+              layer: :cotp,
+              reason: :remote_disconnect,
+              details: %{reason: 0x80, additional_information: "maintenance"}
+            }} = Stream.push(Stream.new(), frame_tpdu(disconnect), @opts)
+
+    error = %ErrorTPDU{reject_cause: 2, invalid_tpdu: <<2, 0xF0, 0x81>>}
+
+    assert {:error,
+            %Error{
+              layer: :cotp,
+              reason: :protocol_error,
+              details: %{reject_cause: 2, invalid_tpdu: <<2, 0xF0, 0x81>>}
+            }} = Stream.push(Stream.new(), frame_tpdu(error), @opts)
   end
 
   test "rejects malformed, invalid, and trailing S7 payloads" do
@@ -81,8 +110,8 @@ defmodule S7.Connection.StreamTest do
 
   test "fails when a fragmented PDU cannot finish within the fragment cap" do
     result =
-      Enum.reduce_while(0..63, Stream.new(), fn number, stream ->
-        binary = frame_tpdu(%Data{payload: <<>>, eot: false, tpdu_number: number})
+      Enum.reduce_while(0..63, Stream.new(), fn _number, stream ->
+        binary = frame_tpdu(%Data{payload: <<>>, eot: false, tpdu_number: 0})
 
         case Stream.push(stream, binary, @opts) do
           {:ok, [], stream} -> {:cont, stream}

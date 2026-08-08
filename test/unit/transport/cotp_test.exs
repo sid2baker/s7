@@ -3,7 +3,15 @@ defmodule S7.Transport.COTPTest do
 
   alias S7.Test.Fixture
   alias S7.Transport.COTP
-  alias S7.Transport.COTP.{ConnectionConfirm, ConnectionRequest, Data}
+
+  alias S7.Transport.COTP.{
+    ConnectionConfirm,
+    ConnectionRequest,
+    Data,
+    DisconnectConfirm,
+    DisconnectRequest,
+    ErrorTPDU
+  }
 
   test "connection request golden fixture decodes and encodes exactly" do
     fixture = Fixture.read!("cotp/connection_request.bin")
@@ -44,6 +52,66 @@ defmodule S7.Transport.COTPTest do
     assert IO.iodata_to_binary(COTP.encode(expected)) == fixture
   end
 
+  test "disconnect request round-trips its reason and diagnostic parameters" do
+    fixture = <<11, 0x80, 0, 1, 0, 2, 0x80, 0xE0, 3, 0xAA, 0xBB, 0xCC>>
+
+    expected = %DisconnectRequest{
+      destination_reference: 1,
+      source_reference: 2,
+      reason: 0x80,
+      additional_information: <<0xAA, 0xBB, 0xCC>>
+    }
+
+    assert COTP.decode(fixture) == {:ok, expected}
+    assert expected |> COTP.encode() |> IO.iodata_to_binary() == fixture
+  end
+
+  test "disconnect confirm round-trips unknown parameters" do
+    fixture = <<8, 0xC0, 0, 1, 0, 2, 0xC3, 1, 0x7A>>
+
+    expected = %DisconnectConfirm{
+      destination_reference: 1,
+      source_reference: 2,
+      unknown_parameters: [{0xC3, <<0x7A>>}]
+    }
+
+    assert COTP.decode(fixture) == {:ok, expected}
+    assert expected |> COTP.encode() |> IO.iodata_to_binary() == fixture
+  end
+
+  test "error TPDU round-trips the rejected TPDU" do
+    fixture = <<9, 0x70, 0, 1, 2, 0xC1, 3, 2, 0xF0, 0x81>>
+
+    expected = %ErrorTPDU{
+      destination_reference: 1,
+      reject_cause: 2,
+      invalid_tpdu: <<2, 0xF0, 0x81>>
+    }
+
+    assert COTP.decode(fixture) == {:ok, expected}
+    assert expected |> COTP.encode() |> IO.iodata_to_binary() == fixture
+  end
+
+  test "segments data against the negotiated class-0 TPDU size" do
+    payload = :binary.copy(<<0xAB>>, 251)
+
+    assert {:ok,
+            [
+              %Data{payload: first, eot: false, tpdu_number: 0},
+              %Data{payload: second, eot: false, tpdu_number: 0},
+              %Data{payload: third, eot: true, tpdu_number: 0}
+            ]} = COTP.segment_data(payload, 128)
+
+    assert byte_size(first) == 125
+    assert byte_size(second) == 125
+    assert byte_size(third) == 1
+    assert first <> second <> third == payload
+
+    assert COTP.segment_data(<<>>, 128) == {:ok, [%Data{payload: <<>>}]}
+    assert COTP.segment_data(<<>>, 127) == {:error, :invalid_tpdu_size}
+    assert COTP.segment_data(:not_binary, 128) == {:error, :invalid_payload}
+  end
+
   test "connection parameters may arrive in another order" do
     fixture =
       Base.decode16!("11D00001000100C0010AC2020100C1020102")
@@ -71,7 +139,7 @@ defmodule S7.Transport.COTPTest do
     assert COTP.decode(<<>>) == {:more, 2}
     assert COTP.decode(<<2, 0xF0>>) == {:more, 1}
     assert COTP.decode(<<3, 0xF0, 0x80, 0>>) == {:error, :invalid_header_length}
-    assert COTP.decode(<<1, 0x70>>) == {:error, :unsupported_tpdu}
+    assert COTP.decode(<<1, 0x60>>) == {:error, :unsupported_tpdu}
     assert COTP.decode(<<8, 0xD0, 0, 1, 0, 1, 0, 0xC0>>) == {:more, 1}
 
     assert COTP.decode(<<7, 0xD0, 0, 1, 0, 1, 0, 0xC0>>) ==
@@ -81,6 +149,8 @@ defmodule S7.Transport.COTPTest do
     assert COTP.decode(<<0, 0xF0>>) == {:error, :invalid_header_length}
     assert COTP.decode(<<3, 0xF0, 0x80, 0>>) == {:error, :invalid_header_length}
     assert COTP.decode(<<5, 0xD0, 0, 1, 0, 1>>) == {:error, :invalid_header_length}
+    assert COTP.decode(<<5, 0x80, 0, 1, 0, 2>>) == {:error, :invalid_header_length}
+    assert COTP.decode(<<3, 0x70, 0, 1>>) == {:error, :invalid_header_length}
     assert COTP.decode(:not_binary) == {:error, :invalid_cotp}
 
     invalid_size = <<9, 0xD0, 0, 1, 0, 1, 0, 0xC0, 1, 0xFF>>
@@ -91,6 +161,9 @@ defmodule S7.Transport.COTPTest do
 
     duplicate_tsap = <<12, 0xD0, 0, 1, 0, 1, 0, 0xC1, 1, 1, 0xC1, 1, 2>>
     assert COTP.decode(duplicate_tsap) == {:error, :malformed_parameters}
+
+    duplicate_diagnostic = <<10, 0x70, 0, 1, 2, 0xC1, 1, 0, 0xC1, 1, 1>>
+    assert COTP.decode(duplicate_diagnostic) == {:error, :malformed_parameters}
   end
 
   test "encoder rejects malformed COTP structures" do

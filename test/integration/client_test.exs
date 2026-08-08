@@ -555,6 +555,27 @@ defmodule S7.ClientIntegrationTest do
     assert Client.close(client) == :ok
   end
 
+  test "outbound S7 PDUs are segmented against the negotiated COTP TPDU size" do
+    server = start_server(negotiated_pdu: 240)
+
+    assert {:ok, client} =
+             Client.connect({127, 0, 0, 1}, port: server.port, tpdu_size: 128)
+
+    writes =
+      for offset <- 400..407 do
+        address = %Address{area: :db, db_number: 1, byte_offset: offset * 2, data_type: :word}
+        {address, offset}
+      end
+
+    assert {:ok, results} = Client.write_multi(client, writes)
+    assert Enum.map(results, & &1.status) == List.duplicate(:ok, 8)
+
+    addresses = Enum.map(writes, &elem(&1, 0))
+    assert {:ok, read_results} = Client.read_multi(client, addresses)
+    assert Enum.map(read_results, & &1.value) == Enum.to_list(400..407)
+    assert Client.close(client) == :ok
+  end
+
   test "a stopped multi-read marks its batch failed and later batches not attempted" do
     server = start_server(negotiated_pdu: 60, read_fault: :silence_multi)
     assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port, timeout: 50)

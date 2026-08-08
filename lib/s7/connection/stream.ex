@@ -4,27 +4,26 @@ defmodule S7.Connection.Stream do
   alias S7.Error
   alias S7.Protocol.PDU
   alias S7.Transport.{COTP, TPKT}
-  alias S7.Transport.COTP.Data
+  alias S7.Transport.COTP.{Data, DisconnectRequest, ErrorTPDU}
 
   @maximum_fragments 64
 
   defstruct buffer: <<>>,
             fragment_parts: [],
             fragment_count: 0,
-            fragment_size: 0,
-            next_tpdu_number: 0
+            fragment_size: 0
 
   @type t :: %__MODULE__{
           buffer: binary(),
           fragment_parts: [binary()],
           fragment_count: non_neg_integer(),
-          fragment_size: non_neg_integer(),
-          next_tpdu_number: 0..0x7F
+          fragment_size: non_neg_integer()
         }
 
   @type option ::
           {:max_tpkt_size, pos_integer()}
           | {:pdu_size, pos_integer()}
+          | {:tpdu_size, pos_integer()}
           | {:receive_buffer_limit, pos_integer()}
 
   @spec new(binary()) :: t()
@@ -65,11 +64,46 @@ defmodule S7.Connection.Stream do
   defp continue_tpkts({:error, %Error{} = error}, _opts, _pdus), do: {:error, error}
 
   defp decode_tpdu(payload, stream, opts) do
+    tpdu_size = Keyword.fetch!(opts, :tpdu_size)
+
+    if byte_size(payload) <= tpdu_size do
+      decode_sized_tpdu(payload, stream, opts)
+    else
+      {:error,
+       error(:cotp, :tpdu_too_large, %{
+         size: byte_size(payload),
+         negotiated_size: tpdu_size
+       })}
+    end
+  end
+
+  defp decode_sized_tpdu(payload, stream, opts) do
     case COTP.decode(payload) do
-      {:ok, %Data{} = data} -> append_fragment(stream, data, opts)
-      {:ok, _tpdu} -> {:error, error(:cotp, :unexpected_tpdu)}
-      {:more, needed} -> {:error, error(:cotp, :invalid_cotp, %{bytes_needed: needed})}
-      {:error, reason} -> {:error, error(:cotp, :invalid_cotp, %{codec_reason: reason})}
+      {:ok, %Data{} = data} ->
+        append_fragment(stream, data, opts)
+
+      {:ok, %DisconnectRequest{} = request} ->
+        {:error,
+         error(:cotp, :remote_disconnect, %{
+           reason: request.reason,
+           additional_information: request.additional_information
+         })}
+
+      {:ok, %ErrorTPDU{} = tpdu} ->
+        {:error,
+         error(:cotp, :protocol_error, %{
+           reject_cause: tpdu.reject_cause,
+           invalid_tpdu: tpdu.invalid_tpdu
+         })}
+
+      {:ok, _tpdu} ->
+        {:error, error(:cotp, :unexpected_tpdu)}
+
+      {:more, needed} ->
+        {:error, error(:cotp, :invalid_cotp, %{bytes_needed: needed})}
+
+      {:error, reason} ->
+        {:error, error(:cotp, :invalid_cotp, %{codec_reason: reason})}
     end
   end
 
@@ -78,11 +112,10 @@ defmodule S7.Connection.Stream do
     {:error, error(:cotp, :too_many_fragments)}
   end
 
-  defp append_fragment(stream, %Data{tpdu_number: number}, _opts)
-       when number != stream.next_tpdu_number do
+  defp append_fragment(_stream, %Data{tpdu_number: number}, _opts) when number != 0 do
     {:error,
      error(:cotp, :unexpected_tpdu_number, %{
-       expected: stream.next_tpdu_number,
+       expected: 0,
        received: number
      })}
   end
@@ -107,8 +140,7 @@ defmodule S7.Connection.Stream do
          stream
          | fragment_parts: [payload | stream.fragment_parts],
            fragment_count: stream.fragment_count + 1,
-           fragment_size: size,
-           next_tpdu_number: rem(stream.next_tpdu_number + 1, 0x80)
+           fragment_size: size
        }}
     end
   end
@@ -138,8 +170,7 @@ defmodule S7.Connection.Stream do
       stream
       | fragment_parts: [],
         fragment_count: 0,
-        fragment_size: 0,
-        next_tpdu_number: 0
+        fragment_size: 0
     }
   end
 
