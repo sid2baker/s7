@@ -45,6 +45,15 @@ the request that caused disconnection. Reads may be retried by an application,
 or by a future explicit policy that preserves the same deadline and documents
 the additional load.
 
+Reconnect backoff has configurable minimum, maximum, jitter, and attempt cap.
+Exhausting the cap leaves the stable client process in `:disconnected`; an
+explicit `S7.Client.reconnect/1` starts a fresh attempt series. A successful
+Setup Communication exchange resets the series.
+
+Graceful close is also bounded. A drain timeout returns `:drain_timeout` to the
+closing caller and every still-accepted operation, with each error's operation
+field adjusted for its recipient.
+
 ## Multi-Item Contract
 
 Multi-item responses preserve input order and retain each PLC return code in

@@ -10,7 +10,7 @@ defmodule S7.Connection do
   @behaviour :gen_statem
 
   alias S7.{Address, Error, Result, TSAP}
-  alias S7.Connection.{Request, Stream}
+  alias S7.Connection.{Drain, Reconnect, Request, Stream}
   alias S7.Protocol.{PDU, PDUPlanner, ReadVar, SetupCommunication, WriteVar}
   alias S7.Transport.{COTP, TPKT}
   alias S7.Transport.COTP.{ConnectionConfirm, ConnectionRequest, Data}
@@ -21,9 +21,35 @@ defmodule S7.Connection do
   @default_pdu_size 480
   @default_maximum_items 20
   @default_queue_limit 64
+  @default_reconnect_min_delay 250
+  @default_reconnect_max_delay 30_000
+  @default_reconnect_jitter 0.2
   @maximum_fragments 64
   @maximum_tpkt_size 0xFFFF
   @maximum_receive_buffer_size 1_048_576
+  @connection_options [
+    :connection_type,
+    :dst_tsap,
+    :initial_reference,
+    :max_items_per_pdu,
+    :max_jobs,
+    :max_tpkt_size,
+    :name,
+    :pdu_size,
+    :port,
+    :queue_limit,
+    :rack,
+    :receive_buffer_limit,
+    :reconnect,
+    :reconnect_jitter,
+    :reconnect_max_attempts,
+    :reconnect_max_delay,
+    :reconnect_min_delay,
+    :slot,
+    :src_tsap,
+    :timeout,
+    :tpdu_size
+  ]
 
   defstruct [
     :host,
@@ -32,6 +58,7 @@ defmodule S7.Connection do
     :timeout,
     :src_tsap,
     :dst_tsap,
+    :requested_tpdu_size,
     :tpdu_size,
     :remote_reference,
     :requested_setup,
@@ -43,6 +70,8 @@ defmodule S7.Connection do
     :reference,
     :receive_buffer_limit,
     :stream,
+    :reconnect,
+    :drain,
     receive_buffer: <<>>,
     max_tpkt_size: @maximum_tpkt_size,
     queue: {[], []},
@@ -52,20 +81,26 @@ defmodule S7.Connection do
   ]
 
   @type state_name ::
-          :disconnected | :tcp_connected | :cotp_connected | :s7_negotiating | :ready
+          :disconnected
+          | :tcp_connected
+          | :cotp_connected
+          | :s7_negotiating
+          | :ready
+          | :reconnecting
+          | :draining
 
   @type t :: %__MODULE__{}
 
   @doc false
   @spec start(term(), keyword()) :: :gen_statem.start_ret()
   def start(host, opts \\ []) do
-    :gen_statem.start(__MODULE__, {host, opts}, [])
+    start_statem(:start, host, opts)
   end
 
   @doc false
   @spec start_link(term(), keyword()) :: :gen_statem.start_ret()
   def start_link(host, opts \\ []) do
-    :gen_statem.start_link(__MODULE__, {host, opts}, [])
+    start_statem(:start_link, host, opts)
   end
 
   @doc false
@@ -100,8 +135,9 @@ defmodule S7.Connection do
   end
 
   @doc false
-  @spec close(pid()) :: :ok
-  def close(connection), do: :gen_statem.call(connection, :close, :infinity)
+  @spec close(:gen_statem.server_ref(), keyword()) :: :ok | {:error, Error.t()}
+  def close(connection, opts \\ []),
+    do: :gen_statem.call(connection, {:close, opts}, :infinity)
 
   @doc false
   @spec info(pid()) :: map() | {:error, Error.t()}
@@ -111,6 +147,34 @@ defmodule S7.Connection do
   @spec next_reference(0..0xFFFF) :: 1..0xFFFF
   def next_reference(0xFFFF), do: 1
   def next_reference(reference) when reference in 0..0xFFFE, do: reference + 1
+
+  defp start_statem(mode, host, opts) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      case normalize_name(Keyword.get(opts, :name)) do
+        {:ok, nil} -> apply(:gen_statem, mode, [__MODULE__, {host, opts}, []])
+        {:ok, name} -> apply(:gen_statem, mode, [name, __MODULE__, {host, opts}, []])
+        {:error, error} -> {:error, error}
+      end
+    else
+      {:error, Error.new(:client, :connect, :invalid_options, details: %{options: opts})}
+    end
+  end
+
+  defp start_statem(mode, host, opts),
+    do: apply(:gen_statem, mode, [__MODULE__, {host, opts}, []])
+
+  defp normalize_name(nil), do: {:ok, nil}
+  defp normalize_name(name) when is_atom(name), do: {:ok, {:local, name}}
+  defp normalize_name({:local, name} = registration) when is_atom(name), do: {:ok, registration}
+  defp normalize_name({:global, _name} = registration), do: {:ok, registration}
+
+  defp normalize_name({:via, module, _name} = registration) when is_atom(module),
+    do: {:ok, registration}
+
+  defp normalize_name(name),
+    do:
+      {:error,
+       Error.new(:client, :connect, :invalid_option, details: %{option: :name, value: name})}
 
   @impl :gen_statem
   def callback_mode, do: :handle_event_function
@@ -125,12 +189,14 @@ defmodule S7.Connection do
 
   @impl :gen_statem
   def handle_event({:call, from}, :connect, :disconnected, data) do
+    data = reset_reconnect(data)
+
     case open_tcp(data) do
       {:ok, data} ->
         {:next_state, :tcp_connected, data, [{:next_event, :internal, {:connect_cotp, from}}]}
 
       {:error, error} ->
-        {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+        connection_failed(data, error, from)
     end
   end
 
@@ -140,7 +206,7 @@ defmodule S7.Connection do
         {:next_state, :cotp_connected, data, [{:next_event, :internal, {:negotiate_s7, from}}]}
 
       {:error, error, data} ->
-        {:next_state, :disconnected, close_socket(data), [{:reply, from, {:error, error}}]}
+        connection_failed(data, error, from)
     end
   end
 
@@ -152,17 +218,35 @@ defmodule S7.Connection do
       {:ok, data} ->
         case activate_socket(data) do
           {:ok, data} ->
-            {:next_state, :ready, data, [{:reply, from, :ok}]}
+            {:next_state, :ready, reset_reconnect(data), [{:reply, from, :ok}]}
 
           {:error, error} ->
-            {:next_state, :disconnected, close_socket(data),
-             [
-               {:reply, from, {:error, error}}
-             ]}
+            connection_failed(data, error, from)
         end
 
       {:error, error, data} ->
-        {:next_state, :disconnected, close_socket(data), [{:reply, from, {:error, error}}]}
+        connection_failed(data, error, from)
+    end
+  end
+
+  def handle_event(
+        :info,
+        {:reconnect, token},
+        :reconnecting,
+        %{reconnect: %Reconnect{token: token} = reconnect} = data
+      ) do
+    reconnect = %{
+      reconnect
+      | timer: nil,
+        token: nil,
+        attempts: reconnect.attempts + 1
+    }
+
+    data = %{data | reconnect: reconnect}
+
+    case establish_connection(data) do
+      {:ok, data} -> {:next_state, :ready, reset_reconnect(data)}
+      {:error, _error, data} -> data |> advance_reconnect_delay() |> reconnect_or_disconnect()
     end
   end
 
@@ -182,6 +266,29 @@ defmodule S7.Connection do
 
   def handle_event({:call, from}, {:write_multi, _items} = operation, :ready, data),
     do: submit_request(from, operation, data)
+
+  def handle_event({:call, from}, {:close, opts}, :ready, data) do
+    case close_options(opts, data.timeout) do
+      {:ok, :immediate, _timeout} -> close_immediately(from, data)
+      {:ok, :drain, timeout} -> begin_drain(from, data, timeout)
+      {:error, error} -> {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  def handle_event({:call, from}, {:close, opts}, :draining, data) do
+    case close_options(opts, data.timeout) do
+      {:ok, :immediate, _timeout} -> close_immediately(from, data)
+      {:ok, :drain, _timeout} -> reply_already_draining(from)
+      {:error, error} -> {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  def handle_event({:call, from}, {:close, opts}, _state, data) do
+    case close_options(opts, data.timeout) do
+      {:ok, _mode, _timeout} -> close_immediately(from, data)
+      {:error, error} -> {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
 
   def handle_event({:call, from}, operation, state, _data)
       when state != :ready and operation != :close and operation != :info do
@@ -204,68 +311,85 @@ defmodule S7.Connection do
       in_flight_requests: map_size(data.pending),
       tpdu_size: data.tpdu_size,
       next_reference: data.reference,
-      socket_mode: if(data.socket, do: :active_once, else: :closed)
+      socket_mode: if(data.socket, do: :active_once, else: :closed),
+      reconnect: data.reconnect.enabled,
+      reconnect_attempts: data.reconnect.attempts,
+      reconnect_delay: data.reconnect.delay
     }
 
     {:keep_state_and_data, [{:reply, from, info}]}
   end
 
-  def handle_event({:call, from}, :close, _state, data) do
-    error = Error.new(:client, :request, :connection_closed)
-    data = data |> fail_all_requests(error) |> close_socket()
-    {:stop_and_reply, :normal, [{:reply, from, :ok}], data}
-  end
-
-  def handle_event(:info, {:tcp, socket, bytes}, :ready, %{socket: socket} = data) do
+  def handle_event(:info, {:tcp, socket, bytes}, state, %{socket: socket} = data)
+      when state in [:ready, :draining] do
     case receive_active_bytes(data, bytes) do
       {:ok, data} ->
         case schedule_requests(data) do
-          {:ok, data} -> rearm_or_disconnect(data)
-          {:disconnect, error, data} -> disconnect_with_error(data, error)
+          {:ok, data} -> after_active_event(state, data)
+          {:disconnect, error, data} -> disconnect_with_error(state, data, error)
         end
 
       {:disconnect, error, data} ->
-        disconnect_with_error(data, error)
+        disconnect_with_error(state, data, error)
     end
   end
 
-  def handle_event(:info, {:request_timeout, reference, token}, :ready, data) do
+  def handle_event(:info, {:request_timeout, reference, token}, state, data)
+      when state in [:ready, :draining] do
     case data.pending do
       %{^reference => %Request{timer_token: ^token} = request} ->
         error = Error.new(:tcp, request.operation, :timeout)
-        disconnect_with_error(data, error)
+        disconnect_with_error(state, data, error)
 
       _other ->
         :keep_state_and_data
     end
   end
 
-  def handle_event(:info, {:DOWN, monitor, :process, _pid, _reason}, :ready, data) do
-    {:keep_state, cancel_request(data, monitor)}
+  def handle_event(:info, {:DOWN, monitor, :process, _pid, _reason}, state, data)
+      when state in [:ready, :draining] do
+    data = cancel_request(data, monitor)
+
+    if state == :draining and requests_idle?(data) do
+      complete_drain(data)
+    else
+      {:keep_state, data}
+    end
   end
 
-  def handle_event(:info, {:tcp_closed, socket}, _state, %{socket: socket} = data) do
+  def handle_event(
+        :info,
+        {:drain_timeout, token},
+        :draining,
+        %{drain: %Drain{token: token}} = data
+      ) do
+    error = Error.new(:client, :close, :drain_timeout)
+    fail_drain(data, error)
+  end
+
+  def handle_event(:info, {:tcp_closed, socket}, state, %{socket: socket} = data) do
     error = Error.new(:tcp, :request, :connection_closed)
     data = data |> fail_all_requests(error) |> reset_connection()
-    {:next_state, :disconnected, data}
+    connection_lost(state, data, error)
   end
 
-  def handle_event(:info, {:tcp_error, socket, reason}, _state, %{socket: socket} = data) do
+  def handle_event(:info, {:tcp_error, socket, reason}, state, %{socket: socket} = data) do
     error = tcp_error(:request, reason)
     data = data |> fail_all_requests(error) |> close_socket()
-    {:next_state, :disconnected, data}
+    connection_lost(state, data, error)
   end
 
   def handle_event(_event_type, _event_content, _state, _data), do: :keep_state_and_data
 
   @impl :gen_statem
   def terminate(_reason, _state, data) do
-    close_socket(data)
+    data |> cancel_reconnect() |> cancel_drain() |> close_socket()
     :ok
   end
 
   defp build_state(host, opts) when is_list(opts) do
-    with :ok <- validate_host(host),
+    with :ok <- validate_connection_options(opts),
+         :ok <- validate_host(host),
          {:ok, port} <- positive_option(opts, :port, @default_port, 0xFFFF),
          {:ok, timeout} <- positive_option(opts, :timeout, @default_timeout, :infinity),
          {:ok, max_tpkt_size} <-
@@ -285,6 +409,7 @@ defmodule S7.Connection do
              @default_queue_limit,
              @maximum_receive_buffer_size
            ),
+         {:ok, reconnect} <- reconnect_options(opts),
          {:ok, src_tsap} <- source_tsap(opts),
          {:ok, dst_tsap} <- destination_tsap(opts),
          {:ok, reference} <- initial_reference(opts) do
@@ -295,6 +420,7 @@ defmodule S7.Connection do
          timeout: timeout,
          src_tsap: src_tsap,
          dst_tsap: dst_tsap,
+         requested_tpdu_size: tpdu_size,
          tpdu_size: tpdu_size,
          requested_setup: %SetupCommunication{
            max_amq_calling: max_jobs,
@@ -308,13 +434,33 @@ defmodule S7.Connection do
          reference: reference,
          receive_buffer_limit: receive_buffer_limit,
          max_tpkt_size: max_tpkt_size,
-         stream: Stream.new()
+         stream: Stream.new(),
+         reconnect: struct!(Reconnect, Map.put(reconnect, :delay, reconnect.min_delay)),
+         drain: %Drain{}
        }}
     end
   end
 
   defp build_state(_host, opts),
     do: {:error, Error.new(:client, :connect, :invalid_options, details: %{options: opts})}
+
+  defp validate_connection_options(opts) do
+    if Keyword.keyword?(opts) do
+      validate_connection_option_keys(Keyword.keys(opts))
+    else
+      {:error, Error.new(:client, :connect, :invalid_options, details: %{options: opts})}
+    end
+  end
+
+  defp validate_connection_option_keys(keys) do
+    case Enum.find(keys, &(&1 not in @connection_options)) do
+      nil ->
+        :ok
+
+      option ->
+        {:error, Error.new(:client, :connect, :invalid_option, details: %{option: option})}
+    end
+  end
 
   defp validate_host(host) when is_binary(host) and byte_size(host) > 0, do: :ok
 
@@ -350,6 +496,72 @@ defmodule S7.Connection do
     else
       {:error,
        Error.new(:client, :connect, :invalid_option, details: %{option: key, value: value})}
+    end
+  end
+
+  defp reconnect_options(opts) do
+    with {:ok, enabled} <- boolean_option(opts, :reconnect, false),
+         {:ok, min_delay} <-
+           positive_option(opts, :reconnect_min_delay, @default_reconnect_min_delay, :infinity),
+         {:ok, max_delay} <-
+           positive_option(opts, :reconnect_max_delay, @default_reconnect_max_delay, :infinity),
+         :ok <- validate_reconnect_delays(min_delay, max_delay),
+         {:ok, max_attempts} <- reconnect_max_attempts(opts),
+         {:ok, jitter} <- reconnect_jitter(opts) do
+      {:ok,
+       %{
+         enabled: enabled,
+         min_delay: min_delay,
+         max_delay: max_delay,
+         max_attempts: max_attempts,
+         jitter: jitter
+       }}
+    end
+  end
+
+  defp boolean_option(opts, key, default) do
+    value = Keyword.get(opts, key, default)
+
+    if is_boolean(value) do
+      {:ok, value}
+    else
+      {:error,
+       Error.new(:client, :connect, :invalid_option, details: %{option: key, value: value})}
+    end
+  end
+
+  defp validate_reconnect_delays(min_delay, max_delay) when min_delay <= max_delay, do: :ok
+
+  defp validate_reconnect_delays(min_delay, max_delay) do
+    {:error,
+     Error.new(:client, :connect, :invalid_option,
+       details: %{option: :reconnect_max_delay, value: max_delay, minimum: min_delay}
+     )}
+  end
+
+  defp reconnect_max_attempts(opts) do
+    value = Keyword.get(opts, :reconnect_max_attempts, :infinity)
+
+    if value == :infinity or (is_integer(value) and value > 0) do
+      {:ok, value}
+    else
+      {:error,
+       Error.new(:client, :connect, :invalid_option,
+         details: %{option: :reconnect_max_attempts, value: value}
+       )}
+    end
+  end
+
+  defp reconnect_jitter(opts) do
+    value = Keyword.get(opts, :reconnect_jitter, @default_reconnect_jitter)
+
+    if is_number(value) and value >= 0 and value <= 1 do
+      {:ok, value / 1}
+    else
+      {:error,
+       Error.new(:client, :connect, :invalid_option,
+         details: %{option: :reconnect_jitter, value: value}
+       )}
     end
   end
 
@@ -431,6 +643,114 @@ defmodule S7.Connection do
     end
   end
 
+  defp connection_failed(data, error, from) do
+    data = close_socket(data)
+
+    case schedule_reconnect(data) do
+      {:ok, data} ->
+        {:next_state, :reconnecting, data, [{:reply, from, {:error, error}}]}
+
+      :disabled ->
+        {:next_state, :disconnected, data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  defp establish_connection(data) do
+    data = reset_session_limits(data)
+
+    with {:ok, data} <- open_for_reconnect(data),
+         {:ok, data} <- negotiate_cotp(data),
+         {:ok, reference, data} <- reserve_setup_reference(data),
+         {:ok, data} <- negotiate_s7(data, reference),
+         {:ok, data} <- activate_for_reconnect(data) do
+      {:ok, reset_reconnect(data)}
+    else
+      {:error, %Error{} = error, data} -> {:error, error, close_socket(data)}
+    end
+  end
+
+  defp open_for_reconnect(data) do
+    case open_tcp(data) do
+      {:ok, data} -> {:ok, data}
+      {:error, error} -> {:error, error, data}
+    end
+  end
+
+  defp reserve_setup_reference(data) do
+    {:ok, data.reference, %{data | reference: next_reference(data.reference)}}
+  end
+
+  defp activate_for_reconnect(data) do
+    case activate_socket(data) do
+      {:ok, data} -> {:ok, data}
+      {:error, error} -> {:error, error, data}
+    end
+  end
+
+  defp reconnect_or_disconnect(data) do
+    case schedule_reconnect(data) do
+      {:ok, data} -> {:next_state, :reconnecting, data}
+      :disabled -> {:next_state, :disconnected, data}
+    end
+  end
+
+  defp schedule_reconnect(data) do
+    reconnect = data.reconnect
+
+    if reconnect_allowed?(reconnect) do
+      token = make_ref()
+
+      delay =
+        reconnect.delay
+        |> jittered_delay(reconnect.jitter)
+        |> min(reconnect.max_delay)
+
+      timer = Process.send_after(self(), {:reconnect, token}, delay)
+      {:ok, %{data | reconnect: %{reconnect | timer: timer, token: token}}}
+    else
+      :disabled
+    end
+  end
+
+  defp reconnect_allowed?(%Reconnect{enabled: false}), do: false
+  defp reconnect_allowed?(%Reconnect{max_attempts: :infinity}), do: true
+
+  defp reconnect_allowed?(reconnect),
+    do: reconnect.attempts < reconnect.max_attempts
+
+  defp jittered_delay(delay, jitter) when jitter == 0, do: delay
+
+  defp jittered_delay(delay, jitter) do
+    factor = 1.0 - jitter + :rand.uniform() * jitter * 2
+    max(round(delay * factor), 0)
+  end
+
+  defp advance_reconnect_delay(data) do
+    reconnect = data.reconnect
+    delay = min(reconnect.delay * 2, reconnect.max_delay)
+    %{data | reconnect: %{reconnect | delay: delay}}
+  end
+
+  defp reset_reconnect(data) do
+    data = cancel_reconnect(data)
+    reconnect = %{data.reconnect | attempts: 0, delay: data.reconnect.min_delay}
+    %{data | reconnect: reconnect}
+  end
+
+  defp cancel_reconnect(data) do
+    cancel_timer(data.reconnect.timer)
+    %{data | reconnect: %{data.reconnect | timer: nil, token: nil}}
+  end
+
+  defp reset_session_limits(data) do
+    %{
+      data
+      | tpdu_size: data.requested_tpdu_size,
+        pdu_size: data.requested_setup.pdu_length,
+        max_jobs: min(data.requested_setup.max_amq_calling, data.requested_setup.max_amq_called)
+    }
+  end
+
   defp activate_socket(data) do
     case :inet.setopts(data.socket, active: :once) do
       :ok ->
@@ -442,17 +762,110 @@ defmodule S7.Connection do
     end
   end
 
-  defp rearm_or_disconnect(data) do
+  defp after_active_event(:draining, data) do
+    if requests_idle?(data), do: complete_drain(data), else: rearm_or_disconnect(:draining, data)
+  end
+
+  defp after_active_event(:ready, data), do: rearm_or_disconnect(:ready, data)
+
+  defp rearm_or_disconnect(state, data) do
     case :inet.setopts(data.socket, active: :once) do
       :ok -> {:keep_state, data}
-      {:error, reason} -> disconnect_with_error(data, tcp_error(:request, reason))
+      {:error, reason} -> disconnect_with_error(state, data, tcp_error(:request, reason))
     end
   end
 
-  defp disconnect_with_error(data, error) do
+  defp disconnect_with_error(:draining, data, error), do: fail_drain(data, error)
+
+  defp disconnect_with_error(_state, data, error) do
     data = data |> fail_all_requests(error) |> close_socket()
-    {:next_state, :disconnected, data}
+    reconnect_or_disconnect(data)
   end
+
+  defp connection_lost(:draining, data, error), do: fail_drain(data, error)
+  defp connection_lost(_state, data, _error), do: reconnect_or_disconnect(data)
+
+  defp close_options(opts, default_timeout) when is_list(opts) do
+    if Keyword.keyword?(opts) and Enum.all?(Keyword.keys(opts), &(&1 in [:mode, :timeout])) do
+      validate_close_options(opts, default_timeout)
+    else
+      invalid_close_options(opts)
+    end
+  end
+
+  defp close_options(opts, _default_timeout), do: invalid_close_options(opts)
+
+  defp validate_close_options(opts, default_timeout) do
+    mode = Keyword.get(opts, :mode, :immediate)
+    timeout = Keyword.get(opts, :timeout, default_timeout)
+
+    if mode in [:immediate, :drain] and is_integer(timeout) and timeout > 0 do
+      {:ok, mode, timeout}
+    else
+      invalid_close_options(opts)
+    end
+  end
+
+  defp invalid_close_options(opts),
+    do: {:error, Error.new(:client, :close, :invalid_options, details: %{options: opts})}
+
+  defp begin_drain(from, data, timeout) do
+    if requests_idle?(data) do
+      close_immediately(from, data)
+    else
+      token = make_ref()
+      timer = Process.send_after(self(), {:drain_timeout, token}, timeout)
+
+      {:next_state, :draining, %{data | drain: %Drain{from: from, timer: timer, token: token}}}
+    end
+  end
+
+  defp close_immediately(from, data) do
+    reply_closing_caller(data, :ok)
+    error = Error.new(:client, :request, :connection_closed)
+
+    data =
+      data
+      |> cancel_reconnect()
+      |> cancel_drain()
+      |> fail_all_requests(error)
+      |> close_socket()
+
+    {:stop_and_reply, :normal, [{:reply, from, :ok}], data}
+  end
+
+  defp reply_already_draining(from) do
+    error = Error.new(:client, :close, :already_closing)
+    {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+  end
+
+  defp complete_drain(data) do
+    reply_closing_caller(data, :ok)
+    data = data |> cancel_drain() |> close_socket()
+    {:stop, :normal, data}
+  end
+
+  defp fail_drain(data, error) do
+    reply_closing_caller(data, {:error, with_operation(error, :close)})
+
+    data =
+      data
+      |> cancel_drain()
+      |> fail_all_requests(error)
+      |> close_socket()
+
+    {:stop, :normal, data}
+  end
+
+  defp reply_closing_caller(%{drain: %Drain{from: nil}}, _reply), do: :ok
+  defp reply_closing_caller(data, reply), do: :gen_statem.reply(data.drain.from, reply)
+
+  defp cancel_drain(data) do
+    cancel_timer(data.drain.timer)
+    %{data | drain: %Drain{}}
+  end
+
+  defp requests_idle?(data), do: map_size(data.pending) == 0 and data.queued_count == 0
 
   defp fail_all_requests(data, error) do
     Enum.each(data.pending, fn {_reference, request} ->
@@ -507,14 +920,14 @@ defmodule S7.Connection do
     request = %ConnectionRequest{
       src_tsap: data.src_tsap,
       dst_tsap: data.dst_tsap,
-      tpdu_size: data.tpdu_size
+      tpdu_size: data.requested_tpdu_size
     }
 
     with :ok <- send_cotp(data, request, :connect),
          {:ok, packet, data} <- receive_tpkt(data, deadline(data.timeout), :connect),
          {:ok, confirm} <- decode_cotp(packet.payload, :connect),
          :ok <- validate_confirm(confirm, request) do
-      tpdu_size = min(data.tpdu_size, confirm.tpdu_size || data.tpdu_size)
+      tpdu_size = min(data.requested_tpdu_size, confirm.tpdu_size || data.requested_tpdu_size)
       {:ok, %{data | tpdu_size: tpdu_size, remote_reference: confirm.source_reference}}
     else
       {:error, %Error{} = error, data} -> {:error, error, data}
@@ -583,7 +996,7 @@ defmodule S7.Connection do
 
       case schedule_requests(data) do
         {:ok, data} -> {:keep_state, data}
-        {:disconnect, error, data} -> disconnect_with_error(data, error)
+        {:disconnect, error, data} -> disconnect_with_error(:ready, data, error)
       end
     else
       {:error, %Error{} = error} ->

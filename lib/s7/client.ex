@@ -9,12 +9,54 @@ defmodule S7.Client do
 
   alias S7.{Address, Connection, Data, Error, Result}
 
-  @opaque t :: pid()
+  @opaque t :: GenServer.server()
   @type address :: String.t() | Address.t()
   @type multi_reply ::
           {:ok, [Result.t()]}
           | {:error, Error.t()}
           | {:error, Error.t(), [Result.t()]}
+
+  @doc """
+  Starts a linked, supervision-ready client from keyword options.
+
+  `:host` is required. With `reconnect: true`, an unavailable endpoint leaves
+  the process alive in `:reconnecting`; otherwise startup fails.
+  """
+  @spec start_link(keyword()) :: GenServer.on_start()
+  def start_link(opts) when is_list(opts) do
+    if Keyword.keyword?(opts), do: start_link_options(opts), else: invalid_start_options(opts)
+  end
+
+  def start_link(opts), do: invalid_start_options(opts)
+
+  defp start_link_options(opts) do
+    with {:ok, host} <- fetch_start_host(opts) do
+      connection_opts = Keyword.drop(opts, [:host, :id])
+
+      case Connection.start_link(host, connection_opts) do
+        {:ok, connection} -> finish_start_link(connection, connection_opts)
+        {:error, %Error{} = error} -> {:error, error}
+        {:error, reason} -> {:error, Error.new(:client, :connect, :start_failed, code: reason)}
+      end
+    end
+  end
+
+  defp invalid_start_options(opts),
+    do: {:error, Error.new(:client, :connect, :invalid_options, details: %{options: opts})}
+
+  @doc false
+  @spec child_spec(keyword()) :: Supervisor.child_spec()
+  def child_spec(opts) do
+    id = Keyword.get(opts, :id, Keyword.get(opts, :name, __MODULE__))
+
+    %{
+      id: id,
+      start: {__MODULE__, :start_link, [opts]},
+      restart: :permanent,
+      shutdown: 5_000,
+      type: :worker
+    }
+  end
 
   @doc """
   Connects to a PLC and completes COTP and Setup Communication negotiation.
@@ -111,11 +153,22 @@ defmodule S7.Client do
   def info(client), do: call(fn -> Connection.info(client) end, :info)
 
   @doc """
-  Closes the TCP connection and stops its owner process.
+  Starts a fresh session on a disconnected long-lived client.
+
+  In-flight operations from a failed session are never replayed.
   """
-  @spec close(t()) :: :ok | {:error, Error.t()}
-  def close(client) do
-    case call(fn -> Connection.close(client) end, :close) do
+  @spec reconnect(t()) :: :ok | {:error, Error.t()}
+  def reconnect(client), do: call(fn -> Connection.connect(client) end, :connect)
+
+  @doc """
+  Closes the TCP connection and stops its owner process.
+
+  The default `mode: :immediate` fails accepted work. `mode: :drain` rejects
+  new calls and waits up to `:timeout` milliseconds for accepted work.
+  """
+  @spec close(t(), keyword()) :: :ok | {:error, Error.t()}
+  def close(client, opts \\ []) do
+    case call(fn -> Connection.close(client, opts) end, :close) do
       {:error, %Error{reason: :connection_closed}} -> :ok
       result -> result
     end
@@ -129,6 +182,28 @@ defmodule S7.Client do
       {:error, %Error{} = error} ->
         stop_connection(connection)
         {:error, error}
+    end
+  end
+
+  defp finish_start_link(connection, opts) do
+    case call(fn -> Connection.connect(connection) end, :connect) do
+      :ok ->
+        {:ok, connection}
+
+      {:error, %Error{} = error} ->
+        if Keyword.get(opts, :reconnect, false) and Process.alive?(connection) do
+          {:ok, connection}
+        else
+          stop_connection(connection)
+          {:error, error}
+        end
+    end
+  end
+
+  defp fetch_start_host(opts) do
+    case Keyword.fetch(opts, :host) do
+      {:ok, host} -> {:ok, host}
+      :error -> {:error, Error.new(:client, :connect, :missing_host)}
     end
   end
 

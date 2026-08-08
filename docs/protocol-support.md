@@ -36,6 +36,13 @@ interoperability targets have passed; decoding a capture alone is not enough.
 S7comm-plus, secure PG/HMI sessions, and symbolic access to optimized data
 blocks are outside this project's protocol boundary.
 
+## Runtime Lifecycle
+
+The client supports OTP child specifications, registered connection workers,
+caller cancellation by process monitoring, bounded graceful drain, and opt-in
+reconnect with bounded exponential backoff. Reconnect creates a new COTP and S7
+session and never replays work from the failed session.
+
 ## Addressing And Values
 
 The current client supports absolute S7ANY addresses in data blocks, inputs,

@@ -68,6 +68,11 @@ The client returned by `connect/2` is the PID that owns the socket. All public f
 | `:pdu_size` | `480` | Requested S7 PDU size |
 | `:max_jobs` | `1` | Requested and local maximum number of concurrent S7 jobs |
 | `:queue_limit` | `64` | Maximum callers waiting behind in-flight jobs; `0` disables waiting |
+| `:reconnect` | `false` | Establish fresh sessions after loss; `start_link/1` also survives unavailable startup |
+| `:reconnect_min_delay` | `250` | Initial reconnect backoff in milliseconds |
+| `:reconnect_max_delay` | `30000` | Upper bound for reconnect delay, including jitter |
+| `:reconnect_max_attempts` | `:infinity` | Attempt cap before the process remains `:disconnected` |
+| `:reconnect_jitter` | `0.2` | Random proportional backoff jitter from `0.0` to `1.0` |
 | `:max_tpkt_size` | `65535` | Maximum accepted TPKT frame size |
 | `:receive_buffer_limit` | derived | Maximum buffered TCP bytes; at least `:max_tpkt_size` |
 | `:max_items_per_pdu` | `20` | Conservative peer-compatible Read/Write Var item limit |
@@ -75,6 +80,34 @@ The client returned by `connect/2` is the PID that owns the socket. All public f
 The PLC may negotiate smaller PDU or job limits. `S7.Client.info/1` reports negotiated limits,
 the next reference, and current queue/in-flight counts. The default remains one job for broad PLC
 compatibility; opt into concurrency with `max_jobs: n` only when the peer supports it.
+
+### Supervision And Recovery
+
+Use `start_link/1` under a supervisor when the client must retain a stable PID or registered name:
+
+```elixir
+children = [
+  {S7.Client,
+   host: "192.168.1.10",
+   name: MyApp.PLC,
+   rack: 0,
+   slot: 2,
+   reconnect: true}
+]
+
+Supervisor.start_link(children, strategy: :one_for_one)
+```
+
+An unavailable supervised client with reconnect enabled starts in `:reconnecting`. Backoff is
+bounded and reset after a successful Setup Communication exchange. Session loss fails all accepted
+calls before reconnecting; requests and writes are never replayed. `S7.Client.reconnect/1` starts a
+fresh explicit attempt after a configured attempt cap is reached.
+
+Immediate close remains the default. To finish accepted work while rejecting new calls:
+
+```elixir
+:ok = S7.Client.close(client, mode: :drain, timeout: 5_000)
+```
 
 ## Addresses And Values
 
@@ -129,7 +162,7 @@ Each entry is an `%S7.Result{}` with status `:ok`, `:error`, `:indeterminate`, o
 ```text
 S7.Client
   -> S7.Connection (:gen_statem, active-once :gen_tcp owner)
-    -> bounded queue / PDU-reference correlation / request timers
+    -> bounded queue / PDU-reference correlation / request timers / reconnect backoff
     -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar}
       -> S7.Protocol.PDU / Header / Item / DataItem
         -> S7.Transport.COTP

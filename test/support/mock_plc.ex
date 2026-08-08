@@ -10,9 +10,10 @@ defmodule S7.Test.MockPLC do
 
   def start_link(opts \\ []) do
     owner = self()
+    port = Keyword.get(opts, :port, 0)
 
     {:ok, listener} =
-      :gen_tcp.listen(0, [:binary, active: false, packet: :raw, reuseaddr: true])
+      :gen_tcp.listen(port, [:binary, active: false, packet: :raw, reuseaddr: true])
 
     {:ok, {_address, port}} = :inet.sockname(listener)
 
@@ -262,6 +263,8 @@ defmodule S7.Test.MockPLC do
   end
 
   defp send_or_defer_read(state, response) do
+    Process.sleep(Keyword.get(state.options, :read_response_delay, 0))
+
     case Keyword.get(state.options, :reverse_read_groups) do
       count when is_integer(count) and count > 1 ->
         defer_read(state, response, count)
@@ -324,6 +327,11 @@ defmodule S7.Test.MockPLC do
     {:ok, data_item, <<>>} = DataItem.decode(request.data)
 
     case Keyword.get(state.options, :write_fault) do
+      :close_after_write ->
+        memory = Map.put(state.memory, memory_key(item), data_item.data)
+        :ok = :gen_tcp.close(state.socket)
+        %{state | memory: memory}
+
       :plc_error ->
         response = PDU.new(:ack_data, request.header.pdu_reference, <<0x05, 1>>, <<0x05>>)
         :ok = send_pdu(state, response)

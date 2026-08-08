@@ -10,7 +10,7 @@ suite pass.
 | 3 | Fixed-count addresses, arrays, and raw ranges | Complete |
 | 4 | Multi-item codecs and exact PDU planning | Complete |
 | 5 | Asynchronous request correlation and bounded concurrency | Complete |
-| 6 | Supervision, reconnect, and safe recovery | Planned |
+| 6 | Supervision, reconnect, and safe recovery | Complete |
 | 7 | Telemetry, security, interoperability, and soak tests | Planned |
 | 8 | Hex, ExDoc, compatibility matrix, and release gates | Planned |
 

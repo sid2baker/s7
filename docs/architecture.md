@@ -50,6 +50,16 @@ callers may run concurrently up to the conservative minimum of the requested
 and peer-returned AMQ limits. The default request remains one concurrent job.
 Callers above that limit enter a bounded FIFO queue.
 
+The same connection PID may own a sequence of sessions. Opt-in reconnect uses
+bounded exponential backoff with jitter, but first fails all work belonging to
+the lost session. No PDU or logical operation crosses a session boundary.
+Supervisors can start the client through `S7.Client.start_link/1`; optional
+registration uses the standard local, global, or `:via` forms.
+
+Graceful close enters `:draining`, rejects new calls, and finishes work already
+accepted by the queue. A bounded drain timeout closes the socket and returns
+structured failures rather than leaving callers blocked.
+
 ## Protocol Invariants
 
 - Decoders accept arbitrary binaries and return tagged results; malformed peer

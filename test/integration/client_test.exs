@@ -114,6 +114,12 @@ defmodule S7.ClientIntegrationTest do
     assert {:error, %Error{reason: :invalid_host}} = Client.connect({127, 0})
     assert {:error, %Error{reason: :invalid_options}} = Client.connect({127, 0, 0, 1}, :invalid)
 
+    assert {:error, %Error{reason: :invalid_options}} =
+             Client.connect({127, 0, 0, 1}, [:invalid])
+
+    assert {:error, %Error{reason: :invalid_option, details: %{option: :prot}}} =
+             Client.connect({127, 0, 0, 1}, prot: 102)
+
     assert {:error, %Error{reason: :invalid_pdu_size}} =
              Client.connect({127, 0, 0, 1}, pdu_size: 31)
 
@@ -137,6 +143,24 @@ defmodule S7.ClientIntegrationTest do
 
     assert {:error, %Error{reason: :invalid_option}} =
              Client.connect({127, 0, 0, 1}, queue_limit: -1)
+
+    assert {:error, %Error{reason: :invalid_option}} =
+             Client.connect({127, 0, 0, 1}, reconnect: :sometimes)
+
+    assert {:error, %Error{reason: :invalid_option}} =
+             Client.connect({127, 0, 0, 1}, reconnect_min_delay: 20, reconnect_max_delay: 10)
+
+    assert {:error, %Error{reason: :invalid_option}} =
+             Client.connect({127, 0, 0, 1}, reconnect_max_attempts: 0)
+
+    assert {:error, %Error{reason: :invalid_option}} =
+             Client.connect({127, 0, 0, 1}, reconnect_jitter: 1.1)
+
+    assert {:error, %Error{reason: :invalid_option}} =
+             Client.start_link(host: {127, 0, 0, 1}, name: {:invalid, :name})
+
+    assert {:error, %Error{reason: :missing_host}} = Client.start_link([])
+    assert {:error, %Error{reason: :invalid_options}} = Client.start_link([:invalid])
   end
 
   test "supports hostname strings, explicit TSAPs, and linked connection startup" do
@@ -156,6 +180,98 @@ defmodule S7.ClientIntegrationTest do
     assert {:ok, linked} = Connection.start_link(~c"127.0.0.1", port: second.port)
     assert :ok = Connection.connect(linked)
     assert :ok = Connection.close(linked)
+  end
+
+  test "starts as a supervised worker and connects after an unavailable endpoint appears" do
+    port = reserve_port()
+    child_id = {:reconnecting_s7_client, make_ref()}
+
+    client =
+      start_supervised!(
+        {Client,
+         [
+           id: child_id,
+           host: {127, 0, 0, 1},
+           port: port,
+           timeout: 500,
+           reconnect: true,
+           reconnect_min_delay: 10,
+           reconnect_max_delay: 20,
+           reconnect_jitter: 0
+         ]}
+      )
+
+    assert %{state: :reconnecting, reconnect: true} = Client.info(client)
+    _server = start_server(port: port)
+    assert %{state: :ready, reconnect_attempts: 0} = await_state(client, :ready)
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert :ok = stop_supervised(child_id)
+  end
+
+  test "reconnects after session loss without replaying an indeterminate write" do
+    first_server = start_server(write_fault: :close_after_write)
+
+    assert {:ok, client} =
+             Client.start_link(
+               host: {127, 0, 0, 1},
+               port: first_server.port,
+               timeout: 100,
+               reconnect: true,
+               reconnect_min_delay: 10,
+               reconnect_max_delay: 20,
+               reconnect_jitter: 0
+             )
+
+    on_exit(fn ->
+      if Process.alive?(client), do: Client.close(client)
+    end)
+
+    assert {:error, %Error{reason: :connection_closed}} =
+             Client.write(client, "DB1.DBW0", 4321)
+
+    assert_receive :mock_plc_closed, 500
+    _second_server = start_server(port: first_server.port)
+
+    assert %{state: :ready} = await_state(client, :ready)
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert Client.close(client) == :ok
+  end
+
+  test "caps reconnect attempts and permits an explicit fresh attempt" do
+    port = reserve_port()
+
+    assert {:ok, client} =
+             Client.start_link(
+               host: {127, 0, 0, 1},
+               port: port,
+               timeout: 500,
+               reconnect: true,
+               reconnect_min_delay: 5,
+               reconnect_max_delay: 5,
+               reconnect_max_attempts: 2,
+               reconnect_jitter: 0
+             )
+
+    assert %{state: :disconnected, reconnect_attempts: 2} =
+             await_state(client, :disconnected)
+
+    _server = start_server(port: port)
+    assert Client.reconnect(client) == :ok
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert Client.close(client) == :ok
+  end
+
+  test "supports registered supervised client names" do
+    server = start_server()
+    name = {:global, {__MODULE__, make_ref()}}
+
+    assert {:ok, client} =
+             Client.start_link(host: {127, 0, 0, 1}, port: server.port, name: name)
+
+    assert %{state: :ready} = Client.info(name)
+    assert Client.read(name, "DB1.DBW0") == {:ok, 1234}
+    assert Client.close(name) == :ok
+    refute Process.alive?(client)
   end
 
   test "correlates concurrent responses that arrive out of order" do
@@ -213,7 +329,56 @@ defmodule S7.ClientIntegrationTest do
     assert {:error, %Error{reason: :connection_closed}} = Task.await(second)
   end
 
-  test "stops queued work for a caller that exits and correlates its in-flight response" do
+  test "drains accepted work and rejects new work before closing" do
+    server = start_server(read_response_delay: 100, notify_requests: true)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port, timeout: 500)
+
+    read = Task.async(fn -> Client.read(client, "DB1.DBW0") end)
+    assert_receive {:mock_plc_request, :read, _reference}, 500
+
+    close = Task.async(fn -> Client.close(client, mode: :drain, timeout: 500) end)
+    assert %{state: :draining, in_flight_requests: 1} = await_state(client, :draining)
+
+    assert {:error, %Error{reason: :not_connected, details: %{state: :draining}}} =
+             Client.read(client, "DB1.DBW2")
+
+    assert Task.await(read) == {:ok, 1234}
+    assert Task.await(close) == :ok
+    refute Process.alive?(client)
+  end
+
+  test "bounds drain time and returns structured errors to accepted work" do
+    server = start_server(read_fault: :silence, notify_requests: true)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port, timeout: 1_000)
+
+    read = Task.async(fn -> Client.read(client, "DB1.DBW0") end)
+    assert_receive {:mock_plc_request, :read, _reference}, 500
+
+    assert {:error, %Error{operation: :close, reason: :drain_timeout}} =
+             Client.close(client, mode: :drain, timeout: 20)
+
+    assert {:error, %Error{operation: :read, reason: :drain_timeout}} = Task.await(read)
+    refute Process.alive?(client)
+  end
+
+  test "validates close options without disturbing the session" do
+    server = start_server()
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+    assert {:error, %Error{operation: :close, reason: :invalid_options}} =
+             Client.close(client, mode: :later)
+
+    assert {:error, %Error{operation: :close, reason: :invalid_options}} =
+             Client.close(client, timeout: 0)
+
+    assert {:error, %Error{operation: :close, reason: :invalid_options}} =
+             Client.close(client, [:invalid])
+
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert Client.close(client, mode: :drain) == :ok
+  end
+
+  test "consumes an in-flight response after its caller exits" do
     server =
       start_server(
         negotiated_jobs: 2,
@@ -233,6 +398,24 @@ defmodule S7.ClientIntegrationTest do
     assert Client.read(client, "DB1.DBB1") == {:ok, 0xA5}
     assert %{state: :ready, in_flight_requests: 0, queued_requests: 0} = Client.info(client)
     assert Client.close(client) == :ok
+  end
+
+  test "removes queued work when its caller exits" do
+    server = start_server(read_fault: :silence, notify_requests: true)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port, timeout: 1_000)
+
+    in_flight = Task.async(fn -> Client.read(client, "DB1.DBW0") end)
+    assert_receive {:mock_plc_request, :read, _reference}, 500
+
+    caller = spawn(fn -> Client.read(client, "DB1.DBW2") end)
+    monitor = Process.monitor(caller)
+    assert %{queued_requests: 1} = await_queue(client, 1)
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^caller, :killed}, 500
+    assert %{queued_requests: 0, in_flight_requests: 1} = await_queue(client, 0)
+
+    assert Client.close(client) == :ok
+    assert {:error, %Error{reason: :connection_closed}} = Task.await(in_flight)
   end
 
   test "connection refusal and dead clients return structured errors" do
@@ -529,4 +712,26 @@ defmodule S7.ClientIntegrationTest do
   end
 
   defp await_queue(client, _expected, 0), do: Client.info(client)
+
+  defp await_state(client, expected, attempts \\ 100)
+
+  defp await_state(client, expected, attempts) when attempts > 0 do
+    case Client.info(client) do
+      %{state: ^expected} = info ->
+        info
+
+      _other ->
+        Process.sleep(5)
+        await_state(client, expected, attempts - 1)
+    end
+  end
+
+  defp await_state(client, _expected, 0), do: Client.info(client)
+
+  defp reserve_port do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false])
+    {:ok, {_address, port}} = :inet.sockname(listener)
+    :ok = :gen_tcp.close(listener)
+    port
+  end
 end
