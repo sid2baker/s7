@@ -178,6 +178,9 @@ The tracked design contract is documented in:
 - [Architecture](docs/architecture.md)
 - [Protocol support](docs/protocol-support.md)
 - [Errors and retries](docs/error-and-retry-semantics.md)
+- [Telemetry](docs/telemetry.md)
+- [Interoperability evidence](docs/interoperability.md)
+- [Security policy](SECURITY.md)
 - [Roadmap to 1.0](docs/roadmap.md)
 
 ## Development

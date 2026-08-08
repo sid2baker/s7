@@ -64,6 +64,9 @@ provide network isolation and must not treat this library as a secure channel.
 
 ## Qualification Matrix
 
+The evidence and required report fields are maintained in
+[`docs/interoperability.md`](interoperability.md).
+
 | Target | CI | Release qualification |
 | --- | --- | --- |
 | In-process fault server | Every commit | Every release |

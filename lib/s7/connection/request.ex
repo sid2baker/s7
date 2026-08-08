@@ -15,6 +15,9 @@ defmodule S7.Connection.Request do
     :timer,
     :timer_token,
     :current_batch,
+    :enqueued_at,
+    :started_at,
+    :request_size,
     batches: [],
     results: [],
     cancelled: false
@@ -33,6 +36,9 @@ defmodule S7.Connection.Request do
           timer: reference() | nil,
           timer_token: reference() | nil,
           current_batch: list() | nil,
+          enqueued_at: integer() | nil,
+          started_at: integer() | nil,
+          request_size: non_neg_integer() | nil,
           batches: [list()],
           results: [Result.t()],
           cancelled: boolean()

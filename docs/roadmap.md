@@ -11,7 +11,7 @@ suite pass.
 | 4 | Multi-item codecs and exact PDU planning | Complete |
 | 5 | Asynchronous request correlation and bounded concurrency | Complete |
 | 6 | Supervision, reconnect, and safe recovery | Complete |
-| 7 | Telemetry, security, interoperability, and soak tests | Planned |
+| 7 | Telemetry, security, interoperability, and soak tests | Complete |
 | 8 | Hex, ExDoc, compatibility matrix, and release gates | Planned |
 
 Classic SZL/userdata diagnostics may follow `1.0`. Block operations and PLC

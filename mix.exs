@@ -24,14 +24,16 @@ defmodule S7.MixProject do
 
   def cli do
     [
-      preferred_envs: [ci: :test]
+      preferred_envs: [ci: :test, soak: :test]
     ]
   end
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:telemetry, "~> 1.4"},
       {:ex_slop, "~> 0.4", only: [:dev, :test], runtime: false},
+      {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:reach, "~> 2.0", only: [:dev, :test], runtime: false},
       {:ex_dna, "~> 1.0", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.0", only: [:dev, :test], runtime: false},
@@ -45,13 +47,15 @@ defmodule S7.MixProject do
     [
       ci: [
         "compile --warnings-as-errors",
+        "deps.audit",
         "format --check-formatted",
         "test --cover",
         "credo --strict",
         "dialyzer",
         "ex_dna --max-clones 0",
         "reach.check --arch --smells"
-      ]
+      ],
+      soak: "test --only soak test/soak"
     ]
   end
 

@@ -9,7 +9,7 @@ defmodule S7.Connection do
 
   @behaviour :gen_statem
 
-  alias S7.{Address, Error, Result, TSAP}
+  alias S7.{Address, Error, Result, Telemetry, TSAP}
   alias S7.Connection.{Drain, Reconnect, Request, Stream}
   alias S7.Protocol.{PDU, PDUPlanner, ReadVar, SetupCommunication, WriteVar}
   alias S7.Transport.{COTP, TPKT}
@@ -218,6 +218,7 @@ defmodule S7.Connection do
       {:ok, data} ->
         case activate_socket(data) do
           {:ok, data} ->
+            telemetry_connection_connected(data, false)
             {:next_state, :ready, reset_reconnect(data), [{:reply, from, :ok}]}
 
           {:error, error} ->
@@ -245,8 +246,12 @@ defmodule S7.Connection do
     data = %{data | reconnect: reconnect}
 
     case establish_connection(data) do
-      {:ok, data} -> {:next_state, :ready, reset_reconnect(data)}
-      {:error, _error, data} -> data |> advance_reconnect_delay() |> reconnect_or_disconnect()
+      {:ok, data} ->
+        telemetry_connection_connected(data, true)
+        {:next_state, :ready, reset_reconnect(data)}
+
+      {:error, _error, data} ->
+        data |> advance_reconnect_delay() |> reconnect_or_disconnect()
     end
   end
 
@@ -369,12 +374,14 @@ defmodule S7.Connection do
 
   def handle_event(:info, {:tcp_closed, socket}, state, %{socket: socket} = data) do
     error = Error.new(:tcp, :request, :connection_closed)
+    telemetry_connection_disconnected(data, error)
     data = data |> fail_all_requests(error) |> reset_connection()
     connection_lost(state, data, error)
   end
 
   def handle_event(:info, {:tcp_error, socket, reason}, state, %{socket: socket} = data) do
     error = tcp_error(:request, reason)
+    telemetry_connection_disconnected(data, error)
     data = data |> fail_all_requests(error) |> close_socket()
     connection_lost(state, data, error)
   end
@@ -663,7 +670,7 @@ defmodule S7.Connection do
          {:ok, reference, data} <- reserve_setup_reference(data),
          {:ok, data} <- negotiate_s7(data, reference),
          {:ok, data} <- activate_for_reconnect(data) do
-      {:ok, reset_reconnect(data)}
+      {:ok, data}
     else
       {:error, %Error{} = error, data} -> {:error, error, close_socket(data)}
     end
@@ -706,6 +713,7 @@ defmodule S7.Connection do
         |> min(reconnect.max_delay)
 
       timer = Process.send_after(self(), {:reconnect, token}, delay)
+      telemetry_reconnect_scheduled(data, delay)
       {:ok, %{data | reconnect: %{reconnect | timer: timer, token: token}}}
     else
       :disabled
@@ -778,11 +786,12 @@ defmodule S7.Connection do
   defp disconnect_with_error(:draining, data, error), do: fail_drain(data, error)
 
   defp disconnect_with_error(_state, data, error) do
+    telemetry_connection_disconnected(data, error)
     data = data |> fail_all_requests(error) |> close_socket()
     reconnect_or_disconnect(data)
   end
 
-  defp connection_lost(:draining, data, error), do: fail_drain(data, error)
+  defp connection_lost(:draining, data, error), do: fail_drain(data, error, false)
   defp connection_lost(_state, data, _error), do: reconnect_or_disconnect(data)
 
   defp close_options(opts, default_timeout) when is_list(opts) do
@@ -823,6 +832,7 @@ defmodule S7.Connection do
   defp close_immediately(from, data) do
     reply_closing_caller(data, :ok)
     error = Error.new(:client, :request, :connection_closed)
+    telemetry_connection_disconnected(data, error)
 
     data =
       data
@@ -841,12 +851,14 @@ defmodule S7.Connection do
 
   defp complete_drain(data) do
     reply_closing_caller(data, :ok)
+    telemetry_connection_disconnected(data, Error.new(:client, :close, :connection_closed))
     data = data |> cancel_drain() |> close_socket()
     {:stop, :normal, data}
   end
 
-  defp fail_drain(data, error) do
+  defp fail_drain(data, error, emit? \\ true) do
     reply_closing_caller(data, {:error, with_operation(error, :close)})
+    if emit?, do: telemetry_connection_disconnected(data, error)
 
     data =
       data
@@ -875,6 +887,7 @@ defmodule S7.Connection do
     data.queue
     |> :queue.to_list()
     |> Enum.each(fn request ->
+      telemetry_request_rejected(request, data, error.reason)
       finish_request(request, request_failure_reply(request, error, :not_sent))
     end)
 
@@ -894,7 +907,8 @@ defmodule S7.Connection do
 
       {{:queued, request_id}, request_index} ->
         requests = :queue.to_list(data.queue)
-        remaining = Enum.reject(requests, &(&1.id == request_id))
+        {cancelled, remaining} = Enum.split_with(requests, &(&1.id == request_id))
+        Enum.each(cancelled, &telemetry_request_rejected(&1, data, :caller_down))
 
         %{
           data
@@ -1044,12 +1058,15 @@ defmodule S7.Connection do
       kind: kind,
       operation: operation,
       batches: batches,
-      raw?: raw?
+      raw?: raw?,
+      enqueued_at: Telemetry.monotonic_time()
     }
   end
 
   defp admit_request(data, request) do
     if map_size(data.pending) >= data.max_jobs and data.queued_count >= data.max_queue_size do
+      telemetry_request_rejected(request, data, :queue_full)
+
       {:error,
        Error.new(:client, request.operation, :queue_full, details: %{limit: data.max_queue_size})}
     else
@@ -1065,12 +1082,15 @@ defmodule S7.Connection do
     queue = :queue.in(request, data.queue)
     request_index = Map.put(data.request_index, request.monitor, {:queued, request.id})
 
-    %{
+    data = %{
       data
       | queue: queue,
         queued_count: data.queued_count + 1,
         request_index: request_index
     }
+
+    telemetry_request_queued(request, data)
+    data
   end
 
   defp schedule_requests(data)
@@ -1090,6 +1110,7 @@ defmodule S7.Connection do
     if caller_alive?(request) do
       schedule_dispatched_request(dispatch_request(data, request))
     else
+      telemetry_request_rejected(request, data, :caller_down)
       finish_request(request, nil)
       schedule_requests(data)
     end
@@ -1101,6 +1122,7 @@ defmodule S7.Connection do
         schedule_requests(data)
 
       {:error, error, request, data} ->
+        telemetry_request_rejected(request, data, error.reason)
         finish_request(request, request_failure_reply(request, error, :not_sent))
         schedule_requests(data)
 
@@ -1121,18 +1143,23 @@ defmodule S7.Connection do
     }
 
     with {:ok, pdu} <- encode_batch(request, batch, reference),
-         :ok <- ensure_pdu_size(pdu, data, request.operation),
-         :ok <- send_pdu(data, pdu, request.operation) do
-      token = make_ref()
-      timer = Process.send_after(self(), {:request_timeout, reference, token}, data.timeout)
+         :ok <- ensure_pdu_size(pdu, data, request.operation) do
+      request = telemetry_request_start(request, pdu, data)
 
-      request = %{request | timer: timer, timer_token: token}
+      case send_pdu(data, pdu, request.operation) do
+        :ok ->
+          token = make_ref()
+          timer = Process.send_after(self(), {:request_timeout, reference, token}, data.timeout)
+          request = %{request | timer: timer, timer_token: token}
 
-      pending = Map.put(data.pending, reference, request)
-      request_index = Map.put(data.request_index, request.monitor, {:pending, reference})
-      {:ok, %{data | pending: pending, request_index: request_index}}
+          pending = Map.put(data.pending, reference, request)
+          request_index = Map.put(data.request_index, request.monitor, {:pending, reference})
+          {:ok, %{data | pending: pending, request_index: request_index}}
+
+        {:error, %Error{} = error} ->
+          {:disconnect, error, request, data}
+      end
     else
-      {:error, %Error{layer: :tcp} = error} -> {:disconnect, error, request, data}
       {:error, %Error{} = error} -> {:error, error, request, data}
     end
   end
@@ -1175,7 +1202,7 @@ defmodule S7.Connection do
 
     case take_pending(data, reference) do
       {:ok, request, data} ->
-        handle_correlated_pdu(decode_batch_response(request, pdu), request, pdus, data)
+        handle_correlated_pdu(decode_batch_response(request, pdu), request, pdu, pdus, data)
 
       :error ->
         error =
@@ -1187,12 +1214,15 @@ defmodule S7.Connection do
     end
   end
 
-  defp handle_correlated_pdu({:ok, item_results}, request, pdus, data) do
+  defp handle_correlated_pdu({:ok, item_results}, request, pdu, pdus, data) do
+    outcome = telemetry_response_outcome(request, item_results)
+    request = telemetry_request_stop(request, outcome, nil, item_results, PDU.encoded_size(pdu))
     data = handle_batch_results(data, request, item_results)
     handle_received_pdus(pdus, data)
   end
 
-  defp handle_correlated_pdu({:error, %Error{} = error}, request, pdus, data) do
+  defp handle_correlated_pdu({:error, %Error{} = error}, request, pdu, pdus, data) do
+    request = telemetry_request_stop(request, :error, error, [], PDU.encoded_size(pdu))
     finish_request(request, request_failure_reply(request, error, :sent))
 
     case response_action(error) do
@@ -1265,7 +1295,13 @@ defmodule S7.Connection do
   end
 
   defp continue_or_finish(data, request) do
-    request = %{request | reference: nil, current_batch: nil}
+    request = %{
+      request
+      | reference: nil,
+        current_batch: nil,
+        enqueued_at: Telemetry.monotonic_time()
+    }
+
     enqueue_request(data, request)
   end
 
@@ -1314,6 +1350,7 @@ defmodule S7.Connection do
     do: failed_write_results(items, error, status)
 
   defp finish_request(request, reply) do
+    request = stop_unfinished_request_span(request, reply)
     cancel_timer(request.timer)
 
     if request.monitor do
@@ -1326,6 +1363,169 @@ defmodule S7.Connection do
 
     :ok
   end
+
+  defp telemetry_connection_connected(data, reconnected?) do
+    Telemetry.execute(
+      [:s7, :connection, :connected],
+      %{
+        system_time: System.system_time(),
+        pdu_size: data.pdu_size,
+        max_jobs: data.max_jobs
+      },
+      Map.put(connection_metadata(data), :reconnected, reconnected?)
+    )
+  end
+
+  defp telemetry_connection_disconnected(%{socket: nil}, _error), do: :ok
+
+  defp telemetry_connection_disconnected(data, %Error{} = error) do
+    metadata =
+      data
+      |> connection_metadata()
+      |> Map.merge(%{error_layer: error.layer, error_reason: error.reason})
+
+    Telemetry.execute(
+      [:s7, :connection, :disconnected],
+      %{system_time: System.system_time()},
+      metadata
+    )
+  end
+
+  defp telemetry_reconnect_scheduled(data, delay) do
+    Telemetry.execute(
+      [:s7, :connection, :reconnect_scheduled],
+      %{
+        delay: System.convert_time_unit(delay, :millisecond, :native),
+        attempt: data.reconnect.attempts + 1
+      },
+      connection_metadata(data)
+    )
+  end
+
+  defp connection_metadata(data) do
+    %{
+      connection: self(),
+      host: data.host,
+      port: data.port
+    }
+  end
+
+  defp telemetry_request_queued(request, data) do
+    Telemetry.execute(
+      [:s7, :request, :queued],
+      %{system_time: System.system_time(), queue_depth: data.queued_count},
+      request_metadata(request)
+    )
+  end
+
+  defp telemetry_request_rejected(request, data, reason) do
+    Telemetry.execute(
+      [:s7, :request, :rejected],
+      %{
+        system_time: System.system_time(),
+        queue_depth: data.queued_count,
+        queue_duration: elapsed_since(request.enqueued_at)
+      },
+      Map.put(request_metadata(request), :reason, reason)
+    )
+  end
+
+  defp telemetry_request_start(request, pdu, data) do
+    started_at = Telemetry.monotonic_time()
+    request_size = PDU.encoded_size(pdu)
+
+    Telemetry.execute(
+      [:s7, :request, :start],
+      %{
+        system_time: System.system_time(),
+        queue_duration: elapsed_between(request.enqueued_at, started_at),
+        request_size: request_size,
+        in_flight: map_size(data.pending)
+      },
+      request_metadata(request)
+    )
+
+    %{request | started_at: started_at, request_size: request_size}
+  end
+
+  defp telemetry_request_stop(request, outcome, error, item_results, response_size) do
+    if request.started_at do
+      metadata =
+        request
+        |> request_metadata()
+        |> Map.put(:outcome, outcome)
+        |> Map.put(:item_error_count, item_error_count(item_results))
+        |> put_telemetry_error(error)
+
+      Telemetry.execute(
+        [:s7, :request, :stop],
+        %{
+          duration: elapsed_since(request.started_at),
+          request_size: request.request_size || 0,
+          response_size: response_size
+        },
+        metadata
+      )
+    end
+
+    %{request | started_at: nil, request_size: nil}
+  end
+
+  defp telemetry_request_stop(request, outcome, error),
+    do: telemetry_request_stop(request, outcome, error, [], 0)
+
+  defp stop_unfinished_request_span(%Request{started_at: nil} = request, _reply), do: request
+
+  defp stop_unfinished_request_span(request, nil),
+    do: telemetry_request_stop(request, :cancelled, nil)
+
+  defp stop_unfinished_request_span(request, {:error, %Error{} = error}),
+    do: telemetry_request_stop(request, :error, error)
+
+  defp stop_unfinished_request_span(request, {:error, %Error{} = error, _results}),
+    do: telemetry_request_stop(request, :error, error)
+
+  defp stop_unfinished_request_span(request, _reply),
+    do: telemetry_request_stop(request, :ok, nil)
+
+  defp request_metadata(request) do
+    %{
+      connection: self(),
+      request_id: request.id,
+      operation: request.operation,
+      reference: request.reference,
+      item_count: request_item_count(request),
+      raw: request.raw? == true
+    }
+  end
+
+  defp request_item_count(%Request{current_batch: batch}) when is_list(batch),
+    do: Enum.count(batch)
+
+  defp request_item_count(%Request{batches: [batch | _batches]}), do: Enum.count(batch)
+  defp request_item_count(_request), do: 0
+
+  defp item_error_count(item_results),
+    do: Enum.count(item_results, &match?({:error, %Error{}}, &1))
+
+  defp telemetry_response_outcome(request, item_results) do
+    cond do
+      not caller_alive?(request) or request.cancelled -> :cancelled
+      item_error_count(item_results) == 0 -> :ok
+      request.kind in [:read_multi, :write_multi] -> :partial
+      true -> :error
+    end
+  end
+
+  defp put_telemetry_error(metadata, nil), do: metadata
+
+  defp put_telemetry_error(metadata, %Error{} = error),
+    do: Map.merge(metadata, %{error_layer: error.layer, error_reason: error.reason})
+
+  defp elapsed_since(nil), do: 0
+  defp elapsed_since(start_time), do: Telemetry.duration(start_time)
+  defp elapsed_between(nil, _end_time), do: 0
+  defp elapsed_between(start_time, end_time), do: max(end_time - start_time, 0)
 
   defp caller_alive?(%Request{from: {pid, _tag}}), do: Process.alive?(pid)
   defp caller_alive?(_request), do: false

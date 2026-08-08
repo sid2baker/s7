@@ -22,6 +22,9 @@ The value and addressing modules are shared models, not runtime services:
 S7.Address  S7.Data  S7.Error  S7.Result  S7.TSAP
 ```
 
+`S7.Telemetry` is a one-way observability boundary used by the runtime. Protocol,
+transport, and model modules cannot depend on it, so wire codecs remain pure.
+
 The following dependency rules are enforced by Reach through `.reach.exs`:
 
 - `S7.Client` is the public facade and delegates lifecycle work to the runtime.
@@ -29,6 +32,7 @@ The following dependency rules are enforced by Reach through `.reach.exs`:
 - `S7.Protocol.*` may use value and address models but never the runtime.
 - `S7.Transport.*` knows only RFC 1006 and COTP wire structures.
 - Model modules do not depend on transport, protocol, or runtime modules.
+- `S7.Telemetry` depends on none of the application layers; only the runtime emits through it.
 
 ## Runtime Ownership
 
