@@ -59,6 +59,67 @@ defmodule S7.Protocol.ReadVarTest do
              ReadVar.decode_response(wrong_length, address, 9)
   end
 
+  test "encodes and decodes multiple aligned items in request order" do
+    byte = %Address{area: :markers, byte_offset: 0, data_type: :byte}
+    word = %Address{area: :db, db_number: 1, byte_offset: 2, data_type: :word}
+
+    assert {:ok, request} = ReadVar.request_many([byte, word], 12)
+    assert <<0x04, 2, first::binary-size(12), second::binary-size(12)>> = request.parameters
+    assert {:ok, %{count: 1, area: :markers}, <<>>} = S7.Protocol.Item.decode(first)
+    assert {:ok, %{count: 1, area: :db}, <<>>} = S7.Protocol.Item.decode(second)
+
+    data = <<0xFF, 0x04, 0, 8, 0xAA, 0, 0xFF, 0x04, 0, 16, 0x12, 0x34>>
+    response = PDU.new(:ack_data, 12, <<0x04, 2>>, data)
+
+    assert ReadVar.decode_responses(response, [byte, word], 12) ==
+             {:ok, [{:ok, 0xAA}, {:ok, 0x1234}]}
+
+    assert ReadVar.decode_raw_responses(response, [byte, word], 12) ==
+             {:ok, [{:ok, <<0xAA>>}, {:ok, <<0x12, 0x34>>}]}
+  end
+
+  test "preserves PLC errors per item and consumes alignment padding" do
+    byte = %Address{area: :markers, byte_offset: 0, data_type: :byte}
+    missing = %Address{area: :db, db_number: 99, byte_offset: 0, data_type: :word}
+    word = %Address{area: :markers, byte_offset: 2, data_type: :word}
+
+    data =
+      <<0xFF, 0x04, 0, 8, 1, 0, 0x0A, 0, 0, 0, 0xFF, 0x04, 0, 16, 0x12, 0x34>>
+
+    response = PDU.new(:ack_data, 3, <<0x04, 3>>, data)
+
+    assert {:ok,
+            [
+              {:ok, 1},
+              {:error, %Error{reason: :object_not_found, code: 0x0A}},
+              {:ok, 0x1234}
+            ]} = ReadVar.decode_responses(response, [byte, missing, word], 3)
+
+    nonzero_padding =
+      put_in(response.data, :binary.part(data, 0, 5) <> <<1>> <> :binary.part(data, 6, 10))
+
+    assert {:ok, [{:ok, 1}, {:error, %Error{reason: :object_not_found}}, {:ok, 0x1234}]} =
+             ReadVar.decode_responses(nonzero_padding, [byte, missing, word], 3)
+
+    missing_padding = put_in(response.data, :binary.part(data, 0, 5) <> :binary.part(data, 6, 10))
+
+    assert {:error, %Error{reason: :malformed_response}} =
+             ReadVar.decode_responses(missing_padding, [byte, missing, word], 3)
+  end
+
+  test "rejects invalid multi-item counts and response counts" do
+    address = %Address{area: :markers, byte_offset: 0, data_type: :byte}
+    assert {:error, %Error{reason: :invalid_item_count}} = ReadVar.request_many([], 1)
+
+    assert {:error, %Error{reason: :invalid_item_count}} =
+             ReadVar.request_many(List.duplicate(address, 256), 1)
+
+    response = PDU.new(:ack_data, 1, <<0x04, 2>>, <<0xFF, 0x04, 0, 8, 1>>)
+
+    assert {:error, %Error{reason: :malformed_response}} =
+             ReadVar.decode_responses(response, [address], 1)
+  end
+
   test "rejects wrong references, truncated payloads, and transport mismatches" do
     address = %Address{area: :markers, byte_offset: 0, data_type: :word}
     response = response(7, :byte, 16, <<0, 1>>)

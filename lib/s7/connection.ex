@@ -9,8 +9,8 @@ defmodule S7.Connection do
 
   @behaviour :gen_statem
 
-  alias S7.{Address, Error, TSAP}
-  alias S7.Protocol.{PDU, ReadVar, SetupCommunication, WriteVar}
+  alias S7.{Address, Error, Result, TSAP}
+  alias S7.Protocol.{PDU, PDUPlanner, ReadVar, SetupCommunication, WriteVar}
   alias S7.Transport.{COTP, TPKT}
   alias S7.Transport.COTP.{ConnectionConfirm, ConnectionRequest, Data}
 
@@ -18,6 +18,7 @@ defmodule S7.Connection do
   @default_timeout 5_000
   @default_tpdu_size 1024
   @default_pdu_size 480
+  @default_maximum_items 20
   @maximum_fragments 64
   @maximum_tpkt_size 0xFFFF
   @maximum_receive_buffer_size 1_048_576
@@ -34,6 +35,7 @@ defmodule S7.Connection do
     :requested_setup,
     :pdu_size,
     :max_jobs,
+    :max_items_per_pdu,
     :reference,
     :receive_buffer_limit,
     receive_buffer: <<>>,
@@ -69,9 +71,23 @@ defmodule S7.Connection do
   end
 
   @doc false
+  @spec read_multi(pid(), [Address.t()], boolean()) ::
+          {:ok, [Result.t()]} | {:error, Error.t(), [Result.t()]}
+  def read_multi(connection, addresses, raw?) do
+    :gen_statem.call(connection, {:read_multi, addresses, raw?}, :infinity)
+  end
+
+  @doc false
   @spec write(pid(), Address.t(), binary()) :: :ok | {:error, Error.t()}
   def write(connection, address, value) do
     :gen_statem.call(connection, {:write, address, value}, :infinity)
+  end
+
+  @doc false
+  @spec write_multi(pid(), [{Address.t(), binary()}]) ::
+          {:ok, [Result.t()]} | {:error, Error.t(), [Result.t()]}
+  def write_multi(connection, items) do
+    :gen_statem.call(connection, {:write_multi, items}, :infinity)
   end
 
   @doc false
@@ -169,6 +185,34 @@ defmodule S7.Connection do
     end
   end
 
+  def handle_event({:call, from}, {:read_multi, addresses, raw?}, :ready, data) do
+    case perform_read_multi(data, addresses, raw?) do
+      {:ok, results, data} ->
+        {:keep_state, data, [{:reply, from, {:ok, results}}]}
+
+      {:error, error, results, data, :keep} ->
+        {:keep_state, data, [{:reply, from, {:error, error, results}}]}
+
+      {:error, error, results, data, :disconnect} ->
+        reply = {:error, error, results}
+        {:next_state, :disconnected, close_socket(data), [{:reply, from, reply}]}
+    end
+  end
+
+  def handle_event({:call, from}, {:write_multi, items}, :ready, data) do
+    case perform_write_multi(data, items) do
+      {:ok, results, data} ->
+        {:keep_state, data, [{:reply, from, {:ok, results}}]}
+
+      {:error, error, results, data, :keep} ->
+        {:keep_state, data, [{:reply, from, {:error, error, results}}]}
+
+      {:error, error, results, data, :disconnect} ->
+        reply = {:error, error, results}
+        {:next_state, :disconnected, close_socket(data), [{:reply, from, reply}]}
+    end
+  end
+
   def handle_event({:call, from}, operation, state, _data)
       when state != :ready and operation != :close and operation != :info do
     error =
@@ -184,6 +228,7 @@ defmodule S7.Connection do
       port: data.port,
       pdu_size: data.pdu_size,
       max_jobs: data.max_jobs,
+      max_items_per_pdu: data.max_items_per_pdu,
       tpdu_size: data.tpdu_size,
       next_reference: data.reference
     }
@@ -222,6 +267,8 @@ defmodule S7.Connection do
          {:ok, tpdu_size} <- tpdu_size(opts),
          {:ok, pdu_size} <- positive_option(opts, :pdu_size, @default_pdu_size, 0xFFFF),
          :ok <- validate_minimum_pdu(pdu_size),
+         {:ok, max_items_per_pdu} <-
+           positive_option(opts, :max_items_per_pdu, @default_maximum_items, 0xFF),
          {:ok, src_tsap} <- source_tsap(opts),
          {:ok, dst_tsap} <- destination_tsap(opts),
          {:ok, reference} <- initial_reference(opts) do
@@ -236,6 +283,7 @@ defmodule S7.Connection do
          requested_setup: %SetupCommunication{pdu_length: pdu_size},
          pdu_size: pdu_size,
          max_jobs: 1,
+         max_items_per_pdu: max_items_per_pdu,
          reference: reference,
          receive_buffer_limit: receive_buffer_limit,
          max_tpkt_size: max_tpkt_size
@@ -449,6 +497,121 @@ defmodule S7.Connection do
       {:error, %Error{} = error} -> {:error, error, data, connection_action(error)}
     end
   end
+
+  defp perform_read_multi(data, addresses, raw?) do
+    case PDUPlanner.plan_read(addresses, data.pdu_size, maximum_items: data.max_items_per_pdu) do
+      {:ok, batches} -> execute_read_batches(data, batches, raw?, [])
+      {:error, %Error{} = error} -> {:error, error, [], data, :keep}
+    end
+  end
+
+  defp execute_read_batches(data, [], _raw?, results),
+    do: {:ok, Enum.reverse(results), data}
+
+  defp execute_read_batches(data, [batch | batches], raw?, results) do
+    case perform_read_batch(data, batch, raw?) do
+      {:ok, item_results, data} ->
+        batch_results = read_results(batch, item_results)
+        execute_read_batches(data, batches, raw?, prepend_results(batch_results, results))
+
+      {:error, error, data, action} ->
+        failed = failed_results(batch, :error, error)
+        remaining = failed_results(List.flatten(batches), :not_attempted, error)
+        all_results = Enum.reverse(results) ++ failed ++ remaining
+        {:error, error, all_results, data, action}
+    end
+  end
+
+  defp perform_read_batch(data, addresses, raw?) do
+    reference = data.reference
+    data = %{data | reference: next_reference(reference)}
+
+    with {:ok, request} <- ReadVar.request_many(addresses, reference),
+         :ok <- ensure_pdu_size(request, data, :read),
+         :ok <- send_pdu(data, request, :read),
+         {:ok, response, data} <- receive_pdu(data, :read) do
+      decoder = if raw?, do: &ReadVar.decode_raw_responses/3, else: &ReadVar.decode_responses/3
+
+      case decoder.(response, addresses, reference) do
+        {:ok, item_results} -> {:ok, item_results, data}
+        {:error, error} -> {:error, error, data, response_action(error)}
+      end
+    else
+      {:error, %Error{} = error, data} -> {:error, error, data, :disconnect}
+      {:error, %Error{} = error} -> {:error, error, data, connection_action(error)}
+    end
+  end
+
+  defp perform_write_multi(data, items) do
+    case PDUPlanner.plan_write(items, data.pdu_size, maximum_items: data.max_items_per_pdu) do
+      {:ok, batches} -> execute_write_batches(data, batches, [])
+      {:error, %Error{} = error} -> {:error, error, [], data, :keep}
+    end
+  end
+
+  defp execute_write_batches(data, [], results), do: {:ok, Enum.reverse(results), data}
+
+  defp execute_write_batches(data, [batch | batches], results) do
+    case perform_write_batch(data, batch) do
+      {:ok, item_results, data} ->
+        batch_results = write_results(batch, item_results)
+        execute_write_batches(data, batches, prepend_results(batch_results, results))
+
+      {:error, error, data, action} ->
+        failed = failed_write_results(batch, error)
+        remaining_items = List.flatten(batches)
+        remaining = failed_write_results(remaining_items, error, :not_attempted)
+        all_results = Enum.reverse(results) ++ failed ++ remaining
+        {:error, error, all_results, data, action}
+    end
+  end
+
+  defp perform_write_batch(data, items) do
+    reference = data.reference
+    data = %{data | reference: next_reference(reference)}
+
+    with {:ok, request} <- WriteVar.request_many(items, reference),
+         :ok <- ensure_pdu_size(request, data, :write),
+         :ok <- send_pdu(data, request, :write),
+         {:ok, response, data} <- receive_pdu(data, :write) do
+      case WriteVar.decode_responses(response, length(items), reference) do
+        {:ok, item_results} -> {:ok, item_results, data}
+        {:error, error} -> {:error, error, data, response_action(error)}
+      end
+    else
+      {:error, %Error{} = error, data} -> {:error, error, data, :disconnect}
+      {:error, %Error{} = error} -> {:error, error, data, connection_action(error)}
+    end
+  end
+
+  defp read_results(addresses, item_results) do
+    Enum.zip_with(addresses, item_results, fn
+      address, {:ok, value} -> %Result{address: address, status: :ok, value: value}
+      address, {:error, error} -> %Result{address: address, status: :error, error: error}
+    end)
+  end
+
+  defp write_results(items, item_results) do
+    Enum.zip_with(items, item_results, fn
+      {address, _value}, :ok ->
+        %Result{address: address, status: :ok}
+
+      {address, _value}, {:error, error} ->
+        %Result{address: address, status: :error, error: error}
+    end)
+  end
+
+  defp failed_results(addresses, status, error),
+    do: Enum.map(addresses, &%Result{address: &1, status: status, error: error})
+
+  defp failed_write_results(items, error, status \\ :indeterminate) do
+    Enum.map(items, fn {address, _value} ->
+      %Result{address: address, status: status, error: error}
+    end)
+  end
+
+  defp prepend_results(new_results, results),
+    do: Enum.reduce(new_results, results, fn result, acc -> [result | acc] end)
 
   defp ensure_pdu_size(pdu, data, operation) do
     size = PDU.encoded_size(pdu)
@@ -671,6 +834,7 @@ defmodule S7.Connection do
   defp response_action(error), do: connection_action(error)
 
   defp operation_name({operation, _address, _value}), do: operation
+  defp operation_name({operation, _items}) when operation in [:write_multi], do: operation
   defp operation_name(operation) when is_atom(operation), do: operation
   defp operation_name(_operation), do: :request
 end

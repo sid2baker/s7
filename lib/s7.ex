@@ -6,6 +6,6 @@ defmodule S7 do
   binary codecs and can be used independently for diagnostics and testing.
 
   S7comm-plus, symbolic addressing, block operations, PLC control, alarms,
-  diagnostics, and userdata services are outside the `0.1.x` scope.
+  diagnostics, and userdata services are outside the current scope.
   """
 end

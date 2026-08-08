@@ -31,6 +31,17 @@ defmodule S7.Protocol.PDUTest do
     assert IO.iodata_to_binary(PDU.encode(pdu)) == fixture
   end
 
+  test "capture-derived eight-item Read Var PDUs round-trip exactly" do
+    for fixture_name <- ["read/multi_8_request.bin", "read/multi_8_response.bin"] do
+      fixture = Fixture.read!(fixture_name)
+
+      assert {:ok, %PDU{parameters: <<0x04, 8, _items::binary>>} = pdu, <<>>} =
+               PDU.decode(fixture)
+
+      assert IO.iodata_to_binary(PDU.encode(pdu)) == fixture
+    end
+  end
+
   test "encoder derives lengths rather than trusting stale header values" do
     pdu = %PDU{
       header: %Header{

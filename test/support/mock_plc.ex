@@ -143,15 +143,29 @@ defmodule S7.Test.MockPLC do
 
   defp serve(state) do
     case receive_pdu(state) do
-      {:ok, %PDU{parameters: <<0x04, 1, item_binary::binary>>} = request, state} ->
-        state
-        |> handle_read(request, item_binary)
-        |> serve()
+      {:ok, %PDU{parameters: <<0x04, count, item_binary::binary>>} = request, state}
+      when count > 0 ->
+        {:ok, items, <<>>} = decode_request_items(item_binary, count, [])
 
-      {:ok, %PDU{parameters: <<0x05, 1, item_binary::binary>>} = request, state} ->
-        state
-        |> handle_write(request, item_binary)
-        |> serve()
+        next_state =
+          case items do
+            [item] -> handle_read(state, request, Item.encode(item))
+            items -> handle_read_many(state, request, items)
+          end
+
+        serve(next_state)
+
+      {:ok, %PDU{parameters: <<0x05, count, item_binary::binary>>} = request, state}
+      when count > 0 ->
+        {:ok, items, <<>>} = decode_request_items(item_binary, count, [])
+
+        next_state =
+          case items do
+            [item] -> handle_write(state, request, Item.encode(item))
+            items -> handle_write_many(state, request, items)
+          end
+
+        serve(next_state)
 
       {:error, :closed} ->
         send(state.owner, :mock_plc_closed)
@@ -244,6 +258,34 @@ defmodule S7.Test.MockPLC do
     state
   end
 
+  defp handle_read_many(state, request, items) do
+    encoded_items =
+      Enum.map(items, fn item ->
+        case Map.fetch(state.memory, memory_key(item)) do
+          {:ok, data} ->
+            data_item = %{DataItem.for_write(item.transport_size, data) | return_code: 0xFF}
+            {DataItem.encode(data_item), byte_size(data)}
+
+          :error ->
+            {<<0x0A, 0, 0, 0>>, 0}
+        end
+      end)
+
+    response =
+      PDU.new(
+        :ack_data,
+        request.header.pdu_reference,
+        <<0x04, length(items)>>,
+        encode_aligned_data_items(encoded_items)
+      )
+
+    if Keyword.get(state.options, :read_fault) != :silence_multi do
+      :ok = send_pdu(state, response)
+    end
+
+    state
+  end
+
   defp handle_write(state, request, item_binary) do
     {:ok, item, <<>>} = Item.decode(item_binary)
     {:ok, data_item, <<>>} = DataItem.decode(request.data)
@@ -270,6 +312,73 @@ defmodule S7.Test.MockPLC do
         :ok = send_pdu(state, response)
         %{state | memory: memory}
     end
+  end
+
+  defp handle_write_many(state, request, items) do
+    {:ok, data_items, <<>>} = decode_write_data_items(request.data, items, [])
+
+    memory =
+      Enum.zip(items, data_items)
+      |> Enum.reduce(state.memory, fn {item, data_item}, memory ->
+        Map.put(memory, memory_key(item), data_item.data)
+      end)
+
+    unless Keyword.get(state.options, :write_fault) == :silence_multi do
+      return_codes =
+        case Keyword.get(state.options, :write_fault) do
+          :second_item_error ->
+            <<0xFF, 0x05, :binary.copy(<<0xFF>>, length(items) - 2)::binary>>
+
+          _other ->
+            :binary.copy(<<0xFF>>, length(items))
+        end
+
+      response =
+        PDU.new(:ack_data, request.header.pdu_reference, <<0x05, length(items)>>, return_codes)
+
+      :ok = send_pdu(state, response)
+    end
+
+    %{state | memory: memory}
+  end
+
+  defp decode_request_items(remaining, 0, items), do: {:ok, Enum.reverse(items), remaining}
+
+  defp decode_request_items(binary, count, items) do
+    with {:ok, item, remaining} <- Item.decode(binary) do
+      decode_request_items(remaining, count - 1, [item | items])
+    end
+  end
+
+  defp decode_write_data_items(remaining, [], items),
+    do: {:ok, Enum.reverse(items), remaining}
+
+  defp decode_write_data_items(data, [_item | items], decoded) do
+    with {:ok, data_item, remaining} <- DataItem.decode(data),
+         {:ok, remaining} <- consume_write_padding(remaining, data_item, items) do
+      decode_write_data_items(remaining, items, [data_item | decoded])
+    end
+  end
+
+  defp consume_write_padding(remaining, _data_item, []), do: {:ok, remaining}
+
+  defp consume_write_padding(remaining, data_item, _items)
+       when rem(byte_size(data_item.data), 2) == 0,
+       do: {:ok, remaining}
+
+  defp consume_write_padding(<<0, remaining::binary>>, _data_item, _items),
+    do: {:ok, remaining}
+
+  defp encode_aligned_data_items(items) do
+    last_index = length(items) - 1
+
+    items
+    |> Enum.with_index()
+    |> Enum.map(fn {{encoded, payload_size}, index} ->
+      padding = if index < last_index and rem(payload_size, 2) == 1, do: <<0>>, else: <<>>
+      [encoded, padding]
+    end)
+    |> IO.iodata_to_binary()
   end
 
   defp successful_read_response(request, data_type, data) do

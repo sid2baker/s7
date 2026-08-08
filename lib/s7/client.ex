@@ -6,10 +6,14 @@ defmodule S7.Client do
   whose process owns the TCP socket.
   """
 
-  alias S7.{Address, Connection, Data, Error}
+  alias S7.{Address, Connection, Data, Error, Result}
 
   @opaque t :: pid()
   @type address :: String.t() | Address.t()
+  @type multi_reply ::
+          {:ok, [Result.t()]}
+          | {:error, Error.t()}
+          | {:error, Error.t(), [Result.t()]}
 
   @doc """
   Connects to a PLC and completes COTP and Setup Communication negotiation.
@@ -50,6 +54,19 @@ defmodule S7.Client do
   end
 
   @doc """
+  Reads multiple addresses, automatically splitting them against the
+  negotiated PDU size. Results preserve input order and PLC item errors.
+  """
+  @spec read_multi(t(), [address()]) :: multi_reply()
+  def read_multi(client, addresses), do: read_many(client, addresses, false, :read_multi)
+
+  @doc """
+  Reads multiple addresses without typed payload conversion.
+  """
+  @spec read_multi_raw(t(), [address()]) :: multi_reply()
+  def read_multi_raw(client, addresses), do: read_many(client, addresses, true, :read_multi)
+
+  @doc """
   Encodes and writes one scalar value.
   """
   @spec write(t(), address(), Data.value()) :: :ok | {:error, Error.t()}
@@ -71,6 +88,20 @@ defmodule S7.Client do
       call(fn -> Connection.write(client, address, encoded) end, :write)
     end
   end
+
+  @doc """
+  Writes multiple typed values, automatically splitting them against the
+  negotiated PDU size. A transport failure returns completed, indeterminate,
+  and not-attempted item states in a three-element error tuple.
+  """
+  @spec write_multi(t(), [{address(), Data.value()}]) :: multi_reply()
+  def write_multi(client, items), do: write_many(client, items, :typed)
+
+  @doc """
+  Writes multiple already encoded payloads after exact size validation.
+  """
+  @spec write_multi_raw(t(), [{address(), binary()}]) :: multi_reply()
+  def write_multi_raw(client, items), do: write_many(client, items, :raw)
 
   @doc """
   Returns negotiated connection information.
@@ -106,6 +137,71 @@ defmodule S7.Client do
   defp normalize_address(address) do
     {:error, Error.new(:address, :parse, :invalid_address, details: %{address: address})}
   end
+
+  defp read_many(client, addresses, raw?, operation) do
+    with {:ok, addresses} <- normalize_addresses(addresses, operation) do
+      call(fn -> Connection.read_multi(client, addresses, raw?) end, operation)
+    end
+  end
+
+  defp write_many(client, items, mode) do
+    with {:ok, items} <- normalize_write_items(items, mode) do
+      call(fn -> Connection.write_multi(client, items) end, :write_multi)
+    end
+  end
+
+  defp normalize_addresses(addresses, _operation) when is_list(addresses) and addresses != [] do
+    addresses
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {address, index}, {:ok, normalized} ->
+      case normalize_address(address) do
+        {:ok, address} -> {:cont, {:ok, [address | normalized]}}
+        {:error, %Error{} = error} -> {:halt, {:error, add_item_context(error, index)}}
+      end
+    end)
+    |> reverse_normalized()
+  end
+
+  defp normalize_addresses(addresses, operation) do
+    {:error, Error.new(:client, operation, :invalid_items, details: %{items: addresses})}
+  end
+
+  defp normalize_write_items(items, mode) when is_list(items) and items != [] do
+    items
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn
+      {{address, value}, index}, {:ok, normalized} ->
+        with {:ok, address} <- normalize_address(address),
+             {:ok, encoded} <- encode_write_value(address, value, mode) do
+          {:cont, {:ok, [{address, encoded} | normalized]}}
+        else
+          {:error, %Error{} = error} -> {:halt, {:error, add_item_context(error, index)}}
+        end
+
+      {item, index}, _accumulator ->
+        error =
+          Error.new(:client, :write_multi, :invalid_item, details: %{index: index, item: item})
+
+        {:halt, {:error, error}}
+    end)
+    |> reverse_normalized()
+  end
+
+  defp normalize_write_items(items, _mode) do
+    {:error, Error.new(:client, :write_multi, :invalid_items, details: %{items: items})}
+  end
+
+  defp encode_write_value(address, value, :typed),
+    do: Data.encode(address.data_type, value, address.count)
+
+  defp encode_write_value(address, value, :raw),
+    do: Data.validate_raw(address.data_type, value, address.count)
+
+  defp reverse_normalized({:ok, normalized}), do: {:ok, Enum.reverse(normalized)}
+  defp reverse_normalized({:error, error}), do: {:error, error}
+
+  defp add_item_context(error, index),
+    do: %{error | details: Map.put(error.details, :index, index)}
 
   defp call(function, operation) do
     function.()

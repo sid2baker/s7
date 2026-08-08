@@ -23,9 +23,9 @@ interoperability targets have passed; decoding a capture alone is not enough.
 | Setup Communication | Implemented | Supported |
 | Single Read Var | Implemented | Supported |
 | Single Write Var | Implemented | Supported |
-| Multi-item Read Var | Not implemented | Supported |
-| Multi-item Write Var | Not implemented | Supported |
-| Automatic PDU packing | Not implemented | Supported |
+| Multi-item Read Var | Implemented | Supported |
+| Multi-item Write Var | Implemented | Supported |
+| Automatic PDU packing | Implemented | Supported |
 | Concurrent jobs | One job | Bounded by negotiation |
 | SZL and CPU metadata | Not implemented | Post-1.0 |
 | Userdata and diagnostics | Not implemented | Post-1.0 |

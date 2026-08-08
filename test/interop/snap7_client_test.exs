@@ -3,7 +3,7 @@ defmodule S7.Snap7ClientInteropTest do
 
   @moduletag :external
 
-  alias S7.{Address, Client}
+  alias S7.{Address, Client, Result}
 
   setup do
     host = System.fetch_env!("S7_TEST_HOST")
@@ -56,5 +56,18 @@ defmodule S7.Snap7ClientInteropTest do
     bytes = %Address{area: :db, db_number: 1, byte_offset: 120, data_type: :byte, count: 5}
     assert Client.write_raw(client, bytes, <<1, 2, 3, 4, 5>>) == :ok
     assert Client.read_raw(client, bytes) == {:ok, <<1, 2, 3, 4, 5>>}
+
+    writes =
+      for offset <- 300..349 do
+        address = %Address{area: :db, db_number: 1, byte_offset: offset, data_type: :byte}
+        {address, rem(offset, 256)}
+      end
+
+    assert {:ok, write_results} = Client.write_multi(client, writes)
+    assert Enum.all?(write_results, &match?(%Result{status: :ok}, &1))
+
+    addresses = Enum.map(writes, &elem(&1, 0))
+    assert {:ok, read_results} = Client.read_multi(client, addresses)
+    assert Enum.map(read_results, & &1.value) == Enum.map(writes, &elem(&1, 1))
   end
 end

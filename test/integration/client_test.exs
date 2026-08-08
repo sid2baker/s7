@@ -1,7 +1,7 @@
 defmodule S7.ClientIntegrationTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Address, Client, Error}
+  alias S7.{Address, Client, Error, Result}
   alias S7.Connection
   alias S7.Test.MockPLC
 
@@ -221,6 +221,130 @@ defmodule S7.ClientIntegrationTest do
              Client.write_raw(client, oversized_write, :binary.copy(<<0>>, 213))
 
     assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert Client.close(client) == :ok
+  end
+
+  test "multi-read preserves order and per-item PLC errors" do
+    server = start_server()
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+    addresses = ["DB1.DBW0", "DB99.DBW0", "MB10"]
+
+    assert {:ok,
+            [
+              %Result{status: :ok, value: 1234},
+              %Result{status: :error, error: %Error{reason: :object_not_found}},
+              %Result{status: :ok, value: 0x33}
+            ]} = Client.read_multi(client, addresses)
+
+    assert {:ok,
+            [
+              %Result{status: :ok, value: <<0x04, 0xD2>>},
+              %Result{status: :error},
+              %Result{status: :ok, value: <<0x33>>}
+            ]} = Client.read_multi_raw(client, addresses)
+
+    assert Client.close(client) == :ok
+  end
+
+  test "multi-write supports typed and raw values with per-item results" do
+    server = start_server()
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+    words = %Address{area: :db, db_number: 1, byte_offset: 200, data_type: :word, count: 2}
+    byte = %Address{area: :markers, byte_offset: 30, data_type: :byte}
+
+    assert {:ok, [%Result{status: :ok}, %Result{status: :ok}]} =
+             Client.write_multi(client, [{words, [1, 2]}, {byte, 0xA5}])
+
+    assert {:ok, [%Result{value: [1, 2]}, %Result{value: 0xA5}]} =
+             Client.read_multi(client, [words, byte])
+
+    raw = %Address{area: :db, db_number: 1, byte_offset: 220, data_type: :byte, count: 3}
+
+    assert {:ok, [%Result{status: :ok}]} =
+             Client.write_multi_raw(client, [{raw, <<1, 2, 3>>}])
+
+    assert Client.read_raw(client, raw) == {:ok, <<1, 2, 3>>}
+    assert Client.close(client) == :ok
+  end
+
+  test "multi operations split against the negotiated PDU and retain order" do
+    server = start_server(negotiated_pdu: 60)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+    writes =
+      for offset <- 300..304 do
+        address = %Address{area: :db, db_number: 1, byte_offset: offset, data_type: :byte}
+        {address, offset - 299}
+      end
+
+    assert {:ok, write_results} = Client.write_multi(client, writes)
+    assert Enum.map(write_results, & &1.status) == List.duplicate(:ok, 5)
+
+    addresses = Enum.map(writes, &elem(&1, 0))
+    assert {:ok, read_results} = Client.read_multi(client, addresses)
+    assert Enum.map(read_results, & &1.value) == [1, 2, 3, 4, 5]
+    assert Enum.map(read_results, & &1.address) == addresses
+    assert %{next_reference: 7} = Client.info(client)
+    assert Client.close(client) == :ok
+  end
+
+  test "a stopped multi-read marks its batch failed and later batches not attempted" do
+    server = start_server(negotiated_pdu: 60, read_fault: :silence_multi)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port, timeout: 50)
+
+    addresses =
+      for offset <- 0..4 do
+        %Address{area: :db, db_number: 1, byte_offset: offset, data_type: :byte}
+      end
+
+    assert {:error, %Error{reason: :timeout}, results} = Client.read_multi(client, addresses)
+    assert Enum.map(results, & &1.status) == [:error, :error, :error, :error, :not_attempted]
+    assert %{state: :disconnected} = Client.info(client)
+    assert Client.close(client) == :ok
+  end
+
+  test "a stopped multi-write distinguishes indeterminate and not-attempted items" do
+    server = start_server(negotiated_pdu: 60, write_fault: :silence_multi)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port, timeout: 50)
+
+    writes =
+      for offset <- 0..4 do
+        {%Address{area: :db, db_number: 1, byte_offset: offset, data_type: :byte}, offset}
+      end
+
+    assert {:error, %Error{reason: :timeout}, results} = Client.write_multi(client, writes)
+
+    assert Enum.map(results, & &1.status) == [
+             :indeterminate,
+             :indeterminate,
+             :not_attempted,
+             :not_attempted,
+             :not_attempted
+           ]
+
+    assert %{state: :disconnected} = Client.info(client)
+    assert Client.close(client) == :ok
+  end
+
+  test "multi APIs validate every input before sending" do
+    server = start_server(write_fault: :second_item_error)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+    assert {:error, %Error{reason: :invalid_items}} = Client.read_multi(client, [])
+
+    assert {:error, %Error{reason: :invalid_address, details: %{index: 1}}} =
+             Client.read_multi(client, ["DB1.DBW0", :invalid])
+
+    assert {:error, %Error{reason: :invalid_item}} = Client.write_multi(client, [:invalid])
+
+    assert {:error, %Error{reason: :value_out_of_range, details: %{index: 1}}} =
+             Client.write_multi(client, [{"DB1.DBW0", 1}, {"DB1.DBW2", -1}])
+
+    assert {:ok, [%Result{status: :ok}, %Result{status: :error}]} =
+             Client.write_multi(client, [{"DB1.DBW0", 1}, {"DB1.DBW2", 2}])
+
+    assert %{state: :ready} = Client.info(client)
     assert Client.close(client) == :ok
   end
 

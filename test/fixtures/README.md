@@ -15,6 +15,10 @@ fixture -> decode -> expected struct
 expected struct -> encode -> fixture
 ```
 
+`read/multi_8_request.bin` and `read/multi_8_response.bin` are S7 payloads from frames 6 and 9 of
+the pinned WinCC S7-300 capture. They retain its eight-item parameter block, mixed response
+transports, and alignment bytes.
+
 Regenerate the `.bin` files from their reviewed hexadecimal source with:
 
 ```bash

@@ -10,12 +10,13 @@ in connection state.
 
 ## Status
 
-The v0.1 implementation and loopback interoperability suite are complete. CI also builds a server
-from a pinned Snap7 revision and verifies negotiation plus read-after-write for every supported
-area and scalar type. PLCSIM Advanced and physical Siemens hardware remain external release gates.
+The classic core and loopback interoperability suite support scalar, counted, and multi-item
+reads and writes. CI also builds a server from a pinned Snap7 revision and verifies automatic PDU
+splitting and read-after-write for every supported area and value type. PLCSIM Advanced and
+physical Siemens hardware remain external release gates.
 
-S7comm-plus, symbolic addressing, optimized/protected DB access, multi-item operations, block
-transfer, PLC control, userdata, alarms, and diagnostics are not supported.
+S7comm-plus, symbolic addressing, optimized/protected DB access, block transfer, PLC control,
+userdata, alarms, and diagnostics are not supported.
 
 ## Usage
 
@@ -49,7 +50,8 @@ words = %S7.Address{
 ```
 
 The client returned by `connect/2` is the PID that owns the socket. All public failures use
-`{:error, %S7.Error{}}`.
+`%S7.Error{}`. A multi-item operation that stops after execution begins returns
+`{:error, error, results}` so partial and indeterminate outcomes are not discarded.
 
 ### Connection Options
 
@@ -66,6 +68,7 @@ The client returned by `connect/2` is the PID that owns the socket. All public f
 | `:pdu_size` | `480` | Requested S7 PDU size |
 | `:max_tpkt_size` | `65535` | Maximum accepted TPKT frame size |
 | `:receive_buffer_limit` | derived | Maximum buffered TCP bytes; at least `:max_tpkt_size` |
+| `:max_items_per_pdu` | `20` | Conservative peer-compatible Read/Write Var item limit |
 
 The PLC may negotiate a smaller S7 PDU. Inspect the active values with `S7.Client.info/1`.
 
@@ -100,6 +103,22 @@ Supported types are `:bit`, `:byte`, `:word`, `:dword`, `:int`, `:dint`, and `:r
 
 `S7.Client.write_raw/3` accepts an already encoded binary whose size exactly matches the address
 type and count. Raw access does not bypass address validation or negotiated PDU limits.
+
+Multi-item operations preserve input order and split automatically:
+
+```elixir
+{:ok, results} = S7.Client.read_multi(client, ["DB1.DBW0", "MW10", "IW0"])
+values = Enum.map(results, &{&1.status, &1.value})
+
+{:ok, results} =
+  S7.Client.write_multi(client, [
+    {"DB1.DBW0", 123},
+    {"MW10", 456}
+  ])
+```
+
+Each entry is an `%S7.Result{}` with status `:ok`, `:error`, `:indeterminate`, or
+`:not_attempted`. The last two statuses matter when a multi-PDU write loses its connection.
 
 ## Architecture
 

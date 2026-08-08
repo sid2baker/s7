@@ -40,14 +40,16 @@ the additional load.
 
 ## Multi-Item Contract
 
-Multi-item responses preserve input order and retain each PLC return code.
-Packing several user items into multiple PDUs is not atomic. The result model
-must distinguish:
+Multi-item responses preserve input order and retain each PLC return code in
+`%S7.Result{}`. Packing several user items into multiple PDUs is not atomic.
+The result statuses distinguish:
 
 - completed successfully;
 - rejected by the PLC;
 - sent with an indeterminate outcome;
 - not attempted after an earlier transport failure.
 
-No convenience API may collapse an indeterminate write into a normal error
-that appears safe to retry.
+Completed execution returns `{:ok, results}`, even when individual PLC items
+were rejected. If execution stops at the transport or protocol level, the API
+returns `{:error, error, results}`. No convenience API collapses an
+indeterminate write into a normal error that appears safe to retry.

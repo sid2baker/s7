@@ -19,7 +19,7 @@ S7.Transport.*
 The value and addressing modules are shared models, not runtime services:
 
 ```text
-S7.Address  S7.Data  S7.Error  S7.TSAP
+S7.Address  S7.Data  S7.Error  S7.Result  S7.TSAP
 ```
 
 The following dependency rules are enforced by Reach through `.reach.exs`:
