@@ -93,6 +93,13 @@ TPKT decoding supports incomplete and concatenated frames. The connection also r
 COTP Data fragments. v0.1 permits one outstanding request, even if the peer negotiates a larger
 job queue.
 
+The tracked design contract is documented in:
+
+- [Architecture](docs/architecture.md)
+- [Protocol support](docs/protocol-support.md)
+- [Errors and retries](docs/error-and-retry-semantics.md)
+- [Roadmap to 1.0](docs/roadmap.md)
+
 ## Development
 
 ```bash
@@ -127,12 +134,11 @@ Golden fixtures live in [`test/fixtures`](test/fixtures/README.md). Rebuild thei
 
 ### Local Protocol References
 
-- [S7-1500 communication manual notes](resources/s7-1500-communication-manual.md)
-- [GyM S7comm v0.1 wire reference](resources/gmiru-s7comm/README.md)
-
 Source manuals, reference implementations, captures, and generated Markdown extracts under
 `resources/` are local development references and are intentionally excluded from version control.
-Rebuild the S7-1500 manual extract with `elixir scripts/extract_s7_manual.exs`.
+The local index files are `resources/s7-1500-communication-manual.md` and
+`resources/gmiru-s7comm/README.md`. Rebuild the S7-1500 manual extract with
+`elixir scripts/extract_s7_manual.exs`.
 
 ## Installation
 
