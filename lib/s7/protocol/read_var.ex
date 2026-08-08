@@ -26,7 +26,15 @@ defmodule S7.Protocol.ReadVar do
           {:ok, Data.value()} | {:error, S7.Error.t()}
   def decode_response(%PDU{} = pdu, %Address{} = address, expected_reference) do
     with {:ok, raw} <- decode_raw_response(pdu, address, expected_reference) do
-      Data.decode(address.data_type, raw)
+      Data.decode(address.data_type, raw, address.count)
+    end
+  end
+
+  @doc false
+  @spec response_size(Address.t()) :: {:ok, pos_integer()} | {:error, S7.Error.t()}
+  def response_size(%Address{} = address) do
+    with {:ok, payload_size} <- Data.encoded_size(address.data_type, address.count) do
+      {:ok, 12 + 2 + 4 + payload_size}
     end
   end
 
@@ -66,8 +74,11 @@ defmodule S7.Protocol.ReadVar do
     expected_transport = DataItem.expected_transport(address.data_type)
 
     with true <- item.transport_size == expected_transport,
-         {:ok, expected_size} <- Data.size(address.data_type),
-         true <- byte_size(item.data) == expected_size do
+         {:ok, expected_size} <- Data.encoded_size(address.data_type, address.count),
+         true <- byte_size(item.data) == expected_size,
+         true <-
+           item.encoded_length ==
+             DataItem.expected_encoded_length(address.data_type, expected_size) do
       :ok
     else
       _ ->

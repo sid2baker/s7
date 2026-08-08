@@ -30,6 +30,13 @@ defmodule S7.Protocol.ItemTest do
              <<0x12, 0x0A, 0x10, 0x04, 0, 1, 0, 1, 0x84, 0, 0, 160>>
   end
 
+  test "preserves a fixed element count in S7ANY" do
+    address = %Address{area: :db, db_number: 1, byte_offset: 20, data_type: :word, count: 3}
+
+    assert {:ok, %Item{count: 3} = item} = Item.from_address(address)
+    assert {:ok, ^item, <<>>} = item |> Item.encode() |> Item.decode()
+  end
+
   test "maps every v0.1 transport and area" do
     assert Item.transport_code(:bit) == 0x01
     assert Item.transport_code(:byte) == 0x02

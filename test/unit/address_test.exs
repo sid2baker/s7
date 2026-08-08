@@ -71,6 +71,31 @@ defmodule S7.AddressTest do
              Address.validate_scalar(address)
   end
 
+  test "accepts fixed-count non-bit ranges and rejects unsupported bit ranges" do
+    words = %Address{area: :db, db_number: 1, byte_offset: 10, data_type: :word, count: 4}
+    assert Address.validate(words) == {:ok, words}
+
+    bits = %Address{
+      area: :db,
+      db_number: 1,
+      byte_offset: 10,
+      bit_offset: 0,
+      data_type: :bit,
+      count: 2
+    }
+
+    assert {:error, %Error{reason: :multiple_bits_not_supported}} = Address.validate(bits)
+
+    overflow = %Address{
+      area: :markers,
+      byte_offset: 0x1FFFFF,
+      data_type: :word,
+      count: 1
+    }
+
+    assert {:error, %Error{reason: :invalid_offset}} = Address.validate(overflow)
+  end
+
   test "validates every structured address field" do
     invalid = [
       %Address{area: :timer, byte_offset: 0, data_type: :word},

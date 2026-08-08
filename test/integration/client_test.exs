@@ -180,6 +180,50 @@ defmodule S7.ClientIntegrationTest do
     assert Client.close(client) == :ok
   end
 
+  test "reads and writes typed arrays and raw byte ranges" do
+    server = start_server()
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+    words = %Address{area: :db, db_number: 1, byte_offset: 100, data_type: :word, count: 3}
+    assert :ok = Client.write(client, words, [1, 0x1234, 0xFFFF])
+    assert Client.read(client, words) == {:ok, [1, 0x1234, 0xFFFF]}
+    assert Client.read_raw(client, words) == {:ok, <<1::16, 0x1234::16, 0xFFFF::16>>}
+
+    bytes = %Address{area: :db, db_number: 1, byte_offset: 120, data_type: :byte, count: 5}
+    assert :ok = Client.write_raw(client, bytes, <<1, 2, 3, 4, 5>>)
+    assert Client.read_raw(client, bytes) == {:ok, <<1, 2, 3, 4, 5>>}
+    assert Client.read(client, bytes) == {:ok, [1, 2, 3, 4, 5]}
+
+    assert {:error, %Error{layer: :data, reason: :raw_size_mismatch}} =
+             Client.write_raw(client, bytes, <<1, 2>>)
+
+    assert %{state: :ready} = Client.info(client)
+    assert Client.close(client) == :ok
+  end
+
+  test "rejects counted items whose request or response exceeds the negotiated PDU" do
+    server = start_server(negotiated_pdu: 240)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+    oversized_read = %Address{
+      area: :db,
+      db_number: 1,
+      byte_offset: 0,
+      data_type: :byte,
+      count: 223
+    }
+
+    assert {:error, %Error{reason: :pdu_too_large}} = Client.read(client, oversized_read)
+
+    oversized_write = %{oversized_read | count: 213}
+
+    assert {:error, %Error{reason: :pdu_too_large}} =
+             Client.write_raw(client, oversized_write, :binary.copy(<<0>>, 213))
+
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert Client.close(client) == :ok
+  end
+
   for {fault, reason} <- [
         wrong_reference: :invalid_connection_reference,
         unsupported_class: :unsupported_connection_class,

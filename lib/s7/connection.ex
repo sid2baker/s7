@@ -420,6 +420,7 @@ defmodule S7.Connection do
   defp perform_read(data, address, raw?, reference) do
     with {:ok, request} <- ReadVar.request(address, reference),
          :ok <- ensure_pdu_size(request, data, :read),
+         :ok <- ensure_read_response_size(address, data),
          :ok <- send_pdu(data, request, :read),
          {:ok, response, data} <- receive_pdu(data, :read) do
       decoder = if raw?, do: &ReadVar.decode_raw_response/3, else: &ReadVar.decode_response/3
@@ -459,6 +460,19 @@ defmodule S7.Connection do
        Error.new(:s7, operation, :pdu_too_large,
          details: %{size: size, negotiated_size: data.pdu_size}
        )}
+    end
+  end
+
+  defp ensure_read_response_size(address, data) do
+    with {:ok, size} <- ReadVar.response_size(address) do
+      if size <= data.pdu_size do
+        :ok
+      else
+        {:error,
+         Error.new(:s7, :read, :pdu_too_large,
+           details: %{size: size, negotiated_size: data.pdu_size}
+         )}
+      end
     end
   end
 

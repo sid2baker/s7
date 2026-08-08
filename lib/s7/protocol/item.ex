@@ -43,7 +43,7 @@ defmodule S7.Protocol.Item do
   """
   @spec from_address(Address.t()) :: {:ok, t()} | {:error, S7.Error.t()}
   def from_address(%Address{} = address) do
-    with {:ok, address} <- Address.validate_scalar(address) do
+    with {:ok, address} <- Address.validate(address) do
       {:ok,
        %__MODULE__{
          transport_size: address.data_type,

@@ -3,13 +3,16 @@ defmodule S7.Address do
   A typed S7 memory address.
 
   Addresses can be built directly or parsed from common absolute Siemens
-  notation. The v0.1 client supports one scalar value per address.
+  notation. `count` is the number of consecutive values represented by the
+  address. Bit addresses are scalar because classic S7 bit jobs do not support
+  an amount greater than one consistently across peers.
   """
 
   alias S7.Error
 
   @areas [:db, :inputs, :outputs, :markers]
   @data_types [:bit, :byte, :word, :dword, :int, :dint, :real]
+  @data_type_sizes %{byte: 1, word: 2, dword: 4, int: 2, dint: 4, real: 4}
   @maximum_bit_address 0xFFFFFF
 
   @enforce_keys [:area, :byte_offset, :data_type]
@@ -58,8 +61,14 @@ defmodule S7.Address do
     with :ok <- validate_area(address.area),
          :ok <- validate_data_type(address.data_type),
          :ok <- validate_db_number(address.area, address.db_number),
-         :ok <- validate_offset(address.byte_offset, address.bit_offset, address.data_type),
-         :ok <- validate_count(address.count) do
+         :ok <- validate_count(address.data_type, address.count),
+         :ok <-
+           validate_offset(
+             address.byte_offset,
+             address.bit_offset,
+             address.data_type,
+             address.count
+           ) do
       db_number = if address.area == :db, do: address.db_number, else: 0
       {:ok, %{address | db_number: db_number}}
     else
@@ -181,23 +190,41 @@ defmodule S7.Address do
   defp validate_db_number(area, db_number),
     do: {:error, :invalid_db_number, %{area: area, db_number: db_number}}
 
-  defp validate_offset(byte_offset, bit_offset, :bit)
+  defp validate_offset(byte_offset, bit_offset, :bit, 1)
        when is_integer(byte_offset) and byte_offset >= 0 and bit_offset in 0..7 and
               byte_offset * 8 + bit_offset <= @maximum_bit_address,
        do: :ok
 
-  defp validate_offset(byte_offset, nil, data_type)
-       when is_integer(byte_offset) and byte_offset >= 0 and data_type in @data_types and
-              byte_offset * 8 <= @maximum_bit_address,
-       do: :ok
+  defp validate_offset(byte_offset, nil, data_type, count)
+       when is_integer(byte_offset) and byte_offset >= 0 and is_integer(count) and count > 0 do
+    case @data_type_sizes do
+      %{^data_type => element_size} ->
+        last_bit = byte_offset * 8 + element_size * count * 8 - 1
 
-  defp validate_offset(byte_offset, bit_offset, data_type),
+        if last_bit <= @maximum_bit_address,
+          do: :ok,
+          else: invalid_offset(byte_offset, nil, data_type)
+
+      _other ->
+        invalid_offset(byte_offset, nil, data_type)
+    end
+  end
+
+  defp validate_offset(byte_offset, bit_offset, data_type, _count),
+    do: invalid_offset(byte_offset, bit_offset, data_type)
+
+  defp invalid_offset(byte_offset, bit_offset, data_type),
     do:
       {:error, :invalid_offset,
        %{byte_offset: byte_offset, bit_offset: bit_offset, data_type: data_type}}
 
-  defp validate_count(count) when is_integer(count) and count in 1..0xFFFF, do: :ok
-  defp validate_count(count), do: {:error, :invalid_count, %{count: count}}
+  defp validate_count(:bit, 1), do: :ok
+
+  defp validate_count(:bit, count) when is_integer(count) and count in 2..0xFFFF,
+    do: {:error, :multiple_bits_not_supported, %{count: count}}
+
+  defp validate_count(_data_type, count) when is_integer(count) and count in 1..0xFFFF, do: :ok
+  defp validate_count(_data_type, count), do: {:error, :invalid_count, %{count: count}}
 
   defp ensure_scalar(1), do: :ok
   defp ensure_scalar(count), do: {:error, :multiple_values_not_supported, %{count: count}}

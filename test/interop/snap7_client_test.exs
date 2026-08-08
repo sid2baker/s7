@@ -48,5 +48,13 @@ defmodule S7.Snap7ClientInteropTest do
       assert Client.write(client, address, value) == :ok
       assert Client.read(client, address) == {:ok, value}
     end
+
+    words = %Address{area: :db, db_number: 1, byte_offset: 100, data_type: :word, count: 3}
+    assert Client.write(client, words, [1, 0x1234, 0xFFFF]) == :ok
+    assert Client.read(client, words) == {:ok, [1, 0x1234, 0xFFFF]}
+
+    bytes = %Address{area: :db, db_number: 1, byte_offset: 120, data_type: :byte, count: 5}
+    assert Client.write_raw(client, bytes, <<1, 2, 3, 4, 5>>) == :ok
+    assert Client.read_raw(client, bytes) == {:ok, <<1, 2, 3, 4, 5>>}
   end
 end

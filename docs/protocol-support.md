@@ -42,9 +42,11 @@ The current client supports absolute S7ANY addresses in data blocks, inputs,
 outputs, and markers. The scalar types are `:bit`, `:byte`, `:word`, `:dword`,
 `:int`, `:dint`, and `:real`.
 
-The `1.0` contract adds fixed-count values and raw byte ranges. String and
-Siemens date/time types will be advertised only after golden captures and real
-PLC tests exist for each representation.
+Fixed-count values and raw byte ranges are implemented for all listed non-bit
+types. Bit access remains scalar because reference implementations and tested
+peers reject a bit transport amount greater than one. String and Siemens
+date/time types will be advertised only after golden captures and real PLC
+tests exist for each representation.
 
 ## PLC Requirements
 

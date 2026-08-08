@@ -55,7 +55,19 @@ defmodule S7.Client do
   @spec write(t(), address(), Data.value()) :: :ok | {:error, Error.t()}
   def write(client, address, value) do
     with {:ok, address} <- normalize_address(address),
-         {:ok, encoded} <- Data.encode(address.data_type, value) do
+         {:ok, encoded} <- Data.encode(address.data_type, value, address.count) do
+      call(fn -> Connection.write(client, address, encoded) end, :write)
+    end
+  end
+
+  @doc """
+  Writes already encoded bytes after validating their exact size against the
+  address type and count.
+  """
+  @spec write_raw(t(), address(), binary()) :: :ok | {:error, Error.t()}
+  def write_raw(client, address, value) do
+    with {:ok, address} <- normalize_address(address),
+         {:ok, encoded} <- Data.validate_raw(address.data_type, value, address.count) do
       call(fn -> Connection.write(client, address, encoded) end, :write)
     end
   end
@@ -89,7 +101,7 @@ defmodule S7.Client do
   end
 
   defp normalize_address(address) when is_binary(address), do: Address.parse(address)
-  defp normalize_address(%Address{} = address), do: Address.validate_scalar(address)
+  defp normalize_address(%Address{} = address), do: Address.validate(address)
 
   defp normalize_address(address) do
     {:error, Error.new(:address, :parse, :invalid_address, details: %{address: address})}

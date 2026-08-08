@@ -18,6 +18,10 @@ defmodule S7.Protocol.DataItemTest do
     assert DataItem.for_write(:real, <<0x41, 0x48, 0, 0>>)
            |> DataItem.encode()
            |> IO.iodata_to_binary() == <<0, 0x07, 0, 4, 0x41, 0x48, 0, 0>>
+
+    assert DataItem.for_write(:word, <<0, 1, 0, 2>>)
+           |> DataItem.encode()
+           |> IO.iodata_to_binary() == <<0, 0x04, 0, 32, 0, 1, 0, 2>>
   end
 
   test "decodes one item and preserves following item bytes" do

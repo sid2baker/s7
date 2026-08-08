@@ -42,6 +42,23 @@ defmodule S7.Protocol.ReadVarTest do
     end
   end
 
+  test "encodes and decodes one fixed-count item" do
+    address = %Address{area: :db, db_number: 1, byte_offset: 20, data_type: :word, count: 3}
+    assert {:ok, request} = ReadVar.request(address, 9)
+
+    assert <<0x04, 1, _prefix::binary-size(4), 0, 3, _rest::binary>> = request.parameters
+
+    response = response(9, :byte, 48, <<1::16, 2::16, 3::16>>)
+    assert ReadVar.decode_response(response, address, 9) == {:ok, [1, 2, 3]}
+    assert ReadVar.decode_raw_response(response, address, 9) == {:ok, <<1::16, 2::16, 3::16>>}
+    assert ReadVar.response_size(address) == {:ok, 24}
+
+    wrong_length = response(9, :byte, 40, <<1::16, 2::16, 3::16>>)
+
+    assert {:error, %Error{reason: :malformed_response}} =
+             ReadVar.decode_response(wrong_length, address, 9)
+  end
+
   test "rejects wrong references, truncated payloads, and transport mismatches" do
     address = %Address{area: :markers, byte_offset: 0, data_type: :word}
     response = response(7, :byte, 16, <<0, 1>>)

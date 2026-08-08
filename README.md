@@ -1,7 +1,8 @@
 # S7
 
-An Elixir client for classic S7comm over RFC 1006. The v0.1 protocol surface is deliberately
+An Elixir client for classic S7comm over RFC 1006. The initial protocol surface is deliberately
 small: COTP connection setup, S7 Setup Communication, and one-item Read Var and Write Var jobs.
+One S7ANY item may represent either a scalar or a fixed-count range.
 
 The implementation keeps protocol codecs pure and gives the TCP socket to one `:gen_statem`
 process. Calls are serialized, PDU references are correlated, and negotiated PDU limits are kept
@@ -29,6 +30,22 @@ transfer, PLC control, userdata, alarms, and diagnostics are not supported.
 :ok = S7.Client.write(client, "DB1.DBW0", current + 1)
 {:ok, raw} = S7.Client.read_raw(client, "DB1.DBW0")
 :ok = S7.Client.close(client)
+```
+
+Counted addresses return lists from typed reads and accept lists for typed writes:
+
+```elixir
+words = %S7.Address{
+  area: :db,
+  db_number: 1,
+  byte_offset: 20,
+  data_type: :word,
+  count: 4
+}
+
+:ok = S7.Client.write(client, words, [1, 2, 3, 4])
+{:ok, [1, 2, 3, 4]} = S7.Client.read(client, words)
+{:ok, <<0, 1, 0, 2, 0, 3, 0, 4>>} = S7.Client.read_raw(client, words)
 ```
 
 The client returned by `connect/2` is the PID that owns the socket. All public failures use
@@ -77,8 +94,12 @@ temperature = %S7.Address{
 {:ok, 12.5} = S7.Client.read(client, temperature)
 ```
 
-Supported scalar types are `:bit`, `:byte`, `:word`, `:dword`, `:int`, `:dint`, and `:real`.
-Wire conversion is independently available through `S7.Data.encode/2` and `S7.Data.decode/2`.
+Supported types are `:bit`, `:byte`, `:word`, `:dword`, `:int`, `:dint`, and `:real`. All except
+`:bit` support a `count` greater than one. Wire conversion is independently available through
+`S7.Data.encode/2`, `S7.Data.encode/3`, `S7.Data.decode/2`, and `S7.Data.decode/3`.
+
+`S7.Client.write_raw/3` accepts an already encoded binary whose size exactly matches the address
+type and count. Raw access does not bypass address validation or negotiated PDU limits.
 
 ## Architecture
 

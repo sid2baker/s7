@@ -29,7 +29,7 @@ defmodule S7.Protocol.DataItem do
     %__MODULE__{
       return_code: 0,
       transport_size: transport_size,
-      encoded_length: encoded_length(transport_size, data),
+      encoded_length: encoded_length(transport_size, byte_size(data)),
       data: data
     }
   end
@@ -88,13 +88,21 @@ defmodule S7.Protocol.DataItem do
   def expected_transport(type) when type in [:int, :dint], do: :integer
   def expected_transport(:real), do: :real
 
+  @doc false
+  @spec expected_encoded_length(S7.Address.data_type(), non_neg_integer()) :: non_neg_integer()
+  def expected_encoded_length(data_type, payload_size) do
+    data_type
+    |> transport_for_data_type()
+    |> encoded_length(payload_size)
+  end
+
   defp transport_for_data_type(data_type), do: expected_transport(data_type)
 
-  defp encoded_length(transport, data) when transport in [:bit, :real, :octet],
-    do: byte_size(data)
+  defp encoded_length(transport, payload_size) when transport in [:bit, :real, :octet],
+    do: payload_size
 
-  defp encoded_length(transport, data) when transport in [:byte, :integer],
-    do: byte_size(data) * 8
+  defp encoded_length(transport, payload_size) when transport in [:byte, :integer],
+    do: payload_size * 8
 
   defp payload_size(:none, 0), do: 0
   defp payload_size(:none, _length), do: -1

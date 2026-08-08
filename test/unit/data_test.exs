@@ -51,6 +51,44 @@ defmodule S7.DataTest do
     end
   end
 
+  test "round-trips fixed-count values in wire order" do
+    values = [
+      byte: [0, 1, 0xFF],
+      word: [0x1234, 0xABCD],
+      dword: [0x12345678, 0xABCDEF01],
+      int: [-0x8000, 0, 0x7FFF],
+      dint: [-0x80000000, 0x7FFFFFFF],
+      real: [1.5, -12.25]
+    ]
+
+    for {type, elements} <- values do
+      assert {:ok, encoded} = Data.encode(type, elements, length(elements))
+      assert byte_size(encoded) == Data.size(type) |> elem(1) |> Kernel.*(length(elements))
+      assert Data.decode(type, encoded, length(elements)) == {:ok, elements}
+    end
+  end
+
+  test "validates array counts, elements, and raw payload sizes" do
+    assert {:error, %Error{reason: :value_count_mismatch}} = Data.encode(:word, [1], 2)
+
+    assert {:error, %Error{reason: :value_out_of_range, details: %{index: 1}}} =
+             Data.encode(:byte, [1, 256], 2)
+
+    assert {:error, %Error{reason: :raw_size_mismatch}} = Data.decode(:word, <<0, 1>>, 2)
+    assert {:error, %Error{reason: :multiple_bits_not_supported}} = Data.encode(:bit, [true], 2)
+    assert {:error, %Error{reason: :multiple_bits_not_supported}} = Data.decode(:bit, <<1, 0>>, 2)
+
+    assert Data.encoded_size(:real, 3) == {:ok, 12}
+    assert {:error, %Error{reason: :invalid_count}} = Data.encoded_size(:word, 0)
+    assert {:error, %Error{reason: :invalid_count}} = Data.encoded_size(:word, 0x10000)
+    assert {:error, %Error{reason: :multiple_bits_not_supported}} = Data.encoded_size(:bit, 2)
+    assert {:error, %Error{reason: :invalid_count}} = Data.encode(:word, [], 0x10000)
+    assert {:error, %Error{reason: :invalid_count}} = Data.decode(:word, <<>>, 0)
+    assert Data.validate_raw(:byte, <<1, 2, 3>>, 3) == {:ok, <<1, 2, 3>>}
+    assert {:error, %Error{reason: :raw_size_mismatch}} = Data.validate_raw(:word, <<1>>, 1)
+    assert {:error, %Error{reason: :raw_size_mismatch}} = Data.validate_raw(:word, :bad, 1)
+  end
+
   test "rejects out-of-range values and wrong payload sizes" do
     for {type, value} <- [byte: -1, byte: 256, word: 65_536, int: 32_768, bit: 2] do
       assert {:error, %Error{reason: :value_out_of_range}} = Data.encode(type, value)
