@@ -1,7 +1,7 @@
 defmodule S7.ClientIntegrationTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Address, Client, Error, Result}
+  alias S7.{Address, Client, CPInfo, CPUInfo, Error, OrderCode, PLCStatus, Result, SZL}
   alias S7.Connection
   alias S7.Protocol.UserData
   alias S7.Test.MockPLC
@@ -106,6 +106,88 @@ defmodule S7.ClientIntegrationTest do
              Connection.userdata(client, request)
 
     assert %{state: :disconnected} = Client.info(client)
+    assert Client.close(client) == :ok
+  end
+
+  test "reads fragmented SZLs and exposes documented metadata helpers" do
+    server = start_server(szl_fragment_size: 7)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+    assert {:ok,
+            %SZL{
+              id: 0x0011,
+              record_length: 28,
+              record_count: 1,
+              records: [<<1::16, _rest::binary>>]
+            }} = Client.read_szl(client, 0x0011)
+
+    assert Client.list_szl(client) == {:ok, [0x0011, 0x001C, 0x0131, 0x0424]}
+
+    assert {:ok, %OrderCode{code: "6ES7 315-2EH14-0AB0", version: {3, 2, 1}}} =
+             Client.order_code(client)
+
+    assert {:ok,
+            %CPUInfo{
+              automation_system_name: "Test PLC",
+              module_name: "CPU 315-2 PN/DP",
+              serial_number: "S C-C2UR28922012",
+              module_type_name: "CPU 315-2 PN/DP"
+            }} = Client.cpu_info(client)
+
+    assert {:ok, %CPInfo{max_pdu_length: 480, max_connections: 8}} = Client.cp_info(client)
+    assert {:ok, %PLCStatus{state: :run, code: 8}} = Client.plc_status(client)
+    assert %{state: :ready, in_flight_requests: 0} = Client.info(client)
+    assert Client.close(client) == :ok
+  end
+
+  for {fault, reason} <- [
+        {:mismatched_id, :malformed_response},
+        {:mismatched_data_unit_reference, :malformed_response},
+        {:malformed_geometry, :malformed_response},
+        {:missing_extension, :malformed_response},
+        {:wrong_transport, :malformed_response}
+      ] do
+    test "SZL fault #{fault} invalidates the transaction and session" do
+      server = start_server(szl_fault: unquote(fault), szl_fragment_size: 3)
+      assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+      assert {:error, %Error{operation: :read_szl, reason: unquote(reason)}} =
+               Client.read_szl(client, 0x0011)
+
+      assert %{state: :disconnected} = Client.info(client)
+      assert Client.close(client) == :ok
+    end
+  end
+
+  test "SZL fragment and aggregate bounds invalidate an incomplete transaction" do
+    fragment_server = start_server(szl_fragment_size: 1)
+    assert {:ok, fragment_client} = Client.connect({127, 0, 0, 1}, port: fragment_server.port)
+
+    assert {:error, %Error{reason: :too_many_userdata_fragments}} =
+             Client.read_szl(fragment_client, 0x0011, max_fragments: 2)
+
+    assert %{state: :disconnected} = Client.info(fragment_client)
+    assert Client.close(fragment_client) == :ok
+
+    size_server = start_server(szl_fragment_size: 7)
+    assert {:ok, size_client} = Client.connect({127, 0, 0, 1}, port: size_server.port)
+
+    assert {:error, %Error{reason: :userdata_too_large}} =
+             Client.read_szl(size_client, 0x0011, max_bytes: 8)
+
+    assert %{state: :disconnected} = Client.info(size_client)
+    assert Client.close(size_client) == :ok
+  end
+
+  test "a PLC SZL parameter error leaves the session available for Read Var" do
+    server = start_server(userdata_fault: :parameter_error)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+    assert {:error, %Error{operation: :read_szl, reason: :userdata_error, code: 0xD041}} =
+             Client.read_szl(client, 0x0011)
+
+    assert %{state: :ready} = Client.info(client)
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
     assert Client.close(client) == :ok
   end
 

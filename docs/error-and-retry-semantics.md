@@ -54,6 +54,13 @@ Graceful close is also bounded. A drain timeout returns `:drain_timeout` to the
 closing caller and every still-accepted operation, with each error's operation
 field adjusted for its recipient.
 
+SZL continuation is one logical request with fresh correlated PDU references
+for each data unit. Fragment-count overflow, aggregate-size overflow, changed
+data-unit identity, and malformed record geometry invalidate the session. This
+prevents later work from sharing a connection with an abandoned server-side
+userdata transaction. A PLC-reported SZL parameter error is complete and does
+not invalidate the session.
+
 ## Multi-Item Contract
 
 Multi-item responses preserve input order and retain each PLC return code in

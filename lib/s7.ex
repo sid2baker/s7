@@ -6,6 +6,8 @@ defmodule S7 do
   binary codecs and can be used independently for diagnostics and testing.
 
   S7comm-plus, symbolic addressing, block operations, PLC control, alarms,
-  diagnostics, and userdata services are outside the current scope.
+  and programmer diagnostics are outside the current scope. The classic
+  userdata envelope currently supports bounded SZL reads and typed CPU
+  metadata helpers.
   """
 end

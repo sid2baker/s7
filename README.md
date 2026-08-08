@@ -1,8 +1,9 @@
 # S7
 
-An Elixir client for classic S7comm over RFC 1006. The protocol surface is deliberately focused:
-COTP connection setup, S7 Setup Communication, and single- or multi-item Read Var and Write Var
-jobs. One S7ANY item may represent either a scalar or a fixed-count range.
+An Elixir client for classic S7comm over RFC 1006. The protocol surface includes COTP connection
+setup, S7 Setup Communication, single- or multi-item Read Var and Write Var jobs, and bounded
+userdata-backed System Status List (SZL/SSL) reads. One S7ANY item may represent either a scalar
+or a fixed-count range.
 
 The implementation keeps protocol codecs pure and gives the TCP socket to one `:gen_statem`
 process. Its `active: :once` request engine correlates responses by PDU reference, bounds queued
@@ -16,7 +17,8 @@ splitting and read-after-write for every supported area and value type. PLCSIM A
 physical Siemens hardware remain external release gates, so `0.1.0` remains a release candidate.
 
 S7comm-plus, symbolic addressing, optimized/protected DB access, block transfer, PLC control,
-userdata, alarms, and diagnostics are not supported.
+alarms, and programmer diagnostics are not supported. The common classic userdata envelope is
+implemented for SZL requests and safe handling of unsolicited indications.
 
 ## Usage
 
@@ -30,6 +32,7 @@ userdata, alarms, and diagnostics are not supported.
 {:ok, current} = S7.Client.read(client, "DB1.DBW0")
 :ok = S7.Client.write(client, "DB1.DBW0", current + 1)
 {:ok, raw} = S7.Client.read_raw(client, "DB1.DBW0")
+{:ok, %S7.OrderCode{code: order_code}} = S7.Client.order_code(client)
 :ok = S7.Client.close(client)
 ```
 
@@ -157,13 +160,34 @@ values = Enum.map(results, &{&1.status, &1.value})
 Each entry is an `%S7.Result{}` with status `:ok`, `:error`, `:indeterminate`, or
 `:not_attempted`. The last two statuses matter when a multi-PDU write loses its connection.
 
+## System Status Lists
+
+Raw SZL reads preserve record boundaries and bytes while validating the PLC's declared geometry:
+
+```elixir
+{:ok, %S7.SZL{record_length: length, records: records}} =
+  S7.Client.read_szl(client, 0x0011, 0,
+    max_bytes: 1_048_576,
+    max_fragments: 64
+  )
+
+{:ok, ids} = S7.Client.list_szl(client)
+{:ok, %S7.CPUInfo{} = cpu} = S7.Client.cpu_info(client)
+{:ok, %S7.CPInfo{} = communication} = S7.Client.cp_info(client)
+{:ok, %S7.PLCStatus{state: :run}} = S7.Client.plc_status(client)
+```
+
+The order-code, component-identification, communication-limit, and status helpers decode known
+Siemens layouts. Every typed result retains either its source record or the complete component
+map; use `read_szl/4` for CPU-specific and firmware-specific records.
+
 ## Architecture
 
 ```text
 S7.Client
   -> S7.Connection (:gen_statem, active-once :gen_tcp owner)
     -> bounded queue / PDU-reference correlation / request timers / reconnect backoff
-    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar}
+    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL}
       -> S7.Protocol.PDU / Header / Item / DataItem
         -> S7.Transport.COTP
           -> S7.Transport.TPKT

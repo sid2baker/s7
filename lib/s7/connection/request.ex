@@ -18,6 +18,7 @@ defmodule S7.Connection.Request do
     :enqueued_at,
     :started_at,
     :request_size,
+    :context,
     batches: [],
     results: [],
     cancelled: false
@@ -39,6 +40,7 @@ defmodule S7.Connection.Request do
           enqueued_at: integer() | nil,
           started_at: integer() | nil,
           request_size: non_neg_integer() | nil,
+          context: term(),
           batches: [list()],
           results: [Result.t()],
           cancelled: boolean()

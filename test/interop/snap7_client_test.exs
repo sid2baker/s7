@@ -3,7 +3,7 @@ defmodule S7.Snap7ClientInteropTest do
 
   @moduletag :external
 
-  alias S7.{Address, Client, Result}
+  alias S7.{Address, Client, CPInfo, CPUInfo, OrderCode, PLCStatus, Result, SZL}
 
   setup do
     host = System.fetch_env!("S7_TEST_HOST")
@@ -76,5 +76,24 @@ defmodule S7.Snap7ClientInteropTest do
     addresses = Enum.map(writes, &elem(&1, 0))
     assert {:ok, read_results} = Client.read_multi(client, addresses)
     assert Enum.map(read_results, & &1.value) == Enum.map(writes, &elem(&1, 1))
+  end
+
+  test "reads raw and typed classic SZL metadata", %{client: client} do
+    assert {:ok, %SZL{id: 0x0011, record_length: 28, record_count: count}} =
+             Client.read_szl(client, 0x0011)
+
+    assert count > 0
+    assert {:ok, ids} = Client.list_szl(client)
+    assert 0x0011 in ids
+    assert 0x001C in ids
+
+    assert {:ok, %OrderCode{code: code}} = Client.order_code(client)
+    assert code != ""
+    assert {:ok, %CPUInfo{module_type_name: module_type}} = Client.cpu_info(client)
+    assert is_binary(module_type)
+    assert {:ok, %CPInfo{max_pdu_length: max_pdu}} = Client.cp_info(client)
+    assert max_pdu > 0
+    assert {:ok, %PLCStatus{state: state}} = Client.plc_status(client)
+    assert state in [:run, :stop, :unknown]
   end
 end

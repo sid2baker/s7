@@ -14,6 +14,14 @@ suite pass.
 | 7 | Telemetry, security, interoperability, and soak tests | Complete |
 | 8 | Hex, ExDoc, compatibility matrix, and release gates | Complete |
 
-Classic SZL/userdata diagnostics may follow `1.0`. Block operations and PLC
-control require separate opt-in APIs because their operational risk differs
-from reading and writing memory. S7comm-plus remains a separate project.
+## Classic Extensions
+
+| Milestone | Outcome | Status |
+| --- | --- | --- |
+| 9 | Class-0 COTP sizing, segmentation, and DR/DC/ER codecs | Complete |
+| 10 | Generic userdata envelope and bounded request routing | Complete |
+| 11 | Raw SZL continuation and typed CPU metadata | Complete |
+
+Additional programmer diagnostics may follow. Block operations and PLC control
+require separate opt-in APIs because their operational risk differs from
+reading memory. S7comm-plus remains outside the current roadmap.

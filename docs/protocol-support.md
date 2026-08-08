@@ -27,7 +27,8 @@ interoperability targets have passed; decoding a capture alone is not enough.
 | Multi-item Write Var | Implemented | Supported |
 | Automatic PDU packing | Implemented | Supported |
 | Concurrent jobs | Implemented, defaults to one | Bounded by negotiation |
-| SZL and CPU metadata | Not implemented | Post-1.0 |
+| Raw SZL reads and bounded continuation | Implemented | Supported after device qualification |
+| Order code, CPU/CP info, and PLC status | Implemented | Supported after device qualification |
 | Common userdata envelope and request routing | Implemented | Supported |
 | Userdata diagnostics/services | Not implemented | Post-1.0 |
 | Block upload/download | Not implemented | Separate opt-in surface |
@@ -55,6 +56,11 @@ types. Bit access remains scalar because reference implementations and tested
 peers reject a bit transport amount greater than one. String and Siemens
 date/time types will be advertised only after golden captures and real PLC
 tests exist for each representation.
+
+Raw SZL records are returned without CPU-family assumptions. Typed metadata
+helpers cover Siemens-documented module/component records plus the established
+Snap7 CP-limit and operating-status layouts; raw source bytes remain available
+for forward compatibility.
 
 ## PLC Requirements
 

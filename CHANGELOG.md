@@ -23,6 +23,9 @@ Changes currently targeted for `0.1.0` are listed below.
 - Telemetry, scheduled soak qualification, and security guidance.
 - Golden packets, property tests, a fault-injection PLC, pinned Snap7 interop, and PCAP checks.
 - Hex package metadata, ExDoc guides, a BEAM compatibility matrix, and release gates.
+- Class-0 COTP segmentation plus Disconnect Request/Confirm and Error TPDU codecs.
+- Generic classic userdata request routing with safe unsolicited-indication handling.
+- Bounded raw SZL continuation, record validation, and typed CPU metadata helpers.
 
 The date remains unset until the external release qualification in
 `docs/interoperability.md` is complete.

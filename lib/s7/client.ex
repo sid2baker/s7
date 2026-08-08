@@ -7,7 +7,8 @@ defmodule S7.Client do
   Communication negotiation.
   """
 
-  alias S7.{Address, Connection, Data, Error, Result}
+  alias S7.{Address, Connection, CPInfo, CPUInfo, Data, Error, OrderCode, PLCStatus, Result, SZL}
+  alias S7.SZL.Metadata
 
   @opaque t :: GenServer.server()
   @type address :: String.t() | Address.t()
@@ -147,6 +148,77 @@ defmodule S7.Client do
   def write_multi_raw(client, items), do: write_many(client, items, :raw)
 
   @doc """
+  Reads one raw System Status List (SZL/SSL) and assembles bounded userdata
+  fragments. Record bytes are preserved in the returned `S7.SZL` struct.
+
+  Options are `:max_bytes` and `:max_fragments`.
+  """
+  @spec read_szl(t(), 0..0xFFFF) :: {:ok, SZL.t()} | {:error, Error.t()}
+  def read_szl(client, id), do: read_szl_operation(client, id, 0, [], :read_szl)
+
+  @spec read_szl(t(), 0..0xFFFF, 0..0xFFFF | keyword()) ::
+          {:ok, SZL.t()} | {:error, Error.t()}
+  def read_szl(client, id, opts) when is_list(opts),
+    do: read_szl_operation(client, id, 0, opts, :read_szl)
+
+  def read_szl(client, id, index), do: read_szl_operation(client, id, index, [], :read_szl)
+
+  @spec read_szl(t(), 0..0xFFFF, 0..0xFFFF, keyword()) ::
+          {:ok, SZL.t()} | {:error, Error.t()}
+  def read_szl(client, id, index, opts),
+    do: read_szl_operation(client, id, index, opts, :read_szl)
+
+  @doc """
+  Lists the SZL IDs advertised by the connected CPU.
+  """
+  @spec list_szl(t(), keyword()) :: {:ok, [0..0xFFFF]} | {:error, Error.t()}
+  def list_szl(client, opts \\ []) do
+    with {:ok, szl} <- read_szl_operation(client, 0, 0, opts, :list_szl) do
+      Metadata.available_ids(szl)
+    end
+  end
+
+  @doc """
+  Reads and decodes the module order code and three-part version.
+  """
+  @spec order_code(t(), keyword()) :: {:ok, OrderCode.t()} | {:error, Error.t()}
+  def order_code(client, opts \\ []) do
+    with {:ok, szl} <- read_szl_operation(client, 0x0011, 0, opts, :order_code) do
+      Metadata.order_code(szl)
+    end
+  end
+
+  @doc """
+  Reads documented CPU component-identification strings.
+  """
+  @spec cpu_info(t(), keyword()) :: {:ok, CPUInfo.t()} | {:error, Error.t()}
+  def cpu_info(client, opts \\ []) do
+    with {:ok, szl} <- read_szl_operation(client, 0x001C, 0, opts, :cpu_info) do
+      Metadata.cpu_info(szl)
+    end
+  end
+
+  @doc """
+  Reads communication-processor limits from SZL `0x0131`, index `1`.
+  """
+  @spec cp_info(t(), keyword()) :: {:ok, CPInfo.t()} | {:error, Error.t()}
+  def cp_info(client, opts \\ []) do
+    with {:ok, szl} <- read_szl_operation(client, 0x0131, 1, opts, :cp_info) do
+      Metadata.cp_info(szl)
+    end
+  end
+
+  @doc """
+  Reads the PLC operating status without collapsing unknown raw status codes.
+  """
+  @spec plc_status(t(), keyword()) :: {:ok, PLCStatus.t()} | {:error, Error.t()}
+  def plc_status(client, opts \\ []) do
+    with {:ok, szl} <- read_szl_operation(client, 0x0424, 0, opts, :plc_status) do
+      Metadata.plc_status(szl)
+    end
+  end
+
+  @doc """
   Returns negotiated connection information.
   """
   @spec info(t()) :: map() | {:error, Error.t()}
@@ -223,6 +295,12 @@ defmodule S7.Client do
   defp write_many(client, items, mode) do
     with {:ok, items} <- normalize_write_items(items, mode) do
       call(fn -> Connection.write_multi(client, items) end, :write_multi)
+    end
+  end
+
+  defp read_szl_operation(client, id, index, opts, operation) do
+    with {:ok, limits} <- SZL.validate_request(id, index, opts, operation) do
+      call(fn -> Connection.read_szl(client, id, index, limits, operation) end, operation)
     end
   end
 

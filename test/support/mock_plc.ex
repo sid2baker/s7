@@ -46,6 +46,8 @@ defmodule S7.Test.MockPLC do
       options: opts,
       read_fault: Keyword.get(opts, :read_fault),
       userdata_fault: Keyword.get(opts, :userdata_fault),
+      szl_fault: Keyword.get(opts, :szl_fault),
+      szl_pending: nil,
       deferred_reads: [],
       memory: initial_memory()
     }
@@ -218,8 +220,214 @@ defmodule S7.Test.MockPLC do
     )
   end
 
+  defp handle_userdata(
+         state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{
+             method: 0x11,
+             type: :request,
+             function_group: :cpu,
+             subfunction: 1
+           },
+           payload: %Payload{data: <<id::unsigned-big-16, index::unsigned-big-16>>}
+         }
+       ) do
+    start_szl_response(state, request_pdu, id, index)
+  end
+
+  defp handle_userdata(
+         %{szl_pending: %{sequence: sequence}} = state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{
+             method: 0x12,
+             type: :request,
+             function_group: :cpu,
+             subfunction: 1,
+             sequence: sequence
+           },
+           payload: %Payload{data: <<>>}
+         }
+       ) do
+    continue_szl_response(state, request_pdu)
+  end
+
   defp handle_userdata(state, request_pdu, request),
     do: send_userdata_response(state, request_pdu, request)
+
+  defp start_szl_response(state, request_pdu, id, index) do
+    case Map.fetch(szl_data(state), {id, index}) do
+      {:ok, {record_length, records}} ->
+        raw = encode_szl(record_length, records, state.szl_fault)
+        chunks = split_szl(raw, Keyword.get(state.options, :szl_fragment_size, byte_size(raw)))
+        [chunk | remaining] = chunks
+        sequence = 0x2A
+        data_unit_reference = 7
+        response_id = if state.szl_fault == :mismatched_id, do: Bitwise.bxor(id, 1), else: id
+        payload = <<response_id::16, index::16, chunk::binary>>
+
+        pending =
+          if remaining == [] do
+            nil
+          else
+            %{
+              chunks: remaining,
+              sequence: sequence,
+              data_unit_reference: data_unit_reference
+            }
+          end
+
+        state =
+          if state.szl_fault == :mismatched_id,
+            do: %{state | szl_fault: nil, szl_pending: pending},
+            else: %{state | szl_pending: pending}
+
+        send_szl_fragment(
+          state,
+          request_pdu,
+          payload,
+          remaining != [],
+          sequence,
+          data_unit_reference
+        )
+
+      :error ->
+        send_userdata_response(state, request_pdu, szl_request(id, index), error_code: 0x02D4)
+    end
+  end
+
+  defp continue_szl_response(
+         %{szl_pending: %{chunks: [chunk | remaining]} = pending} = state,
+         request_pdu
+       ) do
+    data_unit_reference =
+      if state.szl_fault == :mismatched_data_unit_reference do
+        pending.data_unit_reference + 1
+      else
+        pending.data_unit_reference
+      end
+
+    next_pending = if remaining == [], do: nil, else: %{pending | chunks: remaining}
+
+    state =
+      if state.szl_fault == :mismatched_data_unit_reference,
+        do: %{state | szl_fault: nil, szl_pending: next_pending},
+        else: %{state | szl_pending: next_pending}
+
+    send_szl_fragment(
+      state,
+      request_pdu,
+      chunk,
+      remaining != [],
+      pending.sequence,
+      data_unit_reference
+    )
+  end
+
+  defp send_szl_fragment(
+         state,
+         request_pdu,
+         data,
+         more?,
+         sequence,
+         data_unit_reference
+       ) do
+    parameter =
+      if state.szl_fault == :missing_extension do
+        %Parameter{
+          method: 0x12,
+          type: :response,
+          function_group: :cpu,
+          subfunction: 1,
+          sequence: sequence
+        }
+      else
+        %Parameter{
+          method: 0x12,
+          type: :response,
+          function_group: :cpu,
+          subfunction: 1,
+          sequence: sequence,
+          data_unit_reference: data_unit_reference,
+          last_data_unit: if(more?, do: 1, else: 0),
+          error_code: 0
+        }
+      end
+
+    transport_size = if state.szl_fault == :wrong_transport, do: 0x04, else: 0x09
+
+    response = %UserData{
+      parameter: parameter,
+      payload: %Payload{transport_size: transport_size, data: data}
+    }
+
+    {:ok, response_pdu} = UserData.to_pdu(response, request_pdu.header.pdu_reference)
+    :ok = send_pdu(state, response_pdu)
+
+    if state.szl_fault in [:missing_extension, :wrong_transport],
+      do: %{state | szl_fault: nil},
+      else: state
+  end
+
+  defp szl_request(id, index) do
+    {:ok, request} = UserData.request(:cpu, 1, <<id::16, index::16>>)
+    request
+  end
+
+  defp encode_szl(record_length, records, :malformed_geometry) do
+    [<<record_length::16, length(records) + 1::16>>, records]
+    |> IO.iodata_to_binary()
+  end
+
+  defp encode_szl(record_length, records, _fault) do
+    [<<record_length::16, length(records)::16>>, records]
+    |> IO.iodata_to_binary()
+  end
+
+  defp split_szl(binary, size) when is_integer(size) and size > 0 do
+    do_split_szl(binary, size, [])
+  end
+
+  defp do_split_szl(<<>>, _size, chunks), do: Enum.reverse(chunks)
+
+  defp do_split_szl(binary, size, chunks) when byte_size(binary) <= size,
+    do: Enum.reverse([binary | chunks])
+
+  defp do_split_szl(binary, size, chunks) do
+    <<chunk::binary-size(size), remaining::binary>> = binary
+    do_split_szl(remaining, size, [chunk | chunks])
+  end
+
+  defp szl_data(state), do: Keyword.get(state.options, :szl_data, default_szl_data())
+
+  defp default_szl_data do
+    order_record =
+      <<1::16, fixed_text("6ES7 315-2EH14-0AB0", 20)::binary, 0::16, 3::16, 2::8, 1::8>>
+
+    component_records = [
+      component_record(1, "Test PLC"),
+      component_record(2, "CPU 315-2 PN/DP"),
+      component_record(4, "Original Siemens Equipment"),
+      component_record(5, "S C-C2UR28922012"),
+      component_record(7, "CPU 315-2 PN/DP")
+    ]
+
+    %{
+      {0x0000, 0} => {2, Enum.map([0x0011, 0x001C, 0x0131, 0x0424], &<<&1::unsigned-big-16>>)},
+      {0x0011, 0} => {28, [order_record]},
+      {0x001C, 0} => {34, component_records},
+      {0x0131, 1} => {14, [<<1::16, 480::16, 8::16, 187_500::32, 12_000_000::32>>]},
+      {0x0424, 0} => {4, [<<0::16, 0, 8>>]}
+    }
+  end
+
+  defp component_record(index, text), do: <<index::16, fixed_text(text, 32)::binary>>
+
+  defp fixed_text(text, size) do
+    padded = text <> :binary.copy(<<0>>, size)
+    binary_part(padded, 0, size)
+  end
 
   defp send_userdata_response(state, request_pdu, request, opts \\ []) do
     request_parameter = request.parameter

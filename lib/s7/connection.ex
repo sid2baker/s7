@@ -12,6 +12,7 @@ defmodule S7.Connection do
   alias S7.{Address, Error, Result, Telemetry, TSAP}
   alias S7.Connection.{Drain, Reconnect, Request, Stream}
   alias S7.Protocol.{PDU, PDUPlanner, ReadVar, SetupCommunication, UserData, WriteVar}
+  alias S7.Protocol.SZL, as: SZLProtocol
   alias S7.Transport.{COTP, TPKT}
 
   alias S7.Transport.COTP.{
@@ -145,6 +146,13 @@ defmodule S7.Connection do
   @spec userdata(pid(), UserData.t(), atom()) :: {:ok, UserData.t()} | {:error, Error.t()}
   def userdata(connection, message, operation \\ :userdata) do
     :gen_statem.call(connection, {:userdata, message, operation}, :infinity)
+  end
+
+  @doc false
+  @spec read_szl(pid(), 0..0xFFFF, 0..0xFFFF, S7.SZL.limits(), atom()) ::
+          {:ok, S7.SZL.t()} | {:error, Error.t()}
+  def read_szl(connection, id, index, limits, operation) do
+    :gen_statem.call(connection, {:read_szl, id, index, limits, operation}, :infinity)
   end
 
   @doc false
@@ -288,6 +296,14 @@ defmodule S7.Connection do
   def handle_event(
         {:call, from},
         {:userdata, _message, _request_operation} = operation,
+        :ready,
+        data
+      ),
+      do: submit_request(from, operation, data)
+
+  def handle_event(
+        {:call, from},
+        {:read_szl, _id, _index, _limits, _request_operation} = operation,
         :ready,
         data
       ),
@@ -1092,6 +1108,23 @@ defmodule S7.Connection do
     {:error, Error.new(:s7, operation, :invalid_userdata)}
   end
 
+  defp build_request(from, {:read_szl, id, index, limits, operation}, _data)
+       when is_atom(operation) do
+    case SZLProtocol.start(id, index, limits) do
+      {:ok, message, transaction} ->
+        request = new_request(from, :szl, operation, [[message]])
+        {:ok, %{request | context: transaction}}
+
+      {:error, %Error{} = error} ->
+        {:error, %{error | operation: operation}}
+    end
+  end
+
+  defp build_request(_from, {:read_szl, _id, _index, _limits, operation}, _data) do
+    operation = if is_atom(operation), do: operation, else: :read_szl
+    {:error, Error.new(:client, operation, :invalid_szl_request)}
+  end
+
   defp plan_read(addresses, data) do
     PDUPlanner.plan_read(addresses, data.pdu_size, maximum_items: data.max_items_per_pdu)
   end
@@ -1130,6 +1163,15 @@ defmodule S7.Connection do
 
   defp enqueue_request(data, request) do
     queue = :queue.in(request, data.queue)
+    finish_enqueue(data, request, queue)
+  end
+
+  defp enqueue_priority_request(data, request) do
+    queue = :queue.in_r(request, data.queue)
+    finish_enqueue(data, request, queue)
+  end
+
+  defp finish_enqueue(data, request, queue) do
     request_index = Map.put(data.request_index, request.monitor, {:queued, request.id})
 
     data = %{
@@ -1223,6 +1265,9 @@ defmodule S7.Connection do
        do: WriteVar.request_many(batch, reference)
 
   defp encode_batch(%Request{kind: :userdata}, [%UserData{} = message], reference),
+    do: UserData.to_pdu(message, reference)
+
+  defp encode_batch(%Request{kind: :szl}, [%UserData{} = message], reference),
     do: UserData.to_pdu(message, reference)
 
   defp allocate_reference(data), do: allocate_reference(data, data.reference, 0)
@@ -1344,6 +1389,28 @@ defmodule S7.Connection do
     end
   end
 
+  defp decode_batch_response(
+         %Request{
+           kind: :szl,
+           current_batch: [%UserData{} = message],
+           context: transaction
+         } = request,
+         pdu
+       ) do
+    with {:ok, response} <- UserData.decode_response(pdu, message, request.reference) do
+      case SZLProtocol.consume(response, transaction, request.operation) do
+        {:ok, szl} ->
+          {:ok, [{:complete, szl}]}
+
+        {:continue, next_message, transaction} ->
+          {:ok, [{:continue, next_message, transaction}]}
+
+        {:error, %Error{} = error} ->
+          {:error, error}
+      end
+    end
+  end
+
   defp handle_batch_results(data, request, item_results) do
     if caller_alive?(request) and not request.cancelled do
       handle_active_batch_results(data, request, item_results)
@@ -1366,6 +1433,28 @@ defmodule S7.Connection do
   defp handle_active_batch_results(data, %Request{kind: :userdata} = request, [response]) do
     finish_request(request, {:ok, response})
     data
+  end
+
+  defp handle_active_batch_results(data, %Request{kind: :szl} = request, [
+         {:complete, szl}
+       ]) do
+    finish_request(request, {:ok, szl})
+    data
+  end
+
+  defp handle_active_batch_results(data, %Request{kind: :szl} = request, [
+         {:continue, message, transaction}
+       ]) do
+    request = %{
+      request
+      | reference: nil,
+        current_batch: nil,
+        batches: [[message]],
+        context: transaction,
+        enqueued_at: Telemetry.monotonic_time()
+    }
+
+    enqueue_priority_request(data, request)
   end
 
   defp handle_active_batch_results(data, %Request{kind: :read_multi} = request, item_results) do
@@ -1395,7 +1484,7 @@ defmodule S7.Connection do
   end
 
   defp request_failure_reply(%Request{kind: kind, operation: operation}, error, _send_state)
-       when kind in [:read, :write, :userdata],
+       when kind in [:read, :write, :userdata, :szl],
        do: {:error, with_operation(error, operation)}
 
   defp request_failure_reply(%Request{kind: :read_multi} = request, error, send_state) do
@@ -1926,13 +2015,19 @@ defmodule S7.Connection do
               :unexpected_userdata_service,
               :unexpected_userdata_type,
               :unexpected_tpdu,
-              :unexpected_tpdu_number
+              :unexpected_tpdu_number,
+              :too_many_userdata_fragments,
+              :userdata_too_large
             ],
        do: :disconnect
 
   defp response_action(error), do: connection_action(error)
 
   defp operation_name({:userdata, _message, operation}) when is_atom(operation), do: operation
+
+  defp operation_name({:read_szl, _id, _index, _limits, operation}) when is_atom(operation),
+    do: operation
+
   defp operation_name({operation, _address, _value}), do: operation
   defp operation_name({operation, _items}) when operation in [:write_multi], do: operation
   defp operation_name(operation) when is_atom(operation), do: operation
