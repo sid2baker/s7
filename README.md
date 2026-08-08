@@ -13,7 +13,7 @@ and in-flight work, and keeps negotiated limits in connection state.
 The classic core and loopback interoperability suite support scalar, counted, and multi-item
 reads and writes. CI also builds a server from a pinned Snap7 revision and verifies automatic PDU
 splitting and read-after-write for every supported area and value type. PLCSIM Advanced and
-physical Siemens hardware remain external release gates.
+physical Siemens hardware remain external release gates, so `0.1.0` remains a release candidate.
 
 S7comm-plus, symbolic addressing, optimized/protected DB access, block transfer, PLC control,
 userdata, alarms, and diagnostics are not supported.
@@ -179,8 +179,11 @@ The tracked design contract is documented in:
 - [Protocol support](docs/protocol-support.md)
 - [Errors and retries](docs/error-and-retry-semantics.md)
 - [Telemetry](docs/telemetry.md)
+- [Compatibility](docs/compatibility.md)
 - [Interoperability evidence](docs/interoperability.md)
+- [Release process](docs/releasing.md)
 - [Security policy](SECURITY.md)
+- [Changelog](CHANGELOG.md)
 - [Roadmap to 1.0](docs/roadmap.md)
 
 ## Development
@@ -188,6 +191,8 @@ The tracked design contract is documented in:
 ```bash
 mix deps.get
 mix ci
+mix docs --warnings-as-errors
+mix release.check
 ```
 
 The CI alias runs compilation with warnings as errors, formatting, unit/property/integration
@@ -212,6 +217,12 @@ bash scripts/run_snap7_packet_check.sh
 ```
 
 CI runs the packet check and retains its PCAP artifact for seven days.
+
+Run the scheduled long-form qualification locally with:
+
+```bash
+S7_SOAK_ITERATIONS=20000 mix soak
+```
 
 Golden fixtures live in [`test/fixtures`](test/fixtures/README.md). Rebuild their binary files with
 `elixir scripts/build_test_fixtures.exs`.

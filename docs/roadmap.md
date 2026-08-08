@@ -12,7 +12,7 @@ suite pass.
 | 5 | Asynchronous request correlation and bounded concurrency | Complete |
 | 6 | Supervision, reconnect, and safe recovery | Complete |
 | 7 | Telemetry, security, interoperability, and soak tests | Complete |
-| 8 | Hex, ExDoc, compatibility matrix, and release gates | Planned |
+| 8 | Hex, ExDoc, compatibility matrix, and release gates | Complete |
 
 Classic SZL/userdata diagnostics may follow `1.0`. Block operations and PLC
 control require separate opt-in APIs because their operational risk differs

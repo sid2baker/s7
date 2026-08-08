@@ -1,0 +1,48 @@
+name: Release Candidate
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Erlang and Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Run release checks
+        run: mix release.check
+
+      - name: Run Snap7 packet qualification
+        run: S7_CAPTURE_FILE="${RUNNER_TEMP}/s7-snap7.pcap" bash scripts/run_snap7_packet_check.sh
+
+      - name: Build review package
+        run: mix hex.build --output "${RUNNER_TEMP}/s7-package.tar"
+
+      - name: Upload release review artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: s7-release-${{ github.ref_name }}
+          path: |
+            ${{ runner.temp }}/s7-package.tar
+            ${{ runner.temp }}/s7-snap7.pcap
+            doc
+          if-no-files-found: error
+          retention-days: 14

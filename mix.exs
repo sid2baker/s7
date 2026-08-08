@@ -1,13 +1,22 @@
 defmodule S7.MixProject do
   use Mix.Project
 
+  @version "0.1.0"
+  @source_url "https://github.com/sid2baker/s7"
+
   def project do
     [
       app: :s7,
-      version: "0.1.0",
-      elixir: "~> 1.19",
+      version: @version,
+      elixir: ">= 1.17.0 and < 2.0.0",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      name: "S7",
+      description: "An OTP-native classic Siemens S7comm client over RFC 1006",
+      source_url: @source_url,
+      homepage_url: @source_url,
+      package: package(),
+      docs: docs(),
       test_coverage: [summary: [threshold: 90]],
       deps: deps(),
       dialyzer: [plt_add_apps: [:ex_unit]],
@@ -24,7 +33,7 @@ defmodule S7.MixProject do
 
   def cli do
     [
-      preferred_envs: [ci: :test, soak: :test]
+      preferred_envs: [ci: :test, soak: :test, "release.check": :dev]
     ]
   end
 
@@ -32,6 +41,7 @@ defmodule S7.MixProject do
   defp deps do
     [
       {:telemetry, "~> 1.4"},
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:ex_slop, "~> 0.4", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:reach, "~> 2.0", only: [:dev, :test], runtime: false},
@@ -55,7 +65,76 @@ defmodule S7.MixProject do
         "ex_dna --max-clones 0",
         "reach.check --arch --smells"
       ],
+      "release.check": "cmd bash scripts/check_release.sh",
       soak: "test --only soak test/soak"
+    ]
+  end
+
+  defp package do
+    [
+      files: [
+        "lib",
+        "docs",
+        ".formatter.exs",
+        "CHANGELOG.md",
+        "LICENSE",
+        "mix.exs",
+        "README.md",
+        "SECURITY.md"
+      ],
+      licenses: ["MIT"],
+      links: %{
+        "Changelog" => @source_url <> "/blob/main/CHANGELOG.md",
+        "GitHub" => @source_url,
+        "Security" => @source_url <> "/blob/main/SECURITY.md"
+      },
+      maintainers: ["sid2baker"]
+    ]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      source_ref: "v#{@version}",
+      extras: [
+        "README.md",
+        "CHANGELOG.md",
+        "SECURITY.md",
+        "docs/architecture.md",
+        "docs/compatibility.md",
+        "docs/error-and-retry-semantics.md",
+        "docs/interoperability.md",
+        "docs/protocol-support.md",
+        "docs/releasing.md",
+        "docs/roadmap.md",
+        "docs/telemetry.md"
+      ],
+      groups_for_extras: [
+        Guides: ~r{docs/(architecture|error-and-retry-semantics|protocol-support|telemetry)\.md},
+        Qualification: ~r{docs/(compatibility|interoperability|releasing|roadmap)\.md},
+        Project: ["CHANGELOG.md", "SECURITY.md"]
+      ],
+      groups_for_modules: [
+        "Public API": [S7, S7.Client, S7.Address, S7.Data, S7.Error, S7.Result, S7.Telemetry],
+        "S7 Protocol": [
+          S7.Protocol.DataItem,
+          S7.Protocol.Header,
+          S7.Protocol.Item,
+          S7.Protocol.PDU,
+          S7.Protocol.PDUPlanner,
+          S7.Protocol.ReadVar,
+          S7.Protocol.SetupCommunication,
+          S7.Protocol.WriteVar
+        ],
+        Transport: [
+          S7.Transport.COTP,
+          S7.Transport.COTP.ConnectionConfirm,
+          S7.Transport.COTP.ConnectionRequest,
+          S7.Transport.COTP.Data,
+          S7.Transport.TPKT,
+          S7.TSAP
+        ]
+      ]
     ]
   end
 

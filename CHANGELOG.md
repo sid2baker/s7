@@ -1,0 +1,28 @@
+# Changelog
+
+All notable changes to this project are documented here. The format follows
+Keep a Changelog, and stable releases use Semantic Versioning.
+
+## Unreleased
+
+Changes currently targeted for `0.1.0` are listed below.
+
+## 0.1.0 - Unreleased Release Candidate
+
+### Added
+
+- RFC 1006 TPKT framing with fragmented and concatenated stream handling.
+- COTP Connection Request/Confirm and bounded Data TPDU reassembly.
+- S7 Setup Communication with negotiated PDU and AMQ limits.
+- Absolute S7ANY addressing for DBs, inputs, outputs, and markers.
+- Bit, byte, word, dword, int, dint, and REAL conversion.
+- Scalar, counted, raw, and multi-item Read Var and Write Var operations.
+- Exact PDU planning, automatic splitting, and partial/indeterminate results.
+- Active-once request correlation, bounded concurrency, caller monitoring, and timeouts.
+- OTP supervision, registered clients, bounded reconnect, and graceful drain.
+- Telemetry, scheduled soak qualification, and security guidance.
+- Golden packets, property tests, a fault-injection PLC, pinned Snap7 interop, and PCAP checks.
+- Hex package metadata, ExDoc guides, a BEAM compatibility matrix, and release gates.
+
+The date remains unset until the external release qualification in
+`docs/interoperability.md` is complete.

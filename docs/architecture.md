@@ -79,7 +79,7 @@ structured failures rather than leaving callers blocked.
 
 ## Extension Boundaries
 
-Additional classic services belong under `S7.Protocol` and use the existing
-TPKT/COTP stack. S7comm-plus is a different protocol and will not be added to
-this namespace. A future plus implementation may reuse transport modules only
-after a second consumer proves that extraction is useful.
+Additional classic services belong in the existing service-codec namespace and
+use the TPKT/COTP stack. S7comm-plus is a different protocol and will not be
+added to this namespace. A future plus implementation may reuse transport
+modules only after a second consumer proves that extraction is useful.
