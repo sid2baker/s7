@@ -61,5 +61,7 @@ defmodule S7.DataTest do
     assert {:error, %Error{reason: :value_out_of_range}} = Data.encode(:real, 10 ** 400)
     assert {:error, %Error{reason: :data_type_not_supported}} = Data.encode(:timer, 1)
     assert {:error, %Error{reason: :data_type_not_supported}} = Data.decode(:timer, <<0, 1>>)
+    assert {:error, %Error{reason: :malformed_value}} = Data.decode(:word, :not_binary)
+    assert {:error, %Error{reason: :data_type_not_supported}} = Data.size(:timer)
   end
 end

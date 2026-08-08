@@ -47,6 +47,8 @@ The client returned by `connect/2` is the PID that owns the socket. All public f
 | `:timeout` | `5000` | Connect and request timeout in milliseconds |
 | `:tpdu_size` | `1024` | Requested COTP TPDU size |
 | `:pdu_size` | `480` | Requested S7 PDU size |
+| `:max_tpkt_size` | `65535` | Maximum accepted TPKT frame size |
+| `:receive_buffer_limit` | derived | Maximum buffered TCP bytes; at least `:max_tpkt_size` |
 
 The PLC may negotiate a smaller S7 PDU. Inspect the active values with `S7.Client.info/1`.
 
@@ -108,8 +110,9 @@ mix ci
 ```
 
 The CI alias runs compilation with warnings as errors, formatting, unit/property/integration
-tests, strict Credo, Dialyzer, clone detection, and architecture checks. The loopback PLC test uses
-real TCP and intentionally fragments responses at both TCP and COTP boundaries.
+tests with a 90% coverage gate, strict Credo, Dialyzer, clone detection, and architecture checks.
+The loopback PLC test uses real TCP and intentionally fragments responses at both TCP and COTP
+boundaries.
 
 Run the pinned Snap7 interoperability suite locally with:
 

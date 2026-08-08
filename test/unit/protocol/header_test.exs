@@ -36,5 +36,23 @@ defmodule S7.Protocol.HeaderTest do
     assert Header.decode(<<0x32, 3, 0>>) == {:more, 9}
     assert Header.decode(<<0x31, 1>>) == {:error, :invalid_protocol_id}
     assert Header.decode(<<0x32, 0xFF>>) == {:error, :unsupported_rosctr}
+
+    assert Header.decode(<<0x32, 1, 0, 1, 0, 1, 0, 0, 0, 0>>) ==
+             {:error, :invalid_reserved_field}
+
+    assert Header.decode(<<0x32, 3, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0>>) ==
+             {:error, :invalid_reserved_field}
+
+    assert Header.decode(:not_binary) == {:error, :invalid_s7_pdu}
+  end
+
+  test "encoder rejects fields outside their wire ranges" do
+    base = %Header{rosctr: :job, pdu_reference: 1, parameter_length: 0, data_length: 0}
+
+    assert_raise ArgumentError, fn -> Header.encode(%{base | pdu_reference: -1}) end
+    assert_raise ArgumentError, fn -> Header.encode(%{base | parameter_length: 0x10000}) end
+
+    ack = %{base | rosctr: :ack, error_class: 256}
+    assert_raise ArgumentError, fn -> Header.encode(ack) end
   end
 end

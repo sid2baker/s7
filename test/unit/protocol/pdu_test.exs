@@ -49,5 +49,7 @@ defmodule S7.Protocol.PDUTest do
 
   test "reports a truncated declared payload" do
     assert PDU.decode(<<0x32, 1, 0, 0, 0, 1, 0, 2, 0, 1, 0xAA>>) == {:more, 2}
+    assert PDU.decode(:not_binary) == {:error, :invalid_s7_pdu}
+    assert_raise ArgumentError, fn -> PDU.encode(:not_a_pdu) end
   end
 end

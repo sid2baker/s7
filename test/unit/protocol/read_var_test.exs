@@ -58,6 +58,21 @@ defmodule S7.Protocol.ReadVarTest do
 
     assert {:error, %Error{reason: :malformed_response}} =
              ReadVar.decode_response(mismatch, address, 7)
+
+    invalid_parameters = %{response | parameters: <<0x04, 2>>}
+
+    assert {:error, %Error{reason: :malformed_response}} =
+             ReadVar.decode_response(invalid_parameters, address, 7)
+
+    trailing_data = %{response | data: response.data <> <<0>>}
+
+    assert {:error, %Error{reason: :malformed_response}} =
+             ReadVar.decode_response(trailing_data, address, 7)
+
+    invalid_item = %{response | data: <<0xFF, 0xFF, 0, 0>>}
+
+    assert {:error, %Error{reason: :malformed_response}} =
+             ReadVar.decode_response(invalid_item, address, 7)
   end
 
   defp response(reference, transport, encoded_length, payload) do

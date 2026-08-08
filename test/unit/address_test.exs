@@ -70,4 +70,20 @@ defmodule S7.AddressTest do
     assert {:error, %Error{reason: :multiple_values_not_supported}} =
              Address.validate_scalar(address)
   end
+
+  test "validates every structured address field" do
+    invalid = [
+      %Address{area: :timer, byte_offset: 0, data_type: :word},
+      %Address{area: :markers, byte_offset: 0, data_type: :timer},
+      %Address{area: :db, db_number: 0, byte_offset: 0, data_type: :byte},
+      %Address{area: :markers, db_number: 1, byte_offset: 0, data_type: :byte},
+      %Address{area: :markers, byte_offset: 0, data_type: :byte, count: 0}
+    ]
+
+    for address <- invalid do
+      assert {:error, %Error{layer: :address}} = Address.validate(address)
+    end
+
+    assert {:error, %Error{reason: :invalid_address}} = Address.validate(:not_an_address)
+  end
 end

@@ -52,6 +52,21 @@ defmodule S7.Transport.COTPTest do
              COTP.decode(fixture)
   end
 
+  test "unknown connection parameters round-trip without a TSAP-sized restriction" do
+    unknown = {0xEE, :binary.copy(<<0xAB>>, 32)}
+
+    confirm = %ConnectionConfirm{
+      destination_reference: 1,
+      source_reference: 2,
+      unknown_parameters: [{0xEF, <<>>}, unknown]
+    }
+
+    encoded = confirm |> COTP.encode() |> IO.iodata_to_binary()
+
+    assert {:ok, decoded} = COTP.decode(encoded)
+    assert decoded == confirm
+  end
+
   test "reports truncation and rejects malformed TPDUs" do
     assert COTP.decode(<<>>) == {:more, 2}
     assert COTP.decode(<<2, 0xF0>>) == {:more, 1}
@@ -63,5 +78,43 @@ defmodule S7.Transport.COTPTest do
              {:error, :malformed_parameters}
 
     assert COTP.decode(<<6, 0xE0, 0, 0, 0, 1, 0>>) == {:error, :malformed_parameters}
+    assert COTP.decode(<<0, 0xF0>>) == {:error, :invalid_header_length}
+    assert COTP.decode(<<3, 0xF0, 0x80, 0>>) == {:error, :invalid_header_length}
+    assert COTP.decode(<<5, 0xD0, 0, 1, 0, 1>>) == {:error, :invalid_header_length}
+    assert COTP.decode(:not_binary) == {:error, :invalid_cotp}
+
+    invalid_size = <<9, 0xD0, 0, 1, 0, 1, 0, 0xC0, 1, 0xFF>>
+    assert COTP.decode(invalid_size) == {:error, :invalid_tpdu_size}
+
+    invalid_size_length = <<10, 0xD0, 0, 1, 0, 1, 0, 0xC0, 2, 0x0A, 0x0B>>
+    assert COTP.decode(invalid_size_length) == {:error, :malformed_parameters}
+
+    duplicate_tsap = <<12, 0xD0, 0, 1, 0, 1, 0, 0xC1, 1, 1, 0xC1, 1, 2>>
+    assert COTP.decode(duplicate_tsap) == {:error, :malformed_parameters}
+  end
+
+  test "encoder rejects malformed COTP structures" do
+    assert_raise ArgumentError, fn -> COTP.encode(:not_a_tpdu) end
+    assert_raise ArgumentError, fn -> COTP.encode(%Data{payload: <<>>, tpdu_number: 128}) end
+
+    assert_raise ArgumentError, fn ->
+      COTP.encode(%ConnectionRequest{src_tsap: <<>>, dst_tsap: <<1>>, tpdu_size: 1024})
+    end
+
+    assert_raise ArgumentError, fn ->
+      COTP.encode(%ConnectionConfirm{source_reference: -1})
+    end
+
+    assert_raise ArgumentError, fn ->
+      COTP.encode(%ConnectionConfirm{class_option: 256})
+    end
+
+    assert_raise ArgumentError, fn ->
+      COTP.encode(%ConnectionConfirm{unknown_parameters: [{0xEE, :not_binary}]})
+    end
+
+    assert_raise ArgumentError, fn ->
+      COTP.encode(%ConnectionConfirm{tpdu_size: 1000})
+    end
   end
 end

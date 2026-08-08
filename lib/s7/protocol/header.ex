@@ -27,7 +27,8 @@ defmodule S7.Protocol.Header do
           error_code: byte() | nil
         }
 
-  @type decode_error :: :invalid_s7_pdu | :invalid_protocol_id | :unsupported_rosctr
+  @type decode_error ::
+          :invalid_s7_pdu | :invalid_protocol_id | :invalid_reserved_field | :unsupported_rosctr
 
   @doc """
   Encodes one S7 header.
@@ -77,19 +78,23 @@ defmodule S7.Protocol.Header do
     if byte_size(binary) < 12 do
       {:more, 12 - byte_size(binary)}
     else
-      <<@protocol_id, _rosctr, _reserved::16, reference::unsigned-big-16,
+      <<@protocol_id, _rosctr, reserved::16, reference::unsigned-big-16,
         parameter_length::unsigned-big-16, data_length::unsigned-big-16, error_class, error_code,
         remaining::binary>> = binary
 
-      {:ok,
-       %__MODULE__{
-         rosctr: rosctr,
-         pdu_reference: reference,
-         parameter_length: parameter_length,
-         data_length: data_length,
-         error_class: error_class,
-         error_code: error_code
-       }, remaining}
+      if reserved == 0 do
+        {:ok,
+         %__MODULE__{
+           rosctr: rosctr,
+           pdu_reference: reference,
+           parameter_length: parameter_length,
+           data_length: data_length,
+           error_class: error_class,
+           error_code: error_code
+         }, remaining}
+      else
+        {:error, :invalid_reserved_field}
+      end
     end
   end
 
@@ -97,17 +102,21 @@ defmodule S7.Protocol.Header do
     if byte_size(binary) < 10 do
       {:more, 10 - byte_size(binary)}
     else
-      <<@protocol_id, _rosctr, _reserved::16, reference::unsigned-big-16,
+      <<@protocol_id, _rosctr, reserved::16, reference::unsigned-big-16,
         parameter_length::unsigned-big-16, data_length::unsigned-big-16, remaining::binary>> =
         binary
 
-      {:ok,
-       %__MODULE__{
-         rosctr: rosctr,
-         pdu_reference: reference,
-         parameter_length: parameter_length,
-         data_length: data_length
-       }, remaining}
+      if reserved == 0 do
+        {:ok,
+         %__MODULE__{
+           rosctr: rosctr,
+           pdu_reference: reference,
+           parameter_length: parameter_length,
+           data_length: data_length
+         }, remaining}
+      else
+        {:error, :invalid_reserved_field}
+      end
     end
   end
 

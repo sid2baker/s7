@@ -46,16 +46,27 @@ defmodule S7.Test.MockPLC do
       memory: initial_memory()
     }
 
-    state
-    |> accept_cotp()
-    |> accept_setup()
-    |> serve()
+    with {:ok, state} <- accept_cotp(state),
+         {:ok, state} <- accept_setup(state) do
+      serve(state)
+    else
+      {:stop, _state} -> :ok
+    end
   end
 
   defp accept_cotp(state) do
-    {:ok, packet, state} = receive_tpkt(state)
-    {:ok, %ConnectionRequest{} = request} = COTP.decode(packet.payload)
+    case receive_tpkt(state) do
+      {:ok, packet, state} ->
+        {:ok, %ConnectionRequest{} = request} = COTP.decode(packet.payload)
+        send_cotp_response(state, request)
+        {:ok, state}
 
+      {:error, :closed} ->
+        {:stop, state}
+    end
+  end
+
+  defp send_cotp_response(%{options: options} = state, request) do
     confirm = %ConnectionConfirm{
       src_tsap: request.dst_tsap,
       dst_tsap: request.src_tsap,
@@ -64,12 +75,33 @@ defmodule S7.Test.MockPLC do
       source_reference: 1
     }
 
-    :ok = send_tpdu(state, confirm)
-    state
+    case Keyword.get(options, :cotp_fault) do
+      :wrong_reference ->
+        send_tpdu(state, %{confirm | destination_reference: request.source_reference + 1})
+
+      :unsupported_class ->
+        send_tpdu(state, %{confirm | class_option: 1})
+
+      :unexpected_tpdu ->
+        send_tpdu(state, %Data{payload: <<>>})
+
+      _other ->
+        send_tpdu(state, confirm)
+    end
   end
 
   defp accept_setup(state) do
-    {:ok, request, state} = receive_pdu(state)
+    case receive_pdu(state) do
+      {:ok, request, state} ->
+        send_setup_response(state, request)
+        {:ok, state}
+
+      {:error, :closed} ->
+        {:stop, state}
+    end
+  end
+
+  defp send_setup_response(state, request) do
     {:ok, requested_setup} = SetupCommunication.decode(request.parameters)
     negotiated_pdu = Keyword.get(state.options, :negotiated_pdu, 240)
 
@@ -79,11 +111,34 @@ defmodule S7.Test.MockPLC do
       pdu_length: min(requested_setup.pdu_length, negotiated_pdu)
     }
 
-    response =
+    success =
       PDU.new(:ack_data, request.header.pdu_reference, SetupCommunication.encode(response_setup))
 
-    :ok = send_pdu(state, response)
-    state
+    case Keyword.get(state.options, :setup_fault) do
+      :wrong_reference ->
+        send_pdu(state, put_in(success.header.pdu_reference, request.header.pdu_reference + 1))
+
+      :header_error ->
+        send_pdu(state, put_in(success.header.error_class, 0x81))
+
+      :malformed_parameters ->
+        send_pdu(state, PDU.new(:ack_data, request.header.pdu_reference, <<0xF0>>))
+
+      :nonempty_data ->
+        send_pdu(state, %{success | data: <<0>>})
+
+      :unexpected_tpdu ->
+        send_tpdu(state, %ConnectionConfirm{})
+
+      :wrong_tpdu_number ->
+        send_pdu_with_number(state, success, 1)
+
+      :silence ->
+        :ok
+
+      _other ->
+        send_pdu(state, success)
+    end
   end
 
   defp serve(state) do
@@ -130,6 +185,47 @@ defmodule S7.Test.MockPLC do
     %{state | read_fault: nil}
   end
 
+  defp handle_read(%{read_fault: :trailing_pdu} = state, request, _item_binary) do
+    response = successful_read_response(request, :word, <<0x04, 0xD2>>)
+    payload = response |> PDU.encode() |> IO.iodata_to_binary()
+    :ok = send_tpdu(state, %Data{payload: payload <> <<0>>})
+    %{state | read_fault: nil}
+  end
+
+  defp handle_read(%{read_fault: :truncated_pdu} = state, request, _item_binary) do
+    response = successful_read_response(request, :word, <<0x04, 0xD2>>)
+    payload = response |> PDU.encode() |> IO.iodata_to_binary()
+    truncated_size = byte_size(payload) - 1
+    <<truncated::binary-size(truncated_size), _last>> = payload
+    :ok = send_tpdu(state, %Data{payload: truncated})
+    %{state | read_fault: nil}
+  end
+
+  defp handle_read(%{read_fault: :wrong_tpdu_number} = state, request, _item_binary) do
+    response = successful_read_response(request, :word, <<0x04, 0xD2>>)
+    :ok = send_pdu_with_number(state, response, 1)
+    %{state | read_fault: nil}
+  end
+
+  defp handle_read(%{read_fault: :unexpected_tpdu} = state, _request, _item_binary) do
+    :ok = send_tpdu(state, %ConnectionConfirm{})
+    %{state | read_fault: nil}
+  end
+
+  defp handle_read(%{read_fault: :oversized_reassembly} = state, _request, _item_binary) do
+    negotiated_pdu = Keyword.get(state.options, :negotiated_pdu, 240)
+    :ok = send_tpdu(state, %Data{payload: :binary.copy(<<0>>, negotiated_pdu + 1)})
+    %{state | read_fault: nil}
+  end
+
+  defp handle_read(%{read_fault: :too_many_fragments} = state, _request, _item_binary) do
+    for number <- 0..63 do
+      :ok = send_tpdu(state, %Data{payload: <<>>, eot: false, tpdu_number: number})
+    end
+
+    %{state | read_fault: nil}
+  end
+
   defp handle_read(%{read_fault: :silence} = state, _request, _item_binary) do
     %{state | read_fault: nil}
   end
@@ -151,11 +247,29 @@ defmodule S7.Test.MockPLC do
   defp handle_write(state, request, item_binary) do
     {:ok, item, <<>>} = Item.decode(item_binary)
     {:ok, data_item, <<>>} = DataItem.decode(request.data)
-    memory = Map.put(state.memory, memory_key(item), data_item.data)
 
-    response = PDU.new(:ack_data, request.header.pdu_reference, <<0x05, 1>>, <<0xFF>>)
-    :ok = send_pdu(state, response)
-    %{state | memory: memory}
+    case Keyword.get(state.options, :write_fault) do
+      :plc_error ->
+        response = PDU.new(:ack_data, request.header.pdu_reference, <<0x05, 1>>, <<0x05>>)
+        :ok = send_pdu(state, response)
+        state
+
+      :malformed_response ->
+        response = PDU.new(:ack_data, request.header.pdu_reference, <<0x05, 1>>, <<>>)
+        :ok = send_pdu(state, response)
+        state
+
+      :wrong_reference ->
+        response = PDU.new(:ack_data, request.header.pdu_reference + 1, <<0x05, 1>>, <<0xFF>>)
+        :ok = send_pdu(state, response)
+        state
+
+      _other ->
+        memory = Map.put(state.memory, memory_key(item), data_item.data)
+        response = PDU.new(:ack_data, request.header.pdu_reference, <<0x05, 1>>, <<0xFF>>)
+        :ok = send_pdu(state, response)
+        %{state | memory: memory}
+    end
   end
 
   defp successful_read_response(request, data_type, data) do
@@ -229,6 +343,11 @@ defmodule S7.Test.MockPLC do
     else
       send_tpdu(state, %Data{payload: payload})
     end
+  end
+
+  defp send_pdu_with_number(state, pdu, number) do
+    payload = pdu |> PDU.encode() |> IO.iodata_to_binary()
+    send_tpdu(state, %Data{payload: payload, tpdu_number: number})
   end
 
   defp send_tpdu(state, tpdu) do

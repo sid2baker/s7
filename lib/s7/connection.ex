@@ -20,6 +20,7 @@ defmodule S7.Connection do
   @default_pdu_size 480
   @maximum_fragments 64
   @maximum_tpkt_size 0xFFFF
+  @maximum_receive_buffer_size 1_048_576
 
   defstruct [
     :host,
@@ -34,6 +35,7 @@ defmodule S7.Connection do
     :pdu_size,
     :max_jobs,
     :reference,
+    :receive_buffer_limit,
     receive_buffer: <<>>,
     max_tpkt_size: @maximum_tpkt_size
   ]
@@ -216,6 +218,7 @@ defmodule S7.Connection do
          {:ok, max_tpkt_size} <-
            positive_option(opts, :max_tpkt_size, @maximum_tpkt_size, @maximum_tpkt_size),
          :ok <- validate_minimum_tpkt(max_tpkt_size),
+         {:ok, receive_buffer_limit} <- receive_buffer_limit(opts, max_tpkt_size),
          {:ok, tpdu_size} <- tpdu_size(opts),
          {:ok, pdu_size} <- positive_option(opts, :pdu_size, @default_pdu_size, 0xFFFF),
          :ok <- validate_minimum_pdu(pdu_size),
@@ -234,6 +237,7 @@ defmodule S7.Connection do
          pdu_size: pdu_size,
          max_jobs: 1,
          reference: reference,
+         receive_buffer_limit: receive_buffer_limit,
          max_tpkt_size: max_tpkt_size
        }}
     end
@@ -287,6 +291,24 @@ defmodule S7.Connection do
 
   defp validate_minimum_tpkt(size),
     do: {:error, Error.new(:tpkt, :connect, :invalid_tpkt_size, details: %{max_tpkt_size: size})}
+
+  defp receive_buffer_limit(opts, max_tpkt_size) do
+    limit =
+      Keyword.get(
+        opts,
+        :receive_buffer_limit,
+        min(max_tpkt_size * 2, @maximum_receive_buffer_size)
+      )
+
+    if is_integer(limit) and limit >= max_tpkt_size and limit <= @maximum_receive_buffer_size do
+      {:ok, limit}
+    else
+      {:error,
+       Error.new(:tcp, :connect, :invalid_option,
+         details: %{option: :receive_buffer_limit, value: limit}
+       )}
+    end
+  end
 
   defp source_tsap(opts) do
     opts
@@ -404,7 +426,7 @@ defmodule S7.Connection do
 
       case decoder.(response, address, reference) do
         {:ok, value} -> {:ok, value, data}
-        {:error, error} -> {:error, error, data, :keep}
+        {:error, error} -> {:error, error, data, response_action(error)}
       end
     else
       {:error, %Error{} = error, data} -> {:error, error, data, :disconnect}
@@ -416,9 +438,11 @@ defmodule S7.Connection do
     with {:ok, request} <- WriteVar.request(address, value, reference),
          :ok <- ensure_pdu_size(request, data, :write),
          :ok <- send_pdu(data, request, :write),
-         {:ok, response, data} <- receive_pdu(data, :write),
-         :ok <- WriteVar.decode_response(response, reference) do
-      {:ok, data}
+         {:ok, response, data} <- receive_pdu(data, :write) do
+      case WriteVar.decode_response(response, reference) do
+        :ok -> {:ok, data}
+        {:error, error} -> {:error, error, data, response_action(error)}
+      end
     else
       {:error, %Error{} = error, data} -> {:error, error, data, :disconnect}
       {:error, %Error{} = error} -> {:error, error, data, connection_action(error)}
@@ -490,7 +514,7 @@ defmodule S7.Connection do
   defp receive_cotp_data(data, deadline, operation, parts, count, size) do
     with {:ok, packet, data} <- receive_tpkt(data, deadline, operation),
          {:ok, tpdu} <- decode_cotp(packet.payload, operation),
-         {:ok, payload, eot} <- cotp_data(tpdu, operation),
+         {:ok, payload, eot} <- cotp_data(tpdu, operation, rem(count, 0x80)),
          :ok <- validate_reassembled_size(size + byte_size(payload), data, operation) do
       parts = [payload | parts]
       size = size + byte_size(payload)
@@ -506,9 +530,17 @@ defmodule S7.Connection do
     end
   end
 
-  defp cotp_data(%Data{payload: payload, eot: eot}, _operation), do: {:ok, payload, eot}
+  defp cotp_data(%Data{payload: payload, eot: eot, tpdu_number: expected}, _operation, expected),
+    do: {:ok, payload, eot}
 
-  defp cotp_data(_tpdu, operation),
+  defp cotp_data(%Data{tpdu_number: received}, operation, expected),
+    do:
+      {:error,
+       Error.new(:cotp, operation, :unexpected_tpdu_number,
+         details: %{expected: expected, received: received}
+       )}
+
+  defp cotp_data(_tpdu, operation, _expected),
     do: {:error, Error.new(:cotp, operation, :unexpected_tpdu)}
 
   defp validate_reassembled_size(size, data, _operation) when size <= data.pdu_size, do: :ok
@@ -542,12 +574,24 @@ defmodule S7.Connection do
       timeout ->
         case :gen_tcp.recv(data.socket, 0, timeout) do
           {:ok, bytes} ->
-            data = %{data | receive_buffer: data.receive_buffer <> bytes}
-            receive_tpkt(data, deadline, operation)
+            append_receive_bytes(data, bytes, operation, deadline)
 
           {:error, reason} ->
             {:error, tcp_error(operation, reason), data}
         end
+    end
+  end
+
+  defp append_receive_bytes(data, bytes, operation, deadline) do
+    buffer = data.receive_buffer <> bytes
+
+    if byte_size(buffer) <= data.receive_buffer_limit do
+      receive_tpkt(%{data | receive_buffer: buffer}, deadline, operation)
+    else
+      {:error,
+       Error.new(:tcp, operation, :receive_buffer_overflow,
+         details: %{size: byte_size(buffer), limit: data.receive_buffer_limit}
+       ), data}
     end
   end
 
@@ -597,6 +641,20 @@ defmodule S7.Connection do
 
   defp connection_action(%Error{layer: :tcp}), do: :disconnect
   defp connection_action(_error), do: :keep
+
+  defp response_action(%Error{reason: reason})
+       when reason in [
+              :invalid_cotp,
+              :invalid_s7_pdu,
+              :malformed_response,
+              :unexpected_pdu_reference,
+              :unexpected_rosctr,
+              :unexpected_tpdu,
+              :unexpected_tpdu_number
+            ],
+       do: :disconnect
+
+  defp response_action(error), do: connection_action(error)
 
   defp operation_name({operation, _address, _value}), do: operation
   defp operation_name(operation) when is_atom(operation), do: operation

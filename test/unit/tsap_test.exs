@@ -19,5 +19,9 @@ defmodule S7.TSAPTest do
 
     assert {:error, %Error{reason: :invalid_connection_type}} =
              TSAP.build(connection_type: :unknown)
+
+    assert {:error, %Error{reason: :invalid_options}} = TSAP.build(:invalid)
+
+    assert_raise ArgumentError, fn -> TSAP.for_rack_slot(rack: 8) end
   end
 end

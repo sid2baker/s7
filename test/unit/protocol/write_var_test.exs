@@ -32,5 +32,10 @@ defmodule S7.Protocol.WriteVarTest do
 
     assert {:error, %Error{reason: :malformed_response}} =
              WriteVar.decode_response(malformed, 1)
+
+    missing_code = PDU.new(:ack_data, 1, <<5, 1>>, <<>>)
+
+    assert {:error, %Error{reason: :malformed_response}} =
+             WriteVar.decode_response(missing_code, 1)
   end
 end

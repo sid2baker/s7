@@ -40,10 +40,22 @@ defmodule S7.Transport.TPKTTest do
     assert {:error, :invalid_reserved_byte} = TPKT.decode(<<3, 1, 0, 7, 2, 0xF0, 0x80>>)
     assert {:error, :invalid_length} = TPKT.decode(<<3, 0, 0, 6, 0, 0>>)
     assert {:error, :oversized_length} = TPKT.decode(<<3, 0, 0, 20>>, max_size: 10)
+    assert {:error, :invalid_tpkt} = TPKT.decode(<<3, 0, 0, 7>>, max_size: 6)
+    assert {:error, :invalid_tpkt} = TPKT.decode(<<3, 0, 0, 7>>, max_size: :infinity)
+    assert {:error, :invalid_tpkt} = TPKT.decode(:not_binary)
+    assert {:error, :invalid_tpkt} = TPKT.decode(<<>>, :not_options)
   end
 
   test "distinguishes a partial header from a partial payload" do
     assert TPKT.decode(<<3, 0>>) == {:more, 2}
     assert TPKT.decode(<<3, 0, 0, 10, 2, 0xF0, 0x80>>) == {:more, 3}
+  end
+
+  test "encoder rejects invalid structures and packet lengths" do
+    assert_raise ArgumentError, fn -> TPKT.encode(%TPKT{payload: <<>>}) end
+    assert_raise ArgumentError, fn -> TPKT.encode(:not_a_packet) end
+
+    oversized = :binary.copy(<<0>>, 0xFFFF - 3)
+    assert_raise ArgumentError, fn -> TPKT.encode(%TPKT{payload: oversized}) end
   end
 end

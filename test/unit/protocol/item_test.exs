@@ -55,5 +55,18 @@ defmodule S7.Protocol.ItemTest do
 
     assert Item.decode(<<0x12, 0x0A, 0x10, 0xFF, 0, 1, 0, 1, 0x84, 0, 0, 0>>) ==
              {:error, :unsupported_transport_size}
+
+    assert Item.decode(<<0x12, 0x0A, 0x10, 2, 0, 1, 0, 1, 0xFF, 0, 0, 0>>) ==
+             {:error, :unsupported_area}
+
+    assert Item.decode(:not_binary) == {:error, :invalid_s7any_item}
+  end
+
+  test "encoder validates every bounded S7ANY field" do
+    item = %Item{transport_size: :byte, count: 1, db_number: 1, area: :db, bit_address: 0}
+
+    assert_raise ArgumentError, fn -> Item.encode(%{item | count: 0}) end
+    assert_raise ArgumentError, fn -> Item.encode(%{item | db_number: -1}) end
+    assert_raise ArgumentError, fn -> Item.encode(%{item | bit_address: 0x1000000}) end
   end
 end

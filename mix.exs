@@ -8,6 +8,7 @@ defmodule S7.MixProject do
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      test_coverage: [summary: [threshold: 90]],
       deps: deps(),
       dialyzer: [plt_add_apps: [:ex_unit]],
       aliases: aliases()
@@ -45,7 +46,7 @@ defmodule S7.MixProject do
       ci: [
         "compile --warnings-as-errors",
         "format --check-formatted",
-        "test",
+        "test --cover",
         "credo --strict",
         "dialyzer",
         "ex_dna --max-clones 0",

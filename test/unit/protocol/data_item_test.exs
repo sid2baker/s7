@@ -40,8 +40,18 @@ defmodule S7.Protocol.DataItemTest do
   end
 
   test "reports truncated data and invalid transports" do
+    assert DataItem.decode(<<>>) == {:more, 4}
     assert DataItem.decode(<<0xFF, 0x04, 0, 16, 1>>) == {:more, 1}
     assert DataItem.decode(<<0xFF, 0xFF, 0, 0>>) == {:error, :unsupported_transport_size}
     assert DataItem.decode(<<0x0A, 0, 0, 1>>) == {:error, :invalid_data_length}
+    assert DataItem.decode(:not_binary) == {:error, :invalid_data_item}
+  end
+
+  test "encoder validates declared lengths and byte-sized fields" do
+    item = %DataItem{return_code: 0, transport_size: :byte, encoded_length: 8, data: <<>>}
+    assert_raise ArgumentError, fn -> DataItem.encode(item) end
+
+    assert_raise ArgumentError, fn -> DataItem.encode(%{item | return_code: 256}) end
+    assert_raise ArgumentError, fn -> DataItem.encode(%{item | encoded_length: 0x10000}) end
   end
 end

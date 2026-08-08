@@ -2,6 +2,7 @@ defmodule S7.ClientIntegrationTest do
   use ExUnit.Case, async: true
 
   alias S7.{Address, Client, Error}
+  alias S7.Connection
   alias S7.Test.MockPLC
 
   test "connects, negotiates, reads, writes, verifies, and disconnects" do
@@ -56,7 +57,7 @@ defmodule S7.ClientIntegrationTest do
     assert {:error, %Error{reason: :connection_closed}} = Client.read(client, "DB1.DBW0")
   end
 
-  test "a wrong PDU reference is structured and does not crash the connection" do
+  test "a wrong PDU reference invalidates the session without crashing its owner" do
     server = start_server(read_fault: :wrong_reference)
     assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port, timeout: 1_000)
 
@@ -64,12 +65,12 @@ defmodule S7.ClientIntegrationTest do
              Client.read(client, "DB1.DBW0")
 
     assert Process.alive?(client)
-    assert %{state: :ready} = Client.info(client)
-    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert %{state: :disconnected} = Client.info(client)
+    assert {:error, %Error{reason: :not_connected}} = Client.read(client, "DB1.DBW0")
     assert Client.close(client) == :ok
   end
 
-  test "a truncated service payload does not crash the connection" do
+  test "a truncated service payload invalidates the session without crashing its owner" do
     server = start_server(read_fault: :truncated_payload)
     assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port, timeout: 1_000)
 
@@ -77,7 +78,7 @@ defmodule S7.ClientIntegrationTest do
              Client.read(client, "DB1.DBW0")
 
     assert Process.alive?(client)
-    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert %{state: :disconnected} = Client.info(client)
     assert Client.close(client) == :ok
   end
 
@@ -111,6 +112,150 @@ defmodule S7.ClientIntegrationTest do
              Client.connect({127, 0, 0, 1}, tpdu_size: 1000)
 
     assert {:error, %Error{reason: :invalid_host}} = Client.connect({127, 0})
+    assert {:error, %Error{reason: :invalid_options}} = Client.connect({127, 0, 0, 1}, :invalid)
+
+    assert {:error, %Error{reason: :invalid_pdu_size}} =
+             Client.connect({127, 0, 0, 1}, pdu_size: 31)
+
+    assert {:error, %Error{reason: :invalid_tpkt_size}} =
+             Client.connect({127, 0, 0, 1}, max_tpkt_size: 6)
+
+    assert {:error, %Error{reason: :invalid_option}} =
+             Client.connect({127, 0, 0, 1}, max_tpkt_size: 1024, receive_buffer_limit: 1000)
+
+    assert {:error, %Error{reason: :invalid_tsap}} =
+             Client.connect({127, 0, 0, 1}, src_tsap: <<>>)
+
+    assert {:error, %Error{reason: :invalid_tsap}} =
+             Client.connect({127, 0, 0, 1}, dst_tsap: :invalid)
+
+    assert {:error, %Error{reason: :invalid_pdu_reference}} =
+             Client.connect({127, 0, 0, 1}, initial_reference: -1)
+  end
+
+  test "supports hostname strings, explicit TSAPs, and linked connection startup" do
+    first = start_server()
+
+    assert {:ok, client} =
+             Client.connect("127.0.0.1",
+               port: first.port,
+               src_tsap: <<1, 1>>,
+               dst_tsap: <<1, 2>>
+             )
+
+    assert {:error, %Error{reason: :already_connected}} = Connection.connect(client)
+    assert Client.close(client) == :ok
+
+    second = start_server()
+    assert {:ok, linked} = Connection.start_link(~c"127.0.0.1", port: second.port)
+    assert :ok = Connection.connect(linked)
+    assert :ok = Connection.close(linked)
+  end
+
+  test "connection refusal and dead clients return structured errors" do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false])
+    {:ok, {_address, port}} = :inet.sockname(listener)
+    :ok = :gen_tcp.close(listener)
+
+    assert {:error, %Error{layer: :tcp, reason: :connection_refused}} =
+             Client.connect({127, 0, 0, 1}, port: port, timeout: 100)
+
+    dead = spawn(fn -> :ok end)
+    monitor = Process.monitor(dead)
+    assert_receive {:DOWN, ^monitor, :process, ^dead, :normal}
+    assert Client.close(dead) == :ok
+    assert {:error, %Error{reason: :connection_closed}} = Client.info(dead)
+  end
+
+  test "local request validation does not disturb a ready connection" do
+    server = start_server()
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+    assert {:error, %Error{layer: :address, reason: :invalid_address}} = Client.read(client, 123)
+
+    assert {:error, %Error{layer: :data, reason: :value_out_of_range}} =
+             Client.write(client, "DB1.DBW0", -1)
+
+    assert %{state: :ready} = Client.info(client)
+    assert Client.close(client) == :ok
+  end
+
+  for {fault, reason} <- [
+        wrong_reference: :invalid_connection_reference,
+        unsupported_class: :unsupported_connection_class,
+        unexpected_tpdu: :unexpected_tpdu
+      ] do
+    test "COTP connection fault #{fault} is rejected" do
+      server = start_server(cotp_fault: unquote(fault))
+
+      assert {:error, %Error{layer: :cotp, reason: unquote(reason)}} =
+               Client.connect({127, 0, 0, 1}, port: server.port, timeout: 200)
+    end
+  end
+
+  for {fault, layer, reason} <- [
+        {:wrong_reference, :s7, :unexpected_pdu_reference},
+        {:header_error, :s7, :protocol_error},
+        {:malformed_parameters, :s7, :malformed_response},
+        {:nonempty_data, :s7, :malformed_response},
+        {:unexpected_tpdu, :cotp, :unexpected_tpdu},
+        {:wrong_tpdu_number, :cotp, :unexpected_tpdu_number},
+        {:silence, :tcp, :timeout}
+      ] do
+    test "Setup Communication fault #{fault} is rejected" do
+      server = start_server(setup_fault: unquote(fault))
+
+      assert {:error, %Error{layer: unquote(layer), reason: unquote(reason)}} =
+               Client.connect({127, 0, 0, 1}, port: server.port, timeout: 50)
+    end
+  end
+
+  for {fault, layer, reason} <- [
+        {:trailing_pdu, :s7, :malformed_response},
+        {:truncated_pdu, :s7, :malformed_response},
+        {:wrong_tpdu_number, :cotp, :unexpected_tpdu_number},
+        {:unexpected_tpdu, :cotp, :unexpected_tpdu},
+        {:oversized_reassembly, :s7, :pdu_too_large},
+        {:too_many_fragments, :cotp, :too_many_fragments}
+      ] do
+    test "read transport fault #{fault} disconnects the session" do
+      server = start_server(read_fault: unquote(fault))
+      assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port, timeout: 500)
+
+      assert {:error, %Error{layer: unquote(layer), reason: unquote(reason)}} =
+               Client.read(client, "DB1.DBW0")
+
+      assert Process.alive?(client)
+      assert %{state: :disconnected} = Client.info(client)
+      assert Client.close(client) == :ok
+    end
+  end
+
+  test "a PLC write error preserves the connection and return code" do
+    server = start_server(write_fault: :plc_error)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+    assert {:error, %Error{reason: :address_out_of_range, code: 0x05}} =
+             Client.write(client, "DB1.DBW0", 1)
+
+    assert %{state: :ready} = Client.info(client)
+    assert Client.close(client) == :ok
+  end
+
+  for {fault, reason} <- [
+        malformed_response: :malformed_response,
+        wrong_reference: :unexpected_pdu_reference
+      ] do
+    test "write response fault #{fault} disconnects the session" do
+      server = start_server(write_fault: unquote(fault))
+      assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+      assert {:error, %Error{layer: :s7, reason: unquote(reason)}} =
+               Client.write(client, "DB1.DBW0", 1)
+
+      assert %{state: :disconnected} = Client.info(client)
+      assert Client.close(client) == :ok
+    end
   end
 
   defp start_server(opts \\ []) do

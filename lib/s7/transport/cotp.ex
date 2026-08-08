@@ -114,10 +114,7 @@ defmodule S7.Transport.COTP do
       encode_tpdu_size(connection.tpdu_size)
     ]
 
-    unknown =
-      Enum.map(connection.unknown_parameters, fn {code, value} ->
-        encode_parameter(code, value)
-      end)
+    unknown = Enum.map(connection.unknown_parameters, &encode_unknown_parameter/1)
 
     [parameters, unknown]
   end
@@ -131,6 +128,15 @@ defmodule S7.Transport.COTP do
   end
 
   defp encode_parameter(_code, _value), do: raise(ArgumentError, "invalid COTP parameter")
+
+  defp encode_unknown_parameter({code, value})
+       when is_integer(code) and code in 0..0xFF and is_binary(value) and
+              byte_size(value) <= 0xFF do
+    [<<code, byte_size(value)>>, value]
+  end
+
+  defp encode_unknown_parameter(_parameter),
+    do: raise(ArgumentError, "invalid unknown COTP parameter")
 
   defp encode_tpdu_size(nil), do: []
 
@@ -219,20 +225,26 @@ defmodule S7.Transport.COTP do
   end
 
   defp connection_struct(@connection_request, fields) do
-    if is_binary(fields.src_tsap) and is_binary(fields.dst_tsap) and
-         is_integer(fields.tpdu_size) do
+    if valid_tsap?(fields.src_tsap) and valid_tsap?(fields.dst_tsap) and
+         valid_tpdu_size?(fields.tpdu_size) do
       {:ok, struct!(ConnectionRequest, fields)}
     else
       {:error, :malformed_parameters}
     end
   end
 
-  defp connection_struct(@connection_confirm, fields),
-    do: {:ok, struct!(ConnectionConfirm, fields)}
+  defp connection_struct(@connection_confirm, fields) do
+    if valid_optional_tsap?(fields.src_tsap) and valid_optional_tsap?(fields.dst_tsap) and
+         valid_optional_tpdu_size?(fields.tpdu_size) do
+      {:ok, struct!(ConnectionConfirm, fields)}
+    else
+      {:error, :malformed_parameters}
+    end
+  end
 
   defp validate_connection!(@connection_request, connection) do
-    if is_binary(connection.src_tsap) and is_binary(connection.dst_tsap) and
-         is_integer(connection.tpdu_size) do
+    if valid_tsap?(connection.src_tsap) and valid_tsap?(connection.dst_tsap) and
+         valid_tpdu_size?(connection.tpdu_size) do
       :ok
     else
       raise ArgumentError,
@@ -240,7 +252,20 @@ defmodule S7.Transport.COTP do
     end
   end
 
-  defp validate_connection!(@connection_confirm, _connection), do: :ok
+  defp validate_connection!(@connection_confirm, connection) do
+    if valid_optional_tsap?(connection.src_tsap) and valid_optional_tsap?(connection.dst_tsap) and
+         valid_optional_tpdu_size?(connection.tpdu_size) do
+      :ok
+    else
+      raise ArgumentError, "invalid COTP Connection Confirm parameters"
+    end
+  end
+
+  defp valid_tsap?(tsap), do: is_binary(tsap) and byte_size(tsap) in 1..16
+  defp valid_optional_tsap?(nil), do: true
+  defp valid_optional_tsap?(tsap), do: valid_tsap?(tsap)
+  defp valid_optional_tpdu_size?(nil), do: true
+  defp valid_optional_tpdu_size?(size), do: valid_tpdu_size?(size)
 
   defp validate_reference!(reference) when reference in 0..0xFFFF, do: :ok
   defp validate_reference!(_reference), do: raise(ArgumentError, "invalid COTP reference")
