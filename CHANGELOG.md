@@ -26,6 +26,7 @@ Changes currently targeted for `0.1.0` are listed below.
 - Class-0 COTP segmentation plus Disconnect Request/Confirm and Error TPDU codecs.
 - Generic classic userdata request routing with safe unsolicited-indication handling.
 - Bounded raw SZL continuation, record validation, and typed CPU metadata helpers.
+- Negotiation-aware COTP fragment bounds, control/userdata golden packets, and H-system metadata indexes.
 
 The date remains unset until the external release qualification in
 `docs/interoperability.md` is complete.

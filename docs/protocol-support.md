@@ -12,7 +12,7 @@ interoperability targets have passed; decoding a capture alone is not enough.
 | Partial and concatenated TPKT frames | Implemented | Supported |
 | Bounded TPKT lengths | Implemented | Supported |
 | COTP Connection Request/Confirm | Implemented | Supported |
-| COTP Data TPDU segmentation/reassembly | Implemented | Supported |
+| COTP Data TPDU segmentation/reassembly | Implemented; bounded from negotiated sizes | Supported |
 | COTP class | Class 0 | Class 0 |
 | COTP DR/DC/ER codecs | Implemented; runtime close uses TCP FIN | Evidence-driven |
 
@@ -60,7 +60,8 @@ tests exist for each representation.
 Raw SZL records are returned without CPU-family assumptions. Typed metadata
 helpers cover Siemens-documented module/component records plus the established
 Snap7 CP-limit and operating-status layouts; raw source bytes remain available
-for forward compatibility.
+for forward compatibility. Component metadata recognizes the packed rack and
+master/reserve index used by S7-400H CPUs and retains each full 16-bit index.
 
 ## PLC Requirements
 

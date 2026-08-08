@@ -7,8 +7,13 @@ The Setup and Read Var S7 payloads were extracted from the captures documented i
 `88f35a601de45fa29b0b36048a30ae4a1e925320` of `gymgit/s7-pcaps`.
 
 The COTP control/data frames and the single-bit Write Var pair are normalized from the same
-capture set and the corresponding decoded observations. Fixture assertions always check both
-directions:
+capture set and the corresponding decoded observations. DR, DC, and ER use the normative X.224
+field layouts with explicit diagnostic parameters.
+
+The userdata Read SZL fixtures are normalized from the Snap7 request/continuation structures and
+cross-checked by the pinned Snap7 interoperability suite. The response contains a small synthetic
+but internally consistent SZL record so geometry checks remain deterministic. Fixture assertions
+always check both directions:
 
 ```text
 fixture -> decode -> expected struct

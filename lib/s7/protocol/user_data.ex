@@ -32,6 +32,15 @@ defmodule S7.Protocol.UserData do
   }
 
   @code_to_group Map.new(@group_codes, fn {group, code} -> {code, group} end)
+  @request_options [
+    :method,
+    :sequence,
+    :data_unit_reference,
+    :last_data_unit,
+    :error_code,
+    :return_code,
+    :transport_size
+  ]
 
   @enforce_keys [:parameter, :payload]
   defstruct [:parameter, :payload]
@@ -56,7 +65,15 @@ defmodule S7.Protocol.UserData do
 
   def request(function_group, subfunction, data, opts) when is_list(opts) do
     if Keyword.keyword?(opts) do
-      build_request(function_group, subfunction, data, opts)
+      case Enum.find(Keyword.keys(opts), &(&1 not in @request_options)) do
+        nil ->
+          build_request(function_group, subfunction, data, opts)
+
+        option ->
+          Protocol.error(:userdata, :invalid_option,
+            details: %{option: option, value: Keyword.get(opts, option)}
+          )
+      end
     else
       Protocol.error(:userdata, :invalid_userdata)
     end

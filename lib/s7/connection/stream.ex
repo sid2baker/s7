@@ -6,8 +6,6 @@ defmodule S7.Connection.Stream do
   alias S7.Transport.{COTP, TPKT}
   alias S7.Transport.COTP.{Data, DisconnectRequest, ErrorTPDU}
 
-  @maximum_fragments 64
-
   defstruct buffer: <<>>,
             fragment_parts: [],
             fragment_count: 0,
@@ -22,6 +20,7 @@ defmodule S7.Connection.Stream do
 
   @type option ::
           {:max_tpkt_size, pos_integer()}
+          | {:maximum_fragments, pos_integer()}
           | {:pdu_size, pos_integer()}
           | {:tpdu_size, pos_integer()}
           | {:receive_buffer_limit, pos_integer()}
@@ -80,7 +79,7 @@ defmodule S7.Connection.Stream do
   defp decode_sized_tpdu(payload, stream, opts) do
     case COTP.decode(payload) do
       {:ok, %Data{} = data} ->
-        append_fragment(stream, data, opts)
+        append_fragment(stream, data, opts, Keyword.fetch!(opts, :maximum_fragments))
 
       {:ok, %DisconnectRequest{} = request} ->
         {:error,
@@ -107,12 +106,13 @@ defmodule S7.Connection.Stream do
     end
   end
 
-  defp append_fragment(stream, _data, _opts)
-       when stream.fragment_count >= @maximum_fragments do
+  defp append_fragment(stream, _data, _opts, maximum_fragments)
+       when stream.fragment_count >= maximum_fragments do
     {:error, error(:cotp, :too_many_fragments)}
   end
 
-  defp append_fragment(_stream, %Data{tpdu_number: number}, _opts) when number != 0 do
+  defp append_fragment(_stream, %Data{tpdu_number: number}, _opts, _maximum_fragments)
+       when number != 0 do
     {:error,
      error(:cotp, :unexpected_tpdu_number, %{
        expected: 0,
@@ -120,19 +120,24 @@ defmodule S7.Connection.Stream do
      })}
   end
 
-  defp append_fragment(stream, %Data{} = data, opts) do
+  defp append_fragment(stream, %Data{} = data, opts, maximum_fragments) do
     size = stream.fragment_size + byte_size(data.payload)
     pdu_size = Keyword.fetch!(opts, :pdu_size)
 
     if size <= pdu_size do
-      finish_fragment(stream, data, size)
+      finish_fragment(stream, data, size, maximum_fragments)
     else
       {:error, error(:s7, :pdu_too_large, %{size: size, negotiated_size: pdu_size})}
     end
   end
 
-  defp finish_fragment(stream, %Data{eot: false, payload: payload}, size) do
-    if stream.fragment_count + 1 >= @maximum_fragments do
+  defp finish_fragment(
+         stream,
+         %Data{eot: false, payload: payload},
+         size,
+         maximum_fragments
+       ) do
+    if stream.fragment_count + 1 >= maximum_fragments do
       {:error, error(:cotp, :too_many_fragments)}
     else
       {:ok, nil,
@@ -145,7 +150,12 @@ defmodule S7.Connection.Stream do
     end
   end
 
-  defp finish_fragment(stream, %Data{eot: true, payload: payload}, _size) do
+  defp finish_fragment(
+         stream,
+         %Data{eot: true, payload: payload},
+         _size,
+         _maximum_fragments
+       ) do
     binary =
       stream.fragment_parts
       |> Enum.reverse()

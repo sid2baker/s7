@@ -518,6 +518,16 @@ defmodule S7.Test.MockPLC do
     %{state | read_fault: nil}
   end
 
+  defp handle_read(%{read_fault: :many_valid_fragments} = state, request, _item_binary) do
+    for _number <- 1..64 do
+      :ok = send_tpdu(state, %Data{payload: <<>>, eot: false, tpdu_number: 0})
+    end
+
+    response = successful_read_response(request, :word, <<0x04, 0xD2>>)
+    :ok = send_pdu(state, response)
+    %{state | read_fault: nil}
+  end
+
   defp handle_read(%{read_fault: :silence} = state, _request, _item_binary) do
     %{state | read_fault: nil}
   end

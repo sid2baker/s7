@@ -5,11 +5,12 @@ defmodule S7.Protocol.UserDataTest do
   alias S7.Protocol.PDU
   alias S7.Protocol.UserData
   alias S7.Protocol.UserData.{Parameter, Payload}
+  alias S7.Test.Fixture
 
   @reference 42
 
   test "encodes and decodes the canonical initial Read SZL envelope" do
-    fixture = Base.decode16!("32070000002A000800080001120411440100FF09000400110000")
+    fixture = Fixture.read!("userdata/read_szl_request.bin")
 
     assert {:ok, request} = UserData.request(:cpu, 0x01, <<0x00, 0x11, 0x00, 0x00>>)
     assert {:ok, pdu} = UserData.to_pdu(request, @reference)
@@ -20,8 +21,7 @@ defmodule S7.Protocol.UserDataTest do
   end
 
   test "decodes an extended response and validates its request identity" do
-    fixture =
-      Base.decode16!("32070000002A000C000C000112081284010003000000FF0900080011000000020001")
+    fixture = Fixture.read!("userdata/read_szl_response.bin")
 
     assert {:ok, request} = UserData.request(:cpu, 0x01, <<0x00, 0x11, 0x00, 0x00>>)
     assert {:ok, pdu, <<>>} = PDU.decode(fixture)
@@ -37,8 +37,12 @@ defmodule S7.Protocol.UserDataTest do
                 last_data_unit: 0,
                 error_code: 0
               },
-              payload: %Payload{data: <<0x00, 0x11, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01>>}
+              payload: %Payload{
+                data: <<0x00, 0x11, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00, 0x01>>
+              }
             }} = UserData.decode_response(pdu, request, @reference)
+
+    assert pdu |> PDU.encode() |> IO.iodata_to_binary() == fixture
   end
 
   test "round-trips continuation parameters" do
@@ -59,6 +63,26 @@ defmodule S7.Protocol.UserDataTest do
     assert UserData.decode_parameter(fixture) == {:ok, parameter}
   end
 
+  test "encodes the canonical Read SZL continuation PDU" do
+    fixture = Fixture.read!("userdata/read_szl_continuation.bin")
+
+    assert {:ok, continuation} =
+             UserData.request(:cpu, 1, <<>>,
+               method: 0x12,
+               sequence: 7,
+               data_unit_reference: 0,
+               last_data_unit: 0,
+               error_code: 0,
+               return_code: 0x0A,
+               transport_size: 0
+             )
+
+    assert {:ok, pdu} = UserData.to_pdu(continuation, 43)
+    assert pdu |> PDU.encode() |> IO.iodata_to_binary() == fixture
+    assert {:ok, decoded, <<>>} = PDU.decode(fixture)
+    assert UserData.from_pdu(decoded) == {:ok, continuation}
+  end
+
   test "retains unknown function groups" do
     fixture = <<0, 1, 0x12, 4, 0x11, 0x7E, 0xAA, 0x55>>
 
@@ -72,6 +96,12 @@ defmodule S7.Protocol.UserDataTest do
   test "reports malformed parameter and payload boundaries" do
     assert {:error, %Error{reason: :invalid_userdata}} =
              UserData.request(:cpu, 1, <<>>, :not_options)
+
+    assert {:error,
+            %Error{
+              reason: :invalid_option,
+              details: %{option: :sequnce, value: 1}
+            }} = UserData.request(:cpu, 1, <<>>, sequnce: 1)
 
     assert UserData.decode_parameter(<<>>) == {:more, 4}
     assert UserData.decode_parameter(<<0, 1, 0x12, 4, 0x11>>) == {:more, 3}

@@ -697,6 +697,26 @@ defmodule S7.ClientIntegrationTest do
     assert Client.close(client) == :ok
   end
 
+  test "receive fragment limits scale with the negotiated PDU and TPDU sizes" do
+    server =
+      start_server(
+        fragment_tcp: false,
+        negotiated_pdu: 0xFFFF,
+        read_fault: :many_valid_fragments
+      )
+
+    assert {:ok, client} =
+             Client.connect({127, 0, 0, 1},
+               port: server.port,
+               pdu_size: 0xFFFF,
+               tpdu_size: 128
+             )
+
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert %{state: :ready, pdu_size: 0xFFFF, tpdu_size: 128} = Client.info(client)
+    assert Client.close(client) == :ok
+  end
+
   test "a stopped multi-read marks its batch failed and later batches not attempted" do
     server = start_server(negotiated_pdu: 60, read_fault: :silence_multi)
     assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port, timeout: 50)

@@ -170,7 +170,7 @@ defmodule S7.Transport.COTP do
       encode_tpdu_size(connection.tpdu_size)
     ]
 
-    unknown = Enum.map(connection.unknown_parameters, &encode_unknown_parameter/1)
+    unknown = encode_unknown_parameters(connection.unknown_parameters, [0xC0, 0xC1, 0xC2])
 
     [parameters, unknown]
   end
@@ -194,6 +194,23 @@ defmodule S7.Transport.COTP do
   defp encode_unknown_parameter(_parameter),
     do: raise(ArgumentError, "invalid unknown COTP parameter")
 
+  defp encode_unknown_parameters(parameters, reserved_codes) when is_list(parameters) do
+    Enum.map(parameters, fn
+      {code, _value} = parameter ->
+        if code in reserved_codes do
+          raise ArgumentError, "known COTP parameter cannot be encoded as unknown"
+        else
+          encode_unknown_parameter(parameter)
+        end
+
+      parameter ->
+        encode_unknown_parameter(parameter)
+    end)
+  end
+
+  defp encode_unknown_parameters(_parameters, _reserved_codes),
+    do: raise(ArgumentError, "invalid unknown COTP parameters")
+
   defp encode_disconnect_request(request) do
     validate_reference!(request.destination_reference)
     validate_reference!(request.source_reference)
@@ -201,7 +218,7 @@ defmodule S7.Transport.COTP do
 
     parameters = [
       encode_optional_parameter(0xE0, request.additional_information),
-      Enum.map(request.unknown_parameters, &encode_unknown_parameter/1)
+      encode_unknown_parameters(request.unknown_parameters, [0xE0])
     ]
 
     encode_control_header(
@@ -214,7 +231,7 @@ defmodule S7.Transport.COTP do
   defp encode_disconnect_confirm(confirm) do
     validate_reference!(confirm.destination_reference)
     validate_reference!(confirm.source_reference)
-    parameters = Enum.map(confirm.unknown_parameters, &encode_unknown_parameter/1)
+    parameters = encode_unknown_parameters(confirm.unknown_parameters, [])
 
     encode_control_header(
       <<@disconnect_confirm, confirm.destination_reference::unsigned-big-16,
@@ -229,7 +246,7 @@ defmodule S7.Transport.COTP do
 
     parameters = [
       encode_optional_parameter(0xC1, error.invalid_tpdu),
-      Enum.map(error.unknown_parameters, &encode_unknown_parameter/1)
+      encode_unknown_parameters(error.unknown_parameters, [0xC1])
     ]
 
     encode_control_header(

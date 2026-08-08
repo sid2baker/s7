@@ -54,6 +54,7 @@ MALFORMED="$({
 grep -q "Setup communication" <<<"${DECODED}"
 grep -q "Function:\[Read Var\]" <<<"${DECODED}"
 grep -q "Function:\[Write Var\]" <<<"${DECODED}"
+grep -q "Read SZL" <<<"${DECODED}"
 test -z "${MALFORMED}"
 
 if [[ -n "${S7_CAPTURE_FILE:-}" ]]; then

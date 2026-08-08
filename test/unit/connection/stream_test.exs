@@ -7,7 +7,13 @@ defmodule S7.Connection.StreamTest do
   alias S7.Transport.{COTP, TPKT}
   alias S7.Transport.COTP.{ConnectionConfirm, Data, DisconnectRequest, ErrorTPDU}
 
-  @opts [max_tpkt_size: 1024, receive_buffer_limit: 2048, pdu_size: 480, tpdu_size: 512]
+  @opts [
+    max_tpkt_size: 1024,
+    maximum_fragments: 64,
+    receive_buffer_limit: 2048,
+    pdu_size: 480,
+    tpdu_size: 512
+  ]
 
   test "decodes fragmented TCP input and concatenated TPKT frames" do
     first = PDU.new(:ack_data, 11, <<0x05, 1>>, <<0xFF>>, error_class: 0, error_code: 0)
@@ -120,6 +126,17 @@ defmodule S7.Connection.StreamTest do
       end)
 
     assert {:error, %Error{layer: :cotp, reason: :too_many_fragments}} = result
+  end
+
+  test "accepts a negotiated fragment cap above the defensive default" do
+    pdu = PDU.new(:ack_data, 42, <<0x05, 1>>, <<0xFF>>, error_class: 0, error_code: 0)
+    continuation = frame_tpdu(%Data{payload: <<>>, eot: false, tpdu_number: 0})
+    final = frame_tpdu(%Data{payload: pdu |> PDU.encode() |> IO.iodata_to_binary()})
+    binary = :binary.copy(continuation, 64) <> final
+    opts = Keyword.put(@opts, :maximum_fragments, 65)
+
+    assert {:ok, [^pdu], %Stream{fragment_count: 0}} =
+             Stream.push(Stream.new(), binary, opts)
   end
 
   defp frame(pdu) do

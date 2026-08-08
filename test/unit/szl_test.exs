@@ -87,6 +87,29 @@ defmodule S7.SZLTest do
              Metadata.plc_status(status_szl)
   end
 
+  test "decodes packed H-system component indexes and prefers the master CPU" do
+    components = [
+      component(0xF001, "Reserve PLC"),
+      component(0xF801, "Master PLC"),
+      component(0xF802, "Master CPU"),
+      component(0xF804, "Master Copyright"),
+      component(0xF805, "MASTER-SERIAL"),
+      component(0xF807, "Master Module Type")
+    ]
+
+    assert {:ok, cpu_szl} = encoded_szl(0x021C, 34, components)
+
+    assert {:ok,
+            %CPUInfo{
+              automation_system_name: "Master PLC",
+              module_name: "Master CPU",
+              copyright: "Master Copyright",
+              serial_number: "MASTER-SERIAL",
+              module_type_name: "Master Module Type",
+              components: %{0xF001 => _, 0xF801 => _}
+            }} = Metadata.cpu_info(cpu_szl)
+  end
+
   defp encoded_szl(id, length, records, index \\ 0) do
     raw = IO.iodata_to_binary([<<length::16, length(records)::16>>, records])
     SZL.decode(id, index, raw)

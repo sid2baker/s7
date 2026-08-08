@@ -98,17 +98,57 @@ defmodule S7.SZL.Metadata do
 
   defp component_record(szl, component, operation) do
     case SZL.record_by_index(szl, component) do
-      {:ok, record} -> {:ok, record}
-      :error -> SZL.malformed(operation, %{missing_component: component})
+      {:ok, record} ->
+        {:ok, record}
+
+      :error ->
+        case packed_component_record(szl.records, component) do
+          nil -> SZL.malformed(operation, %{missing_component: component})
+          record -> {:ok, record}
+        end
     end
   end
 
   defp component_text(components, component, length) do
-    case Map.get(components, component) do
+    case component_value(components, component) do
       nil -> nil
       value when byte_size(value) >= length -> value |> binary_part(0, length) |> decode_text()
       value -> decode_text(value)
     end
+  end
+
+  defp packed_component_record(records, component) do
+    records
+    |> Enum.filter(fn
+      <<index::unsigned-big-16, _rest::binary>> -> (index &&& 0xFF) == component
+      _record -> false
+    end)
+    |> Enum.min_by(
+      fn <<index::unsigned-big-16, _rest::binary>> -> component_rank(index) end,
+      fn -> nil end
+    )
+  end
+
+  defp component_value(components, component) do
+    case Map.fetch(components, component) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        components
+        |> Enum.filter(fn {index, _value} -> (index &&& 0xFF) == component end)
+        |> Enum.min_by(fn {index, _value} -> component_rank(index) end, fn -> nil end)
+        |> case do
+          nil -> nil
+          {_index, value} -> value
+        end
+    end
+  end
+
+  defp component_rank(index) do
+    high_byte = index >>> 8
+    master_rank = if (high_byte &&& 0x08) == 0x08, do: 0, else: 1
+    {master_rank, index}
   end
 
   defp decode_text(binary) do

@@ -2,9 +2,11 @@ defmodule S7.Protocol.SZLTest do
   use ExUnit.Case, async: true
 
   alias S7.{Error, SZL}
+  alias S7.Protocol.PDU
   alias S7.Protocol.SZL, as: SZLProtocol
   alias S7.Protocol.UserData
   alias S7.Protocol.UserData.{Parameter, Payload}
+  alias S7.Test.Fixture
 
   test "assembles first and continuation responses into validated records" do
     limits = %{max_bytes: 64, max_fragments: 4}
@@ -41,6 +43,23 @@ defmodule S7.Protocol.SZLTest do
               records: [<<0x1111::16>>, <<0x2222::16>>],
               raw: ^raw
             }} = SZLProtocol.consume(response(second), transaction, :read_szl)
+  end
+
+  test "decodes the golden complete SZL response" do
+    assert {:ok, _request, transaction} =
+             SZLProtocol.start(0x0011, 0, %{max_bytes: 64, max_fragments: 4})
+
+    fixture = Fixture.read!("userdata/read_szl_response.bin")
+    assert {:ok, pdu, <<>>} = PDU.decode(fixture)
+    assert {:ok, response} = UserData.from_pdu(pdu)
+
+    assert {:ok,
+            %SZL{
+              id: 0x0011,
+              record_length: 2,
+              record_count: 1,
+              records: [<<0, 1>>]
+            }} = SZLProtocol.consume(response, transaction, :read_szl)
   end
 
   test "rejects fragment identity, extension, transport, and resource violations" do

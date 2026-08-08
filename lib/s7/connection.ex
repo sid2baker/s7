@@ -32,7 +32,8 @@ defmodule S7.Connection do
   @default_reconnect_min_delay 250
   @default_reconnect_max_delay 30_000
   @default_reconnect_jitter 0.2
-  @maximum_fragments 64
+  @minimum_fragment_limit 64
+  @maximum_fragment_limit 1024
   @maximum_tpkt_size 0xFFFF
   @maximum_receive_buffer_size 1_048_576
   @connection_options [
@@ -1283,6 +1284,7 @@ defmodule S7.Connection do
   defp receive_active_bytes(data, bytes) do
     opts = [
       max_tpkt_size: data.max_tpkt_size,
+      maximum_fragments: cotp_fragment_limit(data),
       receive_buffer_limit: data.receive_buffer_limit,
       pdu_size: data.pdu_size,
       tpdu_size: data.tpdu_size
@@ -1829,12 +1831,15 @@ defmodule S7.Connection do
     end
   end
 
-  defp receive_cotp_data(data, _deadline, operation, _parts, count, _size)
-       when count >= @maximum_fragments do
-    {:error, Error.new(:cotp, operation, :too_many_fragments), data}
+  defp receive_cotp_data(data, deadline, operation, parts, count, size) do
+    if count >= cotp_fragment_limit(data) do
+      {:error, Error.new(:cotp, operation, :too_many_fragments), data}
+    else
+      receive_cotp_fragment(data, deadline, operation, parts, count, size)
+    end
   end
 
-  defp receive_cotp_data(data, deadline, operation, parts, count, size) do
+  defp receive_cotp_fragment(data, deadline, operation, parts, count, size) do
     with {:ok, packet, data} <- receive_tpkt(data, deadline, operation),
          :ok <- validate_received_tpdu_size(packet.payload, data, operation),
          {:ok, tpdu} <- decode_cotp(packet.payload, operation),
@@ -1852,6 +1857,15 @@ defmodule S7.Connection do
       {:error, %Error{} = error, data} -> {:error, error, data}
       {:error, %Error{} = error} -> {:error, error, data}
     end
+  end
+
+  defp cotp_fragment_limit(data) do
+    payload_capacity = data.tpdu_size - 3
+    required_fragments = div(data.pdu_size + payload_capacity - 1, payload_capacity)
+
+    required_fragments
+    |> max(@minimum_fragment_limit)
+    |> min(@maximum_fragment_limit)
   end
 
   defp cotp_data(%Data{payload: payload, eot: eot, tpdu_number: 0}, _operation),

@@ -1,6 +1,9 @@
 defmodule S7.CPUInfo do
   @moduledoc """
   Component-identification strings decoded from SZL `0x001C`.
+
+  The raw `components` map retains full 16-bit record indexes, including the
+  rack and master/reserve flags returned by H systems.
   """
 
   defstruct [

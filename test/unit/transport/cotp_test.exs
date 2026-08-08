@@ -53,7 +53,7 @@ defmodule S7.Transport.COTPTest do
   end
 
   test "disconnect request round-trips its reason and diagnostic parameters" do
-    fixture = <<11, 0x80, 0, 1, 0, 2, 0x80, 0xE0, 3, 0xAA, 0xBB, 0xCC>>
+    fixture = Fixture.read!("cotp/disconnect_request.bin")
 
     expected = %DisconnectRequest{
       destination_reference: 1,
@@ -67,7 +67,7 @@ defmodule S7.Transport.COTPTest do
   end
 
   test "disconnect confirm round-trips unknown parameters" do
-    fixture = <<8, 0xC0, 0, 1, 0, 2, 0xC3, 1, 0x7A>>
+    fixture = Fixture.read!("cotp/disconnect_confirm.bin")
 
     expected = %DisconnectConfirm{
       destination_reference: 1,
@@ -80,7 +80,7 @@ defmodule S7.Transport.COTPTest do
   end
 
   test "error TPDU round-trips the rejected TPDU" do
-    fixture = <<9, 0x70, 0, 1, 2, 0xC1, 3, 2, 0xF0, 0x81>>
+    fixture = Fixture.read!("cotp/error.bin")
 
     expected = %ErrorTPDU{
       destination_reference: 1,
@@ -184,6 +184,17 @@ defmodule S7.Transport.COTPTest do
 
     assert_raise ArgumentError, fn ->
       COTP.encode(%ConnectionConfirm{unknown_parameters: [{0xEE, :not_binary}]})
+    end
+
+    assert_raise ArgumentError, fn ->
+      COTP.encode(%ConnectionConfirm{unknown_parameters: [{0xC1, <<1>>}]})
+    end
+
+    assert_raise ArgumentError, fn ->
+      COTP.encode(%DisconnectRequest{
+        additional_information: <<1>>,
+        unknown_parameters: [{0xE0, <<2>>}]
+      })
     end
 
     assert_raise ArgumentError, fn ->
