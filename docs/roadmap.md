@@ -22,6 +22,27 @@ suite pass.
 | 10 | Generic userdata envelope and bounded request routing | Complete |
 | 11 | Raw SZL continuation and typed CPU metadata | Complete |
 
-Additional programmer diagnostics may follow. Block operations and PLC control
-require separate opt-in APIs because their operational risk differs from
-reading memory. S7comm-plus remains outside the current roadmap.
+## Classic Completion
+
+The exact scope and evidence rules are defined in
+[`classic-completion.md`](classic-completion.md).
+
+| Milestone | Outcome | Status |
+| --- | --- | --- |
+| 12 | Classic completion contract and service matrix | Complete |
+| 13 | Remaining S7ANY areas and value representations | Planned |
+| 14 | Runtime COTP DR/DC shutdown | Planned |
+| 15 | Exclusive, bidirectional transactions and bounded push routing | Planned |
+| 16 | Block inventory and block information | Planned |
+| 17 | Clock and protected-session services | Planned |
+| 18 | Bounded block upload and block-image parsing | Planned |
+| 19 | Opt-in block download, replacement, and deletion | Planned |
+| 20 | Opt-in PLC control | Planned |
+| 21 | Raw-first programmer diagnostics and variable status | Planned |
+| 22 | Cyclic subscriptions | Planned |
+| 23 | Alarm subscription, query, and acknowledgment | Planned |
+| 24 | Cross-family qualification and classic `1.0.0` release | Planned |
+
+Every milestone is committed independently after its local and repository-wide
+quality gates pass. Destructive operations additionally require dedicated test
+hardware and a restorable PLC project. S7comm Plus remains outside this roadmap.

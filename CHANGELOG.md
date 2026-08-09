@@ -27,6 +27,7 @@ Changes currently targeted for `0.1.0` are listed below.
 - Generic classic userdata request routing with safe unsolicited-indication handling.
 - Bounded raw SZL continuation, record validation, and typed CPU metadata helpers.
 - Negotiation-aware COTP fragment bounds, control/userdata golden packets, and H-system metadata indexes.
+- An explicit classic S7comm completion contract covering remaining services, safety classes, and evidence gates.
 
 The date remains unset until the external release qualification in
 `docs/interoperability.md` is complete.

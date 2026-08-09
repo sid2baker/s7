@@ -3,6 +3,8 @@
 This document distinguishes implemented behavior from the compatibility
 contract targeted for `1.0`. A feature is supported only when its listed
 interoperability targets have passed; decoding a capture alone is not enough.
+The complete scope and risk policy are defined in
+[`classic-completion.md`](classic-completion.md).
 
 ## Transport
 
