@@ -283,7 +283,7 @@ defmodule S7.Protocol.Cyclic do
   """
   @spec decode_indication(UserData.t(), CyclicModel.Subscription.t(), atom()) ::
           {:ok, CyclicModel.Event.t()} | {:error, Error.t()}
-  def decode_indication(message, subscription, operation \\ :next_cyclic)
+  def decode_indication(message, subscription, operation \\ :cyclic_event)
 
   def decode_indication(
         %UserData{parameter: %Parameter{} = parameter, payload: %Payload{} = payload},

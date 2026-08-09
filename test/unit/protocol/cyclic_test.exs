@@ -433,8 +433,7 @@ defmodule S7.Protocol.CyclicTest do
       interval: interval,
       item_specs: specs,
       typed?: typed?,
-      addresses: addresses,
-      initial: nil
+      addresses: addresses
     }
   end
 

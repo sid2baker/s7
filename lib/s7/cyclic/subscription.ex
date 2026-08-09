@@ -3,12 +3,12 @@ defmodule S7.Cyclic.Subscription do
   Handle for one remote classic cyclic-service job.
 
   A handle belongs to the process that created it and to the current S7
-  session. `initial` contains the optional snapshot bundled with the setup or
-  most recent change-driven modification response.
+  session. Setup snapshots and subsequent updates are delivered to that
+  process as `{:s7, subscription.reference, event}` messages.
   """
 
   alias S7.Address
-  alias S7.Cyclic.{Event, Interval}
+  alias S7.Cyclic.Interval
 
   @enforce_keys [
     :connection,
@@ -27,20 +27,21 @@ defmodule S7.Cyclic.Subscription do
     :interval,
     :item_specs,
     :typed?,
-    :addresses,
-    :initial
+    :addresses
   ]
 
   @type mode :: :cyclic | :change_driven
+  @type connection ::
+          pid() | atom() | {atom(), node()} | {:global, term()} | {:via, module(), term()}
+
   @type t :: %__MODULE__{
-          connection: pid(),
+          connection: connection(),
           reference: reference(),
           job_id: byte(),
           mode: mode(),
           interval: Interval.t(),
           item_specs: [binary()],
           typed?: boolean(),
-          addresses: [Address.t()] | nil,
-          initial: Event.t() | nil
+          addresses: [Address.t()] | nil
         }
 end

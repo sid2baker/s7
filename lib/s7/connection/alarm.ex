@@ -7,11 +7,8 @@ defmodule S7.Connection.Alarm do
   alias S7.Protocol.{Alarm, UserData}
 
   @default_timeout 5_000
-  @default_queue_limit 64
-
   @type subscription_options :: %{
           subscription_key: <<_::64>>,
-          queue_limit: pos_integer(),
           timeout: pos_integer(),
           step_timeout: pos_integer()
         }
@@ -27,18 +24,15 @@ defmodule S7.Connection.Alarm do
     with :ok <-
            Service.validate_options(
              opts,
-             [:subscription_key, :queue_limit, :timeout, :step_timeout],
+             [:subscription_key, :timeout, :step_timeout],
              operation
            ),
          {:ok, subscription_key} <- subscription_key_option(opts, operation),
-         {:ok, queue_limit} <-
-           Service.positive_option(opts, :queue_limit, @default_queue_limit, operation),
          {:ok, timeout} <- Service.positive_option(opts, :timeout, @default_timeout, operation),
          {:ok, step_timeout} <- Service.positive_option(opts, :step_timeout, timeout, operation) do
       {:ok,
        %{
          subscription_key: subscription_key,
-         queue_limit: queue_limit,
          timeout: timeout,
          step_timeout: step_timeout
        }}
@@ -71,23 +65,6 @@ defmodule S7.Connection.Alarm do
       register_subscription(connection, token, request, alarm_type, options)
     end
   end
-
-  @spec next(pid(), AlarmModel.Subscription.t(), pos_integer()) ::
-          {:ok, AlarmModel.Event.t()} | {:error, Error.t()}
-  def next(connection, %AlarmModel.Subscription{} = subscription, timeout)
-      when is_pid(connection) and is_integer(timeout) and timeout > 0 do
-    with :ok <- validate_connection(subscription, connection, :next_alarm),
-         {:ok, message} <-
-           Connection.next_userdata(connection, subscription.reference, timeout),
-         {:ok, event} <- Alarm.decode_indication(message, :next_alarm) do
-      {:ok, event}
-    else
-      {:error, %Error{} = error} -> {:error, Service.normalize_error(error, :next_alarm)}
-    end
-  end
-
-  def next(_connection, _subscription, _timeout),
-    do: Service.client_error(:next_alarm, :invalid_alarm_subscription)
 
   @spec unsubscribe(pid(), AlarmModel.Subscription.t(), request_options()) ::
           :ok | {:error, Error.t()}
@@ -170,7 +147,6 @@ defmodule S7.Connection.Alarm do
     }
 
     case Connection.subscribe_userdata(connection, filter,
-           queue_limit: options.queue_limit,
            session_bound: true,
            owner_down_operation: :alarm_subscription
          ) do
@@ -212,14 +188,26 @@ defmodule S7.Connection.Alarm do
                :subscribe,
                :subscribe_alarms
              ),
+           subscription = %AlarmModel.Subscription{
+             connection: connection,
+             reference: local_reference,
+             alarm_type: alarm_type,
+             subscription_key: options.subscription_key
+           },
+           :ok <-
+             Connection.activate_userdata_subscription(
+               connection,
+               local_reference,
+               %{
+                 function_group: :cpu,
+                 subfunction: {:one_of, Alarm.indication_subfunctions()},
+                 sequence: 0,
+                 type: :indication
+               },
+               {:messages, :alarm, subscription}
+             ),
            :ok <- Connection.end_transaction(connection, token) do
-        {:ok,
-         %AlarmModel.Subscription{
-           connection: connection,
-           reference: local_reference,
-           alarm_type: alarm_type,
-           subscription_key: options.subscription_key
-         }}
+        {:ok, subscription}
       end
 
     case result do

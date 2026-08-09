@@ -472,9 +472,11 @@ defmodule S7.ClassicDeviceQualificationTest do
                step_timeout: 5_000
              )
 
+    reference = subscription.reference
+
     try do
-      assert {:ok, %Cyclic.Event{items: [%Cyclic.Event.Item{error: nil}]}} =
-               S7.Cyclic.next(subscription, 10_000)
+      assert_receive {:s7, ^reference, %Cyclic.Event{items: [%Cyclic.Event.Item{error: nil}]}},
+                     10_000
     after
       assert S7.Cyclic.unsubscribe(subscription) == :ok
     end
@@ -503,9 +505,10 @@ defmodule S7.ClassicDeviceQualificationTest do
   test "receives and explicitly acknowledges an alarm event", %{client: client, config: config} do
     assert config.alarm_type in [:alarm_s, :alarm_8]
     assert {:ok, subscription} = S7.Alarm.subscribe(client, config.alarm_type)
+    reference = subscription.reference
 
     try do
-      assert {:ok, %Alarm.Event{} = event} = S7.Alarm.next(subscription, 30_000)
+      assert_receive {:s7, ^reference, %Alarm.Event{} = event}, 30_000
       assert {:ok, results} = S7.Alarm.acknowledge_many(client, event)
       assert Enum.all?(results, &match?(%Alarm.Acknowledgement.Result{status: :ok}, &1))
     after

@@ -71,7 +71,7 @@ for:
 - in-flight requests indexed by PDU reference;
 - request timers and caller monitors;
 - one exclusive transaction with total, per-step, byte, message, and inbox bounds;
-- monitored userdata subscriptions with bounded pull queues.
+- monitored userdata subscriptions with pull or owner-message delivery.
 
 Each logical multi-item operation has at most one PDU batch in flight. Different
 callers may run concurrently up to the conservative minimum of the requested
@@ -121,21 +121,24 @@ the configured capability; it never replays the operation that lost its
 session.
 
 Unsolicited userdata indications never enter PDU-reference correlation. They
-are routed by group, subfunction, and type to monitored subscriptions. Each
-subscription has one pull waiter and a bounded queue. Queue overflow terminates
-that subscription with a structured error but does not disturb unrelated
-requests or subscriptions. Session loss terminates all subscriptions; a new
-session requires explicit resubscription.
+are routed by group, subfunction, and type to monitored subscriptions. Internal
+one-shot programmer jobs use a bounded pull queue. Established cyclic and alarm
+subscriptions decode in the connection process and send
+`{:s7, reference, event}` directly to their owner. A decode or session failure
+uses `{:s7, reference, {:error, error}}`. Session loss terminates all
+subscriptions; a new session requires explicit resubscription.
 
-An indication accepted by a subscription is bounded by that subscription's
-queue and does not consume an unrelated exclusive transaction's aggregate
-message budget. Unmatched indications remain visible through telemetry and do
-consume that budget while an exclusive transaction is active. Remote-backed
-cyclic and alarm subscriptions additionally mark the session as dependent on
-their owner; owner death closes the session so the PLC cannot retain an
-orphaned job or message subscription. Alarm acknowledgments use a short
-exclusive transaction so complete PLC rejection, local non-transmission, and
-an indeterminate post-send outcome remain distinguishable.
+An indication accepted by a subscription does not consume an unrelated
+exclusive transaction's aggregate message budget. The connection does not add
+a second queue in front of an owner mailbox; applications that need rate
+control should subscribe from a dedicated process. Unmatched indications
+remain visible through telemetry and do consume the transaction budget while
+an exclusive transaction is active. Remote-backed cyclic and alarm
+subscriptions additionally mark the session as dependent on their owner;
+owner death closes the session so the PLC cannot retain an orphaned job or
+message subscription. Alarm acknowledgments use a short exclusive transaction
+so complete PLC rejection, local non-transmission, and an indeterminate
+post-send outcome remain distinguishable.
 
 The same connection PID may own a sequence of sessions. Opt-in reconnect uses
 bounded exponential backoff with jitter, but first fails all work belonging to

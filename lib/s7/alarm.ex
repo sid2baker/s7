@@ -1,14 +1,25 @@
 defmodule S7.Alarm do
   @moduledoc """
   Classic `ALARM_S` and `ALARM_8` subscriptions, queries, and acknowledgments.
+
+  The subscribing process receives indications as
+  `{:s7, subscription.reference, %S7.Alarm.Event{}}` messages.
   """
 
   alias S7.Alarm.{Acknowledgement, Event, Query, Subscription}
   alias S7.{API, Error}
   alias S7.Connection.Alarm, as: Runtime
 
+  @type message :: {:s7, reference(), Event.t() | {:error, Error.t()}}
+
   @doc """
   Starts a connection-scoped classic alarm subscription.
+
+  The calling process owns the returned handle. Indications arrive as
+  `{:s7, subscription.reference, event}`. Decode or connection failures arrive
+  in the event position as `{:error, %S7.Error{}}`.
+
+  Options are `:subscription_key`, `:timeout`, and `:step_timeout`.
   """
   @spec subscribe(S7.t(), Subscription.alarm_type(), keyword()) ::
           {:ok, Subscription.t()} | {:error, Error.t()}
@@ -17,22 +28,6 @@ defmodule S7.Alarm do
       API.call(fn -> Runtime.subscribe(client, alarm_type, options) end, :subscribe_alarms)
     end
   end
-
-  @doc """
-  Pulls the next alarm indication currently associated with a subscription.
-
-  This temporary pull API is replaced by direct owner messages in the next
-  pre-release migration milestone.
-  """
-  @spec next(Subscription.t(), pos_integer()) :: {:ok, Event.t()} | {:error, Error.t()}
-  def next(subscription, timeout \\ 5_000)
-
-  def next(%Subscription{connection: connection} = subscription, timeout) do
-    API.call(fn -> Runtime.next(connection, subscription, timeout) end, :next_alarm)
-  end
-
-  def next(_subscription, _timeout),
-    do: {:error, Error.new(:client, :next_alarm, :invalid_alarm_subscription)}
 
   @doc """
   Releases the remote alarm subscription and local subscription state.

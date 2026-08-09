@@ -28,7 +28,7 @@ defmodule S7.CyclicServicesIntegrationTest do
     0x3E
   >>
 
-  test "runs a typed pull subscription alongside ordinary requests" do
+  test "pushes typed subscription events alongside ordinary requests" do
     server =
       start_server(
         notify_requests: true,
@@ -42,9 +42,10 @@ defmodule S7.CyclicServicesIntegrationTest do
             %Cyclic.Subscription{
               job_id: 1,
               mode: :cyclic,
-              typed?: true,
-              initial: %Cyclic.Event{items: [%Item{value: 1234}]}
-            } = subscription} = S7.Cyclic.subscribe(client, ["MW10"], queue_limit: 4)
+              typed?: true
+            } = subscription} = S7.Cyclic.subscribe(client, ["MW10"])
+
+    reference = subscription.reference
 
     assert_receive {:mock_plc_request, :cyclic_subscribe, _reference}, 500
 
@@ -53,11 +54,10 @@ defmodule S7.CyclicServicesIntegrationTest do
 
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
 
-    assert {:ok, %Cyclic.Event{items: [%Item{value: 1234, error: nil}]}} =
-             S7.Cyclic.next(subscription, 500)
-
-    assert {:ok, %Cyclic.Event{items: [%Item{value: 1234}]}} =
-             S7.Cyclic.next(subscription, 500)
+    for _event <- 1..3 do
+      assert_receive {:s7, ^reference, %Cyclic.Event{items: [%Item{value: 1234, error: nil}]}},
+                     500
+    end
 
     assert S7.Cyclic.unsubscribe(subscription) == :ok
     assert_receive {:mock_plc_request, :cyclic_unsubscribe, _reference}, 500
@@ -65,8 +65,8 @@ defmodule S7.CyclicServicesIntegrationTest do
     assert %{state: :ready, subscriptions: 0, exclusive_transaction: false} =
              S7.TestSupport.info!(client)
 
-    assert {:error, %Error{reason: :invalid_subscription, operation: :next_cyclic}} =
-             S7.Cyclic.next(subscription, 10)
+    assert {:error, %Error{reason: :invalid_subscription}} =
+             S7.Cyclic.unsubscribe(subscription)
 
     assert S7.close(client) == :ok
   end
@@ -84,26 +84,33 @@ defmodule S7.CyclicServicesIntegrationTest do
     assert {:ok,
             %Cyclic.Subscription{
               mode: :change_driven,
-              typed?: false,
-              initial: %Cyclic.Event{items: [%Item{transport_size: 9, value: nil}]}
+              typed?: false
             } = subscription} =
              S7.Cyclic.subscribe_raw(client, :change_driven, [@dbread])
 
-    assert {:ok, %Cyclic.Event{items: [%Item{data: <<0xFF, 0x43, _rest::binary>>}]}} =
-             S7.Cyclic.next(subscription, 500)
+    reference = subscription.reference
+
+    assert_receive {:s7, ^reference,
+                    %Cyclic.Event{items: [%Item{transport_size: 9, value: nil}]}},
+                   500
+
+    assert_receive {:s7, ^reference,
+                    %Cyclic.Event{items: [%Item{data: <<0xFF, 0x43, _rest::binary>>}]}},
+                   500
 
     assert {:ok,
             %Cyclic.Subscription{
               job_id: 1,
-              item_specs: [@dbread_modified],
-              initial: %Cyclic.Event{items: [%Item{value: nil}]}
+              item_specs: [@dbread_modified]
             } = modified} =
              S7.Cyclic.modify_raw(subscription, [@dbread_modified])
 
     assert_receive {:mock_plc_request, :cyclic_modify, _reference}, 500
 
-    assert {:ok, %Cyclic.Event{subfunction: 7, items: [%Item{value: nil}]}} =
-             S7.Cyclic.next(modified, 500)
+    for _event <- 1..2 do
+      assert_receive {:s7, ^reference, %Cyclic.Event{subfunction: 7, items: [%Item{value: nil}]}},
+                     500
+    end
 
     assert S7.Cyclic.unsubscribe(modified) == :ok
     assert S7.close(client) == :ok
@@ -173,38 +180,70 @@ defmodule S7.CyclicServicesIntegrationTest do
     assert S7.close(client) == :ok
   end
 
-  test "bounds wrong-sequence and malformed indications without crashing" do
-    for {fault, expected} <- [
-          {:wrong_cyclic_sequence, :timeout},
-          {:malformed_indication, :malformed_response}
-        ] do
-      server = start_server(cyclic_fault: fault, cyclic_push_count: 1)
-      assert {:ok, client} = connect(server)
-      assert {:ok, subscription} = S7.Cyclic.subscribe(client, ["MW10"])
-
-      assert {:error, %Error{reason: ^expected}} =
-               S7.Cyclic.next(subscription, 100)
-
-      assert S7.Cyclic.unsubscribe(subscription) == :ok
-      assert %{state: :ready, subscriptions: 0} = S7.TestSupport.info!(client)
-      assert S7.close(client) == :ok
-    end
-  end
-
-  test "reports bounded queue overflow and still tears down the remote job" do
-    server = start_server(cyclic_push_count: 3, cyclic_push_delay: 100)
+  test "ignores wrong-sequence indications without crashing" do
+    server = start_server(cyclic_fault: :wrong_cyclic_sequence, cyclic_push_count: 1)
     assert {:ok, client} = connect(server)
+    assert {:ok, subscription} = S7.Cyclic.subscribe(client, ["MW10"])
+    reference = subscription.reference
 
-    assert {:ok, subscription} =
-             S7.Cyclic.subscribe(client, ["MW10"], queue_limit: 1)
-
-    Process.sleep(150)
-
-    assert {:error, %Error{reason: :subscription_overflow, details: %{limit: 1}}} =
-             S7.Cyclic.next(subscription, 100)
+    assert_receive {:s7, ^reference, %Cyclic.Event{}}, 500
+    refute_receive {:s7, ^reference, _event}, 100
 
     assert S7.Cyclic.unsubscribe(subscription) == :ok
     assert %{state: :ready, subscriptions: 0} = S7.TestSupport.info!(client)
+    assert S7.close(client) == :ok
+  end
+
+  test "reports malformed indications without crashing" do
+    server = start_server(cyclic_fault: :malformed_indication, cyclic_push_count: 1)
+    assert {:ok, client} = connect(server)
+    assert {:ok, subscription} = S7.Cyclic.subscribe(client, ["MW10"])
+    reference = subscription.reference
+
+    assert_receive {:s7, ^reference, %Cyclic.Event{}}, 500
+
+    assert_receive {:s7, ^reference,
+                    {:error, %Error{operation: :cyclic_event, reason: :malformed_response}}},
+                   500
+
+    assert S7.Cyclic.unsubscribe(subscription) == :ok
+    assert %{state: :ready, subscriptions: 0} = S7.TestSupport.info!(client)
+    assert S7.close(client) == :ok
+  end
+
+  test "delivers bursts directly to the owner mailbox" do
+    server = start_server(cyclic_push_count: 3, cyclic_push_delay: 100)
+    assert {:ok, client} = connect(server)
+
+    assert {:ok, subscription} = S7.Cyclic.subscribe(client, ["MW10"])
+    reference = subscription.reference
+
+    for _event <- 1..4 do
+      assert_receive {:s7, ^reference, %Cyclic.Event{}}, 500
+    end
+
+    assert S7.Cyclic.unsubscribe(subscription) == :ok
+    assert %{state: :ready, subscriptions: 0} = S7.TestSupport.info!(client)
+    assert S7.close(client) == :ok
+  end
+
+  test "supports subscriptions through a registered connection name" do
+    server = start_server(cyclic_push_count: 0)
+    name = {:global, {__MODULE__, make_ref()}}
+
+    assert {:ok, client} =
+             S7.connect({127, 0, 0, 1},
+               name: name,
+               port: server.port,
+               timeout: 1_000
+             )
+
+    assert {:ok, %Cyclic.Subscription{connection: ^name} = subscription} =
+             S7.Cyclic.subscribe(name, ["MW10"])
+
+    reference = subscription.reference
+    assert_receive {:s7, ^reference, %Cyclic.Event{}}, 500
+    assert S7.Cyclic.unsubscribe(subscription) == :ok
     assert S7.close(client) == :ok
   end
 
@@ -271,7 +310,7 @@ defmodule S7.CyclicServicesIntegrationTest do
     for {addresses, opts} <- [
           {[], []},
           {["MW10"], [interval: 1_050]},
-          {["MW10"], [queue_limit: 0]},
+          {["MW10"], [queue_limit: 1]},
           {["bad"], []}
         ] do
       assert {:error, %Error{}} = S7.Cyclic.subscribe(client, addresses, opts)
@@ -287,7 +326,7 @@ defmodule S7.CyclicServicesIntegrationTest do
 
     assert {:ok, subscription} = S7.Cyclic.subscribe(client, ["MW10"])
 
-    non_owner = Task.async(fn -> S7.Cyclic.next(subscription, 10) end)
+    non_owner = Task.async(fn -> S7.Cyclic.unsubscribe(subscription) end)
     assert {:error, %Error{reason: :invalid_subscription}} = Task.await(non_owner)
 
     assert {:error, %Error{reason: :invalid_cyclic_subscription}} =

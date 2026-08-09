@@ -9,11 +9,8 @@ defmodule S7.Connection.Cyclic do
   alias S7.Protocol.{Cyclic, UserData}
 
   @default_timeout 5_000
-  @default_queue_limit 64
-
   @type subscribe_options :: %{
           interval: CyclicModel.Interval.t(),
-          queue_limit: pos_integer(),
           timeout: pos_integer(),
           step_timeout: pos_integer()
         }
@@ -30,18 +27,15 @@ defmodule S7.Connection.Cyclic do
     with :ok <-
            Service.validate_options(
              opts,
-             [:interval, :queue_limit, :timeout, :step_timeout],
+             [:interval, :timeout, :step_timeout],
              operation
            ),
          {:ok, interval} <- Cyclic.interval(Keyword.get(opts, :interval, 1_000), operation),
-         {:ok, queue_limit} <-
-           Service.positive_option(opts, :queue_limit, @default_queue_limit, operation),
          {:ok, timeout} <- Service.positive_option(opts, :timeout, @default_timeout, operation),
          {:ok, step_timeout} <- Service.positive_option(opts, :step_timeout, timeout, operation) do
       {:ok,
        %{
          interval: interval,
-         queue_limit: queue_limit,
          timeout: timeout,
          step_timeout: step_timeout
        }}
@@ -118,23 +112,6 @@ defmodule S7.Connection.Cyclic do
     end
   end
 
-  @spec next(pid(), CyclicModel.Subscription.t(), pos_integer()) ::
-          {:ok, S7.Cyclic.Event.t()} | {:error, Error.t()}
-  def next(connection, %CyclicModel.Subscription{} = subscription, timeout)
-      when is_pid(connection) and is_integer(timeout) and timeout > 0 do
-    with :ok <- validate_connection(subscription, connection, :next_cyclic),
-         {:ok, message} <-
-           Connection.next_userdata(connection, subscription.reference, timeout),
-         {:ok, event} <- Cyclic.decode_indication(message, subscription, :next_cyclic) do
-      {:ok, event}
-    else
-      {:error, %Error{} = error} -> {:error, Service.normalize_error(error, :next_cyclic)}
-    end
-  end
-
-  def next(_connection, _subscription, _timeout),
-    do: Service.client_error(:next_cyclic, :invalid_cyclic_subscription)
-
   @spec modify(pid(), CyclicModel.Subscription.t(), [binary()], request_options()) ::
           {:ok, CyclicModel.Subscription.t()} | {:error, Error.t()}
   def modify(
@@ -204,7 +181,6 @@ defmodule S7.Connection.Cyclic do
     }
 
     case Connection.subscribe_userdata(connection, filter,
-           queue_limit: context.options.queue_limit,
            session_bound: true,
            owner_down_operation: :cyclic_subscription
          ) do
@@ -233,25 +209,26 @@ defmodule S7.Connection.Cyclic do
                length(context.item_specs),
                context.operation
              ),
+           subscription = %CyclicModel.Subscription{
+             connection: connection,
+             reference: local_reference,
+             job_id: job_id,
+             mode: context.mode,
+             interval: context.options.interval,
+             item_specs: context.item_specs,
+             typed?: context.typed?,
+             addresses: context.addresses
+           },
            :ok <-
-             Connection.rebind_userdata_subscription(
+             Connection.activate_userdata_subscription(
                connection,
                local_reference,
-               subscription_filter(job_id, context.mode)
+               subscription_filter(job_id, context.mode),
+               {:messages, :cyclic, subscription},
+               initial
              ),
            :ok <- Connection.end_transaction(connection, token) do
-        {:ok,
-         %CyclicModel.Subscription{
-           connection: connection,
-           reference: local_reference,
-           job_id: job_id,
-           mode: context.mode,
-           interval: context.options.interval,
-           item_specs: context.item_specs,
-           typed?: context.typed?,
-           addresses: context.addresses,
-           initial: initial
-         }}
+        {:ok, subscription}
       end
 
     case result do
@@ -278,8 +255,21 @@ defmodule S7.Connection.Cyclic do
          options,
          operation
        ) do
+    updated = %{
+      subscription
+      | interval: options.interval,
+        item_specs: item_specs
+    }
+
     result =
-      with {:ok, response} <- transaction_userdata(connection, token, request),
+      with :ok <-
+             Connection.activate_userdata_subscription(
+               connection,
+               subscription.reference,
+               subscription_filter(updated.job_id, updated.mode),
+               {:messages, :cyclic, updated}
+             ),
+           {:ok, response} <- transaction_userdata(connection, token, request),
            {:ok, initial} <-
              Cyclic.decode_modify_response(
                response,
@@ -289,19 +279,24 @@ defmodule S7.Connection.Cyclic do
                length(item_specs),
                operation
              ),
+           :ok <-
+             Connection.activate_userdata_subscription(
+               connection,
+               subscription.reference,
+               subscription_filter(updated.job_id, updated.mode),
+               {:messages, :cyclic, updated},
+               initial
+             ),
            :ok <- Connection.end_transaction(connection, token) do
-        {:ok,
-         %{
-           subscription
-           | interval: options.interval,
-             item_specs: item_specs,
-             initial: initial
-         }}
+        {:ok, updated}
       end
 
     case result do
-      {:ok, %CyclicModel.Subscription{} = updated} -> {:ok, updated}
-      {:error, %Error{} = error} -> finish_modify_failure(connection, token, error)
+      {:ok, %CyclicModel.Subscription{} = updated} ->
+        {:ok, updated}
+
+      {:error, %Error{} = error} ->
+        finish_modify_failure(connection, token, subscription, error)
     end
   end
 
@@ -337,10 +332,18 @@ defmodule S7.Connection.Cyclic do
     end
   end
 
-  defp finish_modify_failure(connection, token, %Error{} = error) do
+  defp finish_modify_failure(connection, token, subscription, %Error{} = error) do
     error = Service.normalize_error(error, :modify_cyclic)
 
     if complete_rejection?(error) do
+      _ =
+        Connection.activate_userdata_subscription(
+          connection,
+          subscription.reference,
+          subscription_filter(subscription.job_id, subscription.mode),
+          {:messages, :cyclic, subscription}
+        )
+
       TransactionCleanup.release(connection, token, error)
     else
       TransactionCleanup.abort(connection, token, error)

@@ -12,6 +12,7 @@ defmodule S7.Connection.Subscription do
     :timer,
     :timer_token,
     :error,
+    delivery: :pull,
     queue: {[], []},
     queued_count: 0,
     queue_limit: 64,
@@ -26,6 +27,11 @@ defmodule S7.Connection.Subscription do
           optional(:type) => UserData.Parameter.function_type() | :any
         }
 
+  @type delivery ::
+          :pull
+          | {:messages, :cyclic, S7.Cyclic.Subscription.t()}
+          | {:messages, :alarm, S7.Alarm.Subscription.t()}
+
   @type t :: %__MODULE__{
           reference: reference(),
           owner: pid(),
@@ -35,6 +41,7 @@ defmodule S7.Connection.Subscription do
           timer: reference() | nil,
           timer_token: reference() | nil,
           error: S7.Error.t() | nil,
+          delivery: delivery(),
           queue: :queue.queue(UserData.t()),
           queued_count: non_neg_integer(),
           queue_limit: pos_integer(),

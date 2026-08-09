@@ -130,13 +130,14 @@ incoming aggregate-limit violation closes the session because the peer may be
 waiting for a service-specific continuation. A per-receive timeout leaves the
 transaction owned and usable; the owner must either continue it or finish it.
 
-Userdata subscriptions are session-local and pull based. A waiter timeout does
-not remove its subscription. Queue overflow makes only that subscription
-terminal with `:subscription_overflow`; the connection remains usable and a
-cyclic job can still be unsubscribed remotely. Caller death removes ordinary
-local subscriptions. Cyclic subscriptions are remote-backed, so owner death
-invalidates the session to guarantee remote cleanup. Connection loss wakes all
-subscription waiters and requires explicit resubscription after reconnect.
+Userdata subscriptions are session-local and owner monitored. Internal
+one-shot programmer jobs use bounded pull queues. Public cyclic and alarm
+subscriptions deliver directly to the owner mailbox as
+`{:s7, reference, event}`. Event decode failure and connection loss use
+`{:s7, reference, {:error, error}}`; they are never represented as normal
+events. A local `receive` timeout does not alter remote state. Cyclic and alarm
+subscriptions are remote-backed, so owner death invalidates the session to
+guarantee remote cleanup. Reconnect always requires explicit resubscription.
 
 Cyclic setup and modification use bounded exclusive exchanges. A complete PLC
 rejection leaves the session usable. Timeout, malformed traffic, or disconnect
@@ -145,10 +146,10 @@ session. Unsubscribe also invalidates the session unless remote success is
 confirmed; stale handles are never reused after reconnect.
 
 Alarm setup and teardown follow the same remote-backed ownership rule. A complete setup rejection
-leaves the session usable; a missing or malformed setup response removes the provisional queue and
-invalidates the session. Teardown requires confirmed success. Alarm pull timeouts do not alter the
-remote subscription, duplicate indications are retained, and queue overflow remains locally
-observable so teardown can still be attempted.
+leaves the session usable; a missing or malformed setup response removes the provisional
+subscription and invalidates the session. Teardown requires confirmed success. Duplicate
+indications are retained in receive order. Mailbox capacity and application-level backpressure
+belong to the owner process, and teardown remains available after an event decode error.
 
 Alarm queries are read-only ordinary userdata requests. Alarm acknowledgment is state-changing and
 never replayed. Local validation or an oversized PDU returns `details.outcome: :not_attempted`; a

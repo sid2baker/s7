@@ -7,9 +7,9 @@ queries. Bounded classic block upload, PLC clock access, and classic session-pas
 authorization are also supported. Destructive block download, replacement, and deletion are
 available only through an explicit two-level opt-in, as are CPU stop/start, RAM-to-ROM copy, and
 memory compression. Capture-backed read-only programmer diagnostics and one-shot variable-status
-sampling are raw-first and bounded. Typed fixed-cycle subscriptions and raw change-driven cyclic
-jobs use owner-bound, session-local handles with bounded pull queues. Classic `ALARM_S` and
-`ALARM_8` subscriptions, queries, indications, and explicit acknowledgments use the same bounded
+sampling are raw-first and bounded. Typed fixed-cycle subscriptions, raw change-driven cyclic
+jobs, and classic alarms deliver decoded events directly to their monitored owner processes.
+Classic `ALARM_S` and `ALARM_8` queries and explicit acknowledgments use the same session-bound
 ownership model. One S7ANY item may represent either a scalar or a fixed-count range.
 
 The implementation keeps protocol codecs pure and gives the TCP socket to one `:gen_statem`
@@ -49,8 +49,14 @@ the [examples guide](examples/usage.md).
 {:ok, %S7.Programmer.VariableStatus{items: status_items}} =
   S7.Programmer.variable_status(client, ["MB0", "DB1.DBW0"])
 {:ok, cyclic} = S7.Cyclic.subscribe(client, ["DB1.DBW0"], interval: 1_000)
-{:ok, %S7.Cyclic.Event{items: [%S7.Cyclic.Event.Item{value: next_value}]}} =
-  S7.Cyclic.next(cyclic)
+cyclic_reference = cyclic.reference
+
+receive do
+  {:s7, ^cyclic_reference,
+   %S7.Cyclic.Event{items: [%S7.Cyclic.Event.Item{value: next_value}]}} ->
+    next_value
+end
+
 :ok = S7.Cyclic.unsubscribe(cyclic)
 :ok = S7.close(client)
 ```
@@ -369,24 +375,32 @@ Read Var:
 ```elixir
 {:ok, subscription} =
   S7.Cyclic.subscribe(client, ["MW10", "DB1.DBD20"],
-    interval: 1_000,
-    queue_limit: 32
+    interval: 1_000
   )
 
-initial_snapshot = subscription.initial
-{:ok, %S7.Cyclic.Event{items: items}} = S7.Cyclic.next(subscription)
+reference = subscription.reference
+
+receive do
+  {:s7, ^reference, %S7.Cyclic.Event{items: items}} -> items
+  {:s7, ^reference, {:error, %S7.Error{} = error}} -> {:error, error}
+after
+  5_000 -> :no_update
+end
+
 :ok = S7.Cyclic.unsubscribe(subscription)
 ```
 
 Intervals must be represented exactly by the classic 100 ms, 1 s, or 10 s wire bases; the client
-never rounds. `subscribe_cyclic_raw/4` additionally supports fixed and change-driven jobs using
-complete S7ANY or DBREAD specifications, and `modify_cyclic_raw/4` replaces a change-driven item
+never rounds. `S7.Cyclic.subscribe_raw/4` additionally supports fixed and change-driven jobs using
+complete S7ANY or DBREAD specifications, and `S7.Cyclic.modify_raw/3` replaces a change-driven item
 set without changing its remote job ID. CPU-specific change records remain raw.
 
-The creating process owns the handle. Pull timeouts leave the remote job active. Queue overflow is
-terminal for event delivery but `unsubscribe_cyclic/3` still releases the PLC job. Owner death or
-an ambiguous setup, modification, or teardown invalidates the session; reconnect never restores a
-subscription, and handles from an earlier session are rejected.
+The creating process owns the handle and receives the initial setup snapshot through the same
+message shape as later updates. A `receive` timeout is local and leaves the remote job active.
+Delivery uses the owner mailbox, so high-rate subscriptions should be owned by a dedicated process
+that can apply application-specific backpressure. Decode or connection failures arrive as
+`{:s7, reference, {:error, error}}`. Owner death or an ambiguous setup, modification, or teardown
+invalidates the session; reconnect never restores a subscription, and stale handles are rejected.
 
 ## Classic Alarms
 
@@ -394,13 +408,15 @@ Alarm subscriptions expose validated timestamps and known object headers while r
 wire record and CPU-specific associated value:
 
 ```elixir
-{:ok, alarms} =
-  S7.Alarm.subscribe(client, :alarm_8,
-    queue_limit: 64
-  )
+{:ok, alarms} = S7.Alarm.subscribe(client, :alarm_8)
+alarm_reference = alarms.reference
 
-{:ok, %S7.Alarm.Event{objects: [object | _]} = event} =
-  S7.Alarm.next(alarms)
+event =
+  receive do
+    {:s7, ^alarm_reference, %S7.Alarm.Event{} = event} -> event
+  end
+
+[object | _] = event.objects
 
 {:ok, %S7.Alarm.Query{records: records}} =
   S7.Alarm.query(client, :alarm_8)
@@ -412,7 +428,8 @@ wire record and CPU-specific associated value:
 
 Use `:alarm_s` for the S7-300-style path and `:alarm_8` for the S7-400-style path. Events are
 delivered in receive order without deduplication. Handles belong to their creating process and
-current S7 session; reconnect requires explicit resubscription. Alarm acknowledgment is
+current S7 session; applications should use a dedicated owner process when their mailbox needs
+rate control. Reconnect requires explicit resubscription. Alarm acknowledgment is
 state-changing and is never replayed. A complete PLC rejection leaves the session usable, while a
 missing or malformed response after transmission is indeterminate and invalidates the session.
 Query records and associated values preserve raw bytes for CPU-family-specific variants.

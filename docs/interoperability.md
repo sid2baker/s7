@@ -54,7 +54,7 @@ family and event queries, `ALARM_8`, and `NOTIFY` indications. The local corpus
 has no acknowledgment exchange, so its request, response, and indication
 fixtures are independently constructed from the pinned PLC4X grammar and
 checked against the pinned Wireshark decoder. The fault server covers both
-alarm families, ordered duplicate delivery, queue overflow, owner death,
+alarm families, ordered duplicate delivery, event decode failure, owner death,
 queries, per-object acknowledgment errors, and ambiguous lifecycle outcomes.
 The pinned Snap7 server returns a malformed message-service response to alarm
 setup and explicit `0xD402` errors for alarm query and acknowledgment; the gate

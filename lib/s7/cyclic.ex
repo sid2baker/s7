@@ -4,14 +4,24 @@ defmodule S7.Cyclic do
 
   Typed subscriptions use ordinary addresses. Raw subscriptions accept
   complete S7ANY or DBREAD variable specifications for CPU-specific layouts.
+  The subscribing process receives updates as
+  `{:s7, subscription.reference, %S7.Cyclic.Event{}}` messages.
   """
 
   alias S7.{API, Error}
   alias S7.Connection.Cyclic, as: Runtime
   alias S7.Cyclic.Subscription
 
+  @type message :: {:s7, reference(), S7.Cyclic.Event.t() | {:error, Error.t()}}
+
   @doc """
   Starts a fixed-interval subscription for typed addresses.
+
+  The calling process owns the returned handle. The setup snapshot and later
+  updates arrive as `{:s7, subscription.reference, event}`. Decode or
+  connection failures arrive in the event position as `{:error, %S7.Error{}}`.
+
+  Options are `:interval`, `:timeout`, and `:step_timeout`.
   """
   @spec subscribe(S7.t(), [S7.address()], keyword()) ::
           {:ok, Subscription.t()} | {:error, Error.t()}
@@ -24,6 +34,9 @@ defmodule S7.Cyclic do
 
   @doc """
   Starts a raw fixed-cycle or change-driven subscription.
+
+  Delivery and ownership match `subscribe/3`. Item specifications must be
+  complete S7ANY or DBREAD binaries.
   """
   @spec subscribe_raw(S7.t(), Subscription.mode(), [binary()], keyword()) ::
           {:ok, Subscription.t()} | {:error, Error.t()}
@@ -37,24 +50,10 @@ defmodule S7.Cyclic do
   end
 
   @doc """
-  Pulls the next update currently associated with a subscription.
-
-  This temporary pull API is replaced by direct owner messages in the next
-  pre-release migration milestone.
-  """
-  @spec next(Subscription.t(), pos_integer()) ::
-          {:ok, S7.Cyclic.Event.t()} | {:error, Error.t()}
-  def next(subscription, timeout \\ 5_000)
-
-  def next(%Subscription{connection: connection} = subscription, timeout) do
-    API.call(fn -> Runtime.next(connection, subscription, timeout) end, :next_cyclic)
-  end
-
-  def next(_subscription, _timeout),
-    do: {:error, Error.new(:client, :next_cyclic, :invalid_cyclic_subscription)}
-
-  @doc """
   Replaces the item set of an active raw change-driven subscription.
+
+  The returned handle retains the same reference. The modification snapshot
+  and subsequent updates use that reference in owner messages.
   """
   @spec modify_raw(Subscription.t(), [binary()], keyword()) ::
           {:ok, Subscription.t()} | {:error, Error.t()}

@@ -75,14 +75,14 @@ flash-LED commands are rejected before any packet is sent.
 
 Cyclic jobs reserve the connection only for bounded setup, modification, and
 teardown exchanges. Ordinary requests may run while an established job pushes
-sequence-scoped indications into its bounded pull queue. Typed fixed-cycle
+sequence-scoped indications directly to its monitored owner. Typed fixed-cycle
 items use the standard address/value codecs; raw fixed and change-driven jobs
 preserve complete S7ANY, DBREAD, and returned query records. Exact intervals
 range from 100 ms to 2,550,000 ms. Handles belong to one process and one S7
 session. Owner death closes that session to release the remote job, and
 reconnect requires explicit resubscription.
 
-Alarm subscriptions use the same monitored, bounded pull model but route the complete known CPU
+Alarm subscriptions use the same monitored owner-message model and route the complete known CPU
 alarm-indication set. Events retain exact bytes and preserve duplicate event IDs and state changes
 in receive order. Queries decode stable record headers and retain CPU-specific tails. Explicit
 acknowledgments run as bounded, exclusive, no-replay transactions and return one result per alarm

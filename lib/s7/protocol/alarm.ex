@@ -190,7 +190,7 @@ defmodule S7.Protocol.Alarm do
   """
   @spec decode_indication(UserData.t(), atom()) ::
           {:ok, AlarmModel.Event.t()} | {:error, Error.t()}
-  def decode_indication(message, operation \\ :next_alarm)
+  def decode_indication(message, operation \\ :alarm_event)
 
   def decode_indication(
         %UserData{parameter: %Parameter{} = parameter, payload: %Payload{} = payload},

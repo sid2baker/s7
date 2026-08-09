@@ -24,7 +24,9 @@ defmodule S7.AlarmServicesIntegrationTest do
               alarm_type: :alarm_8,
               subscription_key: "HmiRtm  "
             } = subscription} =
-             S7.Alarm.subscribe(client, :alarm_8, queue_limit: 4)
+             S7.Alarm.subscribe(client, :alarm_8)
+
+    reference = subscription.reference
 
     assert_receive {:mock_plc_request, :alarm_subscribe, _reference}, 500
 
@@ -33,22 +35,23 @@ defmodule S7.AlarmServicesIntegrationTest do
 
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
 
-    assert {:ok,
-            %Alarm.Event{
-              kind: :alarm_8,
-              objects: [
-                %AlarmObject{
-                  event_id: 0xAF,
-                  associated_values: [%{data: <<0x04, 0xD2>>}]
-                } = first_object
-              ]
-            }} = S7.Alarm.next(subscription, 500)
+    assert_receive {:s7, ^reference,
+                    %Alarm.Event{
+                      kind: :alarm_8,
+                      objects: [
+                        %AlarmObject{
+                          event_id: 0xAF,
+                          associated_values: [%{data: <<0x04, 0xD2>>}]
+                        } = first_object
+                      ]
+                    }},
+                   500
 
-    assert {:ok, %Alarm.Event{objects: [%AlarmObject{event_id: 0xAF}]}} =
-             S7.Alarm.next(subscription, 500)
+    assert_receive {:s7, ^reference, %Alarm.Event{objects: [%AlarmObject{event_id: 0xAF}]}},
+                   500
 
-    assert {:ok, %Alarm.Event{objects: [%AlarmObject{event_id: 0x2F}]}} =
-             S7.Alarm.next(subscription, 500)
+    assert_receive {:s7, ^reference, %Alarm.Event{objects: [%AlarmObject{event_id: 0x2F}]}},
+                   500
 
     assert {:ok,
             %Alarm.Query{
@@ -74,8 +77,8 @@ defmodule S7.AlarmServicesIntegrationTest do
     assert %{state: :ready, subscriptions: 0, exclusive_transaction: false} =
              S7.TestSupport.info!(client)
 
-    assert {:error, %Error{reason: :invalid_subscription, operation: :next_alarm}} =
-             S7.Alarm.next(subscription, 10)
+    assert {:error, %Error{reason: :invalid_subscription}} =
+             S7.Alarm.unsubscribe(subscription)
 
     assert S7.close(client) == :ok
   end
@@ -87,12 +90,15 @@ defmodule S7.AlarmServicesIntegrationTest do
     assert {:ok, %Alarm.Subscription{alarm_type: :alarm_s} = subscription} =
              S7.Alarm.subscribe(client, :alarm_s)
 
-    assert {:ok,
-            %Alarm.Event{
-              kind: :alarm_s,
-              subfunction: 0x12,
-              objects: [%AlarmObject{event_id: 0x0102_0304}]
-            }} = S7.Alarm.next(subscription, 500)
+    reference = subscription.reference
+
+    assert_receive {:s7, ^reference,
+                    %Alarm.Event{
+                      kind: :alarm_s,
+                      subfunction: 0x12,
+                      objects: [%AlarmObject{event_id: 0x0102_0304}]
+                    }},
+                   500
 
     assert {:ok,
             %Alarm.Query{
@@ -140,12 +146,26 @@ defmodule S7.AlarmServicesIntegrationTest do
     end
   end
 
-  test "bounds unmatched and malformed indications without crashing" do
-    for {fault, expected} <- [
-          {:wrong_alarm_subfunction, :timeout},
-          {:malformed_indication, :malformed_response},
-          {:invalid_alarm_timestamp, :malformed_response}
-        ] do
+  test "ignores unmatched alarm indications without crashing" do
+    server =
+      start_server(
+        alarm_fault: :wrong_alarm_subfunction,
+        alarm_event_ids: [0xAF],
+        alarm_push_delay: 100
+      )
+
+    assert {:ok, client} = connect(server)
+    assert {:ok, subscription} = S7.Alarm.subscribe(client, :alarm_8)
+    reference = subscription.reference
+    refute_receive {:s7, ^reference, _event}, 250
+
+    assert S7.Alarm.unsubscribe(subscription) == :ok
+    assert %{state: :ready, subscriptions: 0} = S7.TestSupport.info!(client)
+    assert S7.close(client) == :ok
+  end
+
+  test "reports malformed alarm indications without crashing" do
+    for fault <- [:malformed_indication, :invalid_alarm_timestamp] do
       server =
         start_server(
           alarm_fault: fault,
@@ -155,9 +175,11 @@ defmodule S7.AlarmServicesIntegrationTest do
 
       assert {:ok, client} = connect(server)
       assert {:ok, subscription} = S7.Alarm.subscribe(client, :alarm_8)
+      reference = subscription.reference
 
-      assert {:error, %Error{reason: ^expected}} =
-               S7.Alarm.next(subscription, 250)
+      assert_receive {:s7, ^reference,
+                      {:error, %Error{operation: :alarm_event, reason: :malformed_response}}},
+                     500
 
       assert S7.Alarm.unsubscribe(subscription) == :ok
       assert %{state: :ready, subscriptions: 0} = S7.TestSupport.info!(client)
@@ -165,7 +187,7 @@ defmodule S7.AlarmServicesIntegrationTest do
     end
   end
 
-  test "reports bounded queue overflow and still releases the remote subscription" do
+  test "delivers alarm bursts directly to the owner mailbox" do
     server =
       start_server(
         alarm_event_ids: [0xAF, 0xAF, 0x2F],
@@ -173,16 +195,31 @@ defmodule S7.AlarmServicesIntegrationTest do
       )
 
     assert {:ok, client} = connect(server)
-    assert {:ok, subscription} = S7.Alarm.subscribe(client, :alarm_8, queue_limit: 1)
+    assert {:ok, subscription} = S7.Alarm.subscribe(client, :alarm_8)
+    reference = subscription.reference
 
-    Process.sleep(150)
-
-    assert {:error, %Error{reason: :subscription_overflow, details: %{limit: 1}}} =
-             S7.Alarm.next(subscription, 100)
+    for event_id <- [0xAF, 0xAF, 0x2F] do
+      assert_receive {:s7, ^reference,
+                      %Alarm.Event{objects: [%AlarmObject{event_id: ^event_id}]}},
+                     500
+    end
 
     assert S7.Alarm.unsubscribe(subscription) == :ok
     assert %{state: :ready, subscriptions: 0} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
+  end
+
+  test "delivers a terminal error when the connection closes" do
+    server = start_server(alarm_push_count: 0)
+    assert {:ok, client} = connect(server)
+    assert {:ok, subscription} = S7.Alarm.subscribe(client, :alarm_8)
+    reference = subscription.reference
+
+    assert S7.close(client) == :ok
+
+    assert_receive {:s7, ^reference,
+                    {:error, %Error{operation: :alarm_event, reason: :connection_closed}}},
+                   500
   end
 
   test "invalidates rejected, missing, and malformed unsubscribe outcomes" do
@@ -299,7 +336,7 @@ defmodule S7.AlarmServicesIntegrationTest do
 
     for operation <- [
           fn -> S7.Alarm.subscribe(client, :unknown) end,
-          fn -> S7.Alarm.subscribe(client, :alarm_8, queue_limit: 0) end,
+          fn -> S7.Alarm.subscribe(client, :alarm_8, queue_limit: 1) end,
           fn -> S7.Alarm.subscribe(client, :alarm_8, subscription_key: "short") end,
           fn -> S7.Alarm.subscribe(client, :alarm_8, unknown: true) end,
           fn -> S7.Alarm.query(client, :scan) end
@@ -325,7 +362,7 @@ defmodule S7.AlarmServicesIntegrationTest do
 
     assert {:ok, subscription} = S7.Alarm.subscribe(client, :alarm_8)
 
-    non_owner = Task.async(fn -> S7.Alarm.next(subscription, 10) end)
+    non_owner = Task.async(fn -> S7.Alarm.unsubscribe(subscription) end)
     assert {:error, %Error{reason: :invalid_subscription}} = Task.await(non_owner)
 
     assert {:error, %Error{reason: :invalid_alarm_subscription}} =

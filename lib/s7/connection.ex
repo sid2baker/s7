@@ -279,6 +279,22 @@ defmodule S7.Connection do
   end
 
   @doc false
+  @spec activate_userdata_subscription(
+          pid(),
+          reference(),
+          Subscription.filter(),
+          Subscription.delivery(),
+          S7.Cyclic.Event.t() | S7.Alarm.Event.t() | nil
+        ) :: :ok | {:error, Error.t()}
+  def activate_userdata_subscription(connection, subscription, filter, delivery, initial \\ nil) do
+    :gen_statem.call(
+      connection,
+      {:activate_userdata_subscription, subscription, filter, delivery, initial},
+      :infinity
+    )
+  end
+
+  @doc false
   @spec validate_userdata_subscription(pid(), reference()) :: :ok | {:error, Error.t()}
   def validate_userdata_subscription(connection, subscription) do
     :gen_statem.call(connection, {:validate_userdata_subscription, subscription}, :infinity)
@@ -556,6 +572,22 @@ defmodule S7.Connection do
         data
       ) do
     rebind_userdata_subscription_owner(from, subscription, filter, data)
+  end
+
+  def handle_event(
+        {:call, from},
+        {:activate_userdata_subscription, subscription, filter, delivery, initial},
+        :ready,
+        data
+      ) do
+    activate_userdata_subscription_owner(
+      from,
+      subscription,
+      filter,
+      delivery,
+      initial,
+      data
+    )
   end
 
   def handle_event({:call, from}, {:validate_userdata_subscription, subscription}, :ready, data) do
@@ -2131,6 +2163,56 @@ defmodule S7.Connection do
     end
   end
 
+  defp activate_userdata_subscription_owner(
+         from,
+         reference,
+         filter,
+         delivery,
+         initial,
+         data
+       ) do
+    with {:ok, filter} <- validate_subscription_filter(filter),
+         :ok <- validate_subscription_delivery(delivery),
+         :ok <- validate_subscription_initial(delivery, initial),
+         {:ok, subscription} <- fetch_subscription(data, reference, from) do
+      subscription =
+        subscription
+        |> rebind_subscription(filter)
+        |> Map.put(:delivery, delivery)
+        |> deliver_initial_subscription(initial)
+        |> flush_subscription_queue()
+
+      data = put_subscription(data, subscription)
+      {:keep_state, data, [{:reply, from, :ok}]}
+    else
+      {:error, %Error{} = error} ->
+        {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  defp validate_subscription_delivery({:messages, :cyclic, %S7.Cyclic.Subscription{}}), do: :ok
+  defp validate_subscription_delivery({:messages, :alarm, %S7.Alarm.Subscription{}}), do: :ok
+
+  defp validate_subscription_delivery(delivery),
+    do: subscription_error(:subscribe_userdata, :invalid_delivery, %{delivery: delivery})
+
+  defp validate_subscription_initial(_delivery, nil), do: :ok
+
+  defp validate_subscription_initial(
+         {:messages, :cyclic, _handle},
+         %S7.Cyclic.Event{}
+       ),
+       do: :ok
+
+  defp validate_subscription_initial(
+         {:messages, :alarm, _handle},
+         %S7.Alarm.Event{}
+       ),
+       do: :ok
+
+  defp validate_subscription_initial(_delivery, initial),
+    do: subscription_error(:subscribe_userdata, :invalid_initial_event, %{initial: initial})
+
   defp rebind_subscription(subscription, filter) do
     messages =
       subscription.queue
@@ -2145,6 +2227,20 @@ defmodule S7.Connection do
         queue: :queue.from_list(messages),
         queued_count: length(messages)
     }
+  end
+
+  defp deliver_initial_subscription(subscription, nil), do: subscription
+
+  defp deliver_initial_subscription(subscription, initial),
+    do: deliver_subscription_message(subscription, initial)
+
+  defp flush_subscription_queue(%Subscription{delivery: :pull} = subscription),
+    do: subscription
+
+  defp flush_subscription_queue(subscription) do
+    messages = :queue.to_list(subscription.queue)
+    subscription = %{subscription | queue: :queue.new(), queued_count: 0}
+    Enum.reduce(messages, subscription, &deliver_subscription_message(&2, &1))
   end
 
   defp validate_userdata_subscription_owner(from, reference, data) do
@@ -2234,6 +2330,14 @@ defmodule S7.Connection do
   defp deliver_subscription(data, %Subscription{error: %Error{}} = subscription, _message),
     do: put_subscription(data, subscription)
 
+  defp deliver_subscription(
+         data,
+         %Subscription{delivery: {:messages, _kind, _handle}} = subscription,
+         message
+       ) do
+    put_subscription(data, deliver_subscription_message(subscription, message))
+  end
+
   defp deliver_subscription(data, %Subscription{waiter: waiter} = subscription, message)
        when not is_nil(waiter) do
     :gen_statem.reply(waiter, {:ok, message})
@@ -2271,6 +2375,60 @@ defmodule S7.Connection do
     put_subscription(data, subscription)
   end
 
+  defp deliver_subscription_message(
+         %Subscription{
+           owner: owner,
+           delivery: {:messages, kind, handle}
+         } = subscription,
+         %S7.Cyclic.Event{} = event
+       )
+       when kind == :cyclic do
+    send(owner, {:s7, handle.reference, event})
+    subscription
+  end
+
+  defp deliver_subscription_message(
+         %Subscription{owner: owner, delivery: {:messages, :alarm, handle}} = subscription,
+         %S7.Alarm.Event{} = event
+       ) do
+    send(owner, {:s7, handle.reference, event})
+    subscription
+  end
+
+  defp deliver_subscription_message(
+         %Subscription{owner: owner, delivery: {:messages, kind, handle}} = subscription,
+         %UserData{} = message
+       ) do
+    case decode_subscription_message(kind, handle, message) do
+      {:ok, event} ->
+        send(owner, {:s7, handle.reference, event})
+        subscription
+
+      {:error, %Error{} = error} ->
+        send(owner, {:s7, handle.reference, {:error, error}})
+        %{subscription | error: error}
+    end
+  end
+
+  defp decode_subscription_message(kind, handle, message) do
+    case kind do
+      :cyclic -> S7.Protocol.Cyclic.decode_indication(message, handle, :cyclic_event)
+      :alarm -> S7.Protocol.Alarm.decode_indication(message, :alarm_event)
+    end
+  rescue
+    _exception ->
+      {:error,
+       Error.new(:client, subscription_operation(kind), :malformed_response,
+         details: %{decoder: kind}
+       )}
+  catch
+    _kind, _reason ->
+      {:error,
+       Error.new(:client, subscription_operation(kind), :malformed_response,
+         details: %{decoder: kind}
+       )}
+  end
+
   defp put_subscription(data, subscription) do
     registry = data.subscription_registry
     entries = Map.put(registry.entries, subscription.reference, subscription)
@@ -2301,12 +2459,7 @@ defmodule S7.Connection do
     data = fail_exclusive_owner(data, error)
 
     Enum.each(data.subscription_registry.entries, fn {_reference, subscription} ->
-      if subscription.waiter do
-        :gen_statem.reply(
-          subscription.waiter,
-          {:error, with_operation(error, :next_userdata)}
-        )
-      end
+      fail_subscription(subscription, error)
 
       cancel_timer(subscription.timer)
       Process.demonitor(subscription.monitor, [:flush])
@@ -2315,6 +2468,27 @@ defmodule S7.Connection do
     registry = %{data.subscription_registry | entries: %{}, monitor_index: %{}}
     %{data | subscription_registry: registry}
   end
+
+  defp fail_subscription(%Subscription{waiter: waiter}, error) when not is_nil(waiter) do
+    :gen_statem.reply(waiter, {:error, with_operation(error, :next_userdata)})
+  end
+
+  defp fail_subscription(%Subscription{error: %Error{}}, _error), do: :ok
+
+  defp fail_subscription(
+         %Subscription{owner: owner, delivery: {:messages, kind, handle}},
+         error
+       ) do
+    send(
+      owner,
+      {:s7, handle.reference, {:error, with_operation(error, subscription_operation(kind))}}
+    )
+  end
+
+  defp fail_subscription(_subscription, _error), do: :ok
+
+  defp subscription_operation(:cyclic), do: :cyclic_event
+  defp subscription_operation(:alarm), do: :alarm_event
 
   defp fail_exclusive_owner(data, error) do
     if data.exclusive && data.exclusive.receive_from do
@@ -3749,6 +3923,11 @@ defmodule S7.Connection do
 
   defp operation_name({:rebind_userdata_subscription, _subscription, _filter}),
     do: :next_userdata
+
+  defp operation_name(
+         {:activate_userdata_subscription, _subscription, _filter, _delivery, _initial}
+       ),
+       do: :subscribe_userdata
 
   defp operation_name({:next_userdata, _subscription, _timeout}), do: :next_userdata
 
