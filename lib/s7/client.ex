@@ -7,7 +7,23 @@ defmodule S7.Client do
   Communication negotiation.
   """
 
-  alias S7.{Address, Connection, CPInfo, CPUInfo, Data, Error, OrderCode, PLCStatus, Result, SZL}
+  alias S7.{
+    Address,
+    Block,
+    BlockEntry,
+    BlockInfo,
+    BlockInventory,
+    Connection,
+    CPInfo,
+    CPUInfo,
+    Data,
+    Error,
+    OrderCode,
+    PLCStatus,
+    Result,
+    SZL
+  }
+
   alias S7.SZL.Metadata
 
   @opaque t :: GenServer.server()
@@ -215,6 +231,49 @@ defmodule S7.Client do
   def plc_status(client, opts \\ []) do
     with {:ok, szl} <- read_szl_operation(client, 0x0424, 0, opts, :plc_status) do
       Metadata.plc_status(szl)
+    end
+  end
+
+  @doc """
+  Returns the number of blocks in each directory type advertised by the PLC.
+
+  Unknown block type codes are retained in `S7.BlockInventory.counts`.
+  """
+  @spec block_counts(t()) :: {:ok, BlockInventory.t()} | {:error, Error.t()}
+  def block_counts(client), do: call(fn -> Connection.block_counts(client) end, :block_counts)
+
+  @doc """
+  Lists block identities, flags, and source languages for one block type.
+
+  Large directories are assembled from bounded userdata fragments. Options are
+  `:max_bytes` and `:max_fragments`.
+  """
+  @spec list_blocks(t(), Block.known_type(), keyword()) ::
+          {:ok, [BlockEntry.t()]} | {:error, Error.t()}
+  def list_blocks(client, type, opts \\ []) do
+    with {:ok, type} <- Block.validate_request_type(type, :list_blocks),
+         {:ok, limits} <- Block.validate_list_options(opts, :list_blocks) do
+      call(fn -> Connection.list_blocks(client, type, limits) end, :list_blocks)
+    end
+  end
+
+  @doc """
+  Reads detailed metadata for one PLC block.
+
+  Accepts either a `%S7.Block{}` or a block type and number.
+  """
+  @spec block_info(t(), Block.t()) :: {:ok, BlockInfo.t()} | {:error, Error.t()}
+  def block_info(client, %Block{} = block) do
+    with {:ok, block} <- Block.validate(block, :block_info) do
+      call(fn -> Connection.block_info(client, block) end, :block_info)
+    end
+  end
+
+  @spec block_info(t(), Block.known_type(), 0..0xFFFF) ::
+          {:ok, BlockInfo.t()} | {:error, Error.t()}
+  def block_info(client, type, number) do
+    with {:ok, block} <- Block.normalize(type, number, :block_info) do
+      call(fn -> Connection.block_info(client, block) end, :block_info)
     end
   end
 

@@ -1,7 +1,7 @@
 defmodule S7.Test.MockPLC do
   @moduledoc false
 
-  alias S7.Connection
+  alias S7.{Block, Connection}
   alias S7.Protocol.{DataItem, Item, PDU, SetupCommunication, UserData}
   alias S7.Protocol.UserData.{Parameter, Payload}
   alias S7.Transport.{COTP, TPKT}
@@ -55,7 +55,9 @@ defmodule S7.Test.MockPLC do
       read_fault: Keyword.get(opts, :read_fault),
       userdata_fault: Keyword.get(opts, :userdata_fault),
       szl_fault: Keyword.get(opts, :szl_fault),
+      block_fault: Keyword.get(opts, :block_fault),
       szl_pending: nil,
+      block_pending: nil,
       deferred_reads: [],
       client_reference: nil,
       server_reference: 1,
@@ -336,6 +338,112 @@ defmodule S7.Test.MockPLC do
   end
 
   defp handle_userdata(
+         %{block_pending: %{sequence: sequence}} = state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{
+             method: 0x12,
+             type: :request,
+             function_group: :blocks,
+             subfunction: 2,
+             sequence: sequence
+           },
+           payload: %Payload{return_code: 0x0A, transport_size: 0, data: <<>>}
+         }
+       ) do
+    continue_block_list(state, request_pdu)
+  end
+
+  defp handle_userdata(
+         %{block_fault: :malformed_geometry} = state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{type: :request, function_group: :blocks, subfunction: 2}
+         }
+       ) do
+    send_block_response(%{state | block_fault: nil}, request_pdu, 2, <<0, 1, 5>>)
+  end
+
+  defp handle_userdata(
+         state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{type: :request, function_group: :blocks, subfunction: 1}
+         }
+       ) do
+    data =
+      <<0x3038::16, 1::16, 0x3045::16, 1::16, 0x3043::16, 0::16, 0x3041::16, 2::16, 0x3042::16,
+        8::16, 0x3044::16, 77::16, 0x3046::16, 15::16>>
+
+    send_block_response(state, request_pdu, 1, data)
+  end
+
+  defp handle_userdata(
+         state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{type: :request, function_group: :blocks, subfunction: 2},
+           payload: %Payload{data: <<type_code::unsigned-big-16>>}
+         }
+       ) do
+    type = Block.decode_type(type_code)
+
+    records =
+      state.options
+      |> Keyword.get(:block_entries, default_block_entries())
+      |> Map.get(type, [])
+      |> Enum.map(fn {number, flags, language} -> <<number::16, flags, language>> end)
+
+    chunk_size = Keyword.get(state.options, :block_fragment_entries, max(length(records), 1))
+    chunks = records |> Enum.chunk_every(chunk_size) |> Enum.map(&IO.iodata_to_binary/1)
+    chunks = if chunks == [], do: [<<>>], else: chunks
+    [chunk | remaining] = chunks
+    sequence = 1
+    data_unit_reference = 0xE1
+
+    state =
+      if remaining == [] do
+        %{state | block_pending: nil}
+      else
+        %{
+          state
+          | block_pending: %{
+              chunks: remaining,
+              sequence: sequence,
+              data_unit_reference: data_unit_reference
+            }
+        }
+      end
+
+    send_block_response(state, request_pdu, 2, chunk,
+      sequence: sequence,
+      data_unit_reference: data_unit_reference,
+      more?: remaining != []
+    )
+  end
+
+  defp handle_userdata(
+         state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{type: :request, function_group: :blocks, subfunction: 3},
+           payload: %Payload{data: <<0x3041::16, "00001", "A">>}
+         }
+       ) do
+    send_block_response(state, request_pdu, 3, block_info_data())
+  end
+
+  defp handle_userdata(
+         state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{type: :request, function_group: :blocks, subfunction: 3}
+         }
+       ) do
+    send_block_response(state, request_pdu, 3, <<>>, error_code: 0xD209)
+  end
+
+  defp handle_userdata(
          state,
          request_pdu,
          %UserData{
@@ -370,6 +478,56 @@ defmodule S7.Test.MockPLC do
 
   defp handle_userdata(state, request_pdu, request),
     do: send_userdata_response(state, request_pdu, request)
+
+  defp continue_block_list(
+         %{block_pending: %{chunks: [chunk | remaining]} = pending} = state,
+         request_pdu
+       ) do
+    state = %{
+      state
+      | block_pending: if(remaining == [], do: nil, else: %{pending | chunks: remaining})
+    }
+
+    send_block_response(state, request_pdu, 2, chunk,
+      sequence: pending.sequence,
+      data_unit_reference: pending.data_unit_reference,
+      more?: remaining != []
+    )
+  end
+
+  defp send_block_response(state, request_pdu, subfunction, data, opts \\ []) do
+    response = %UserData{
+      parameter: %Parameter{
+        method: 0x12,
+        type: :response,
+        function_group: :blocks,
+        subfunction: subfunction,
+        sequence: Keyword.get(opts, :sequence, 0),
+        data_unit_reference: Keyword.get(opts, :data_unit_reference, 0),
+        last_data_unit: if(Keyword.get(opts, :more?, false), do: 1, else: 0),
+        error_code: Keyword.get(opts, :error_code, 0)
+      },
+      payload: %Payload{transport_size: 9, data: data}
+    }
+
+    {:ok, response_pdu} = UserData.to_pdu(response, request_pdu.header.pdu_reference)
+    :ok = send_pdu(state, response_pdu)
+    state
+  end
+
+  defp default_block_entries do
+    %{
+      db: [{1, 0x22, 0x05}, {2, 0x22, 0x05}],
+      ob: [{1, 0x22, 0x01}],
+      sfc: Enum.map(0..9, &{&1, 0x42, 0x01})
+    }
+  end
+
+  defp block_info_data do
+    Base.decode16!(
+      "0100004A220070700101050A0001000000660000000304EF14B02D9701CB655011FC001400000000000A53494D41544943004945435F5443000043545500000000001000798C0000000000000000"
+    )
+  end
 
   defp start_szl_response(state, request_pdu, id, index) do
     case Map.fetch(szl_data(state), {id, index}) do

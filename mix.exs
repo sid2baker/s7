@@ -117,8 +117,22 @@ defmodule S7.MixProject do
         Project: ["CHANGELOG.md", "SECURITY.md"]
       ],
       groups_for_modules: [
-        "Public API": [S7, S7.Client, S7.Address, S7.Data, S7.Error, S7.Result, S7.Telemetry],
+        "Public API": [
+          S7,
+          S7.Client,
+          S7.Address,
+          S7.Block,
+          S7.BlockEntry,
+          S7.BlockInfo,
+          S7.BlockInventory,
+          S7.Data,
+          S7.Error,
+          S7.Result,
+          S7.SZL,
+          S7.Telemetry
+        ],
         "S7 Protocol": [
+          S7.Protocol.Blocks,
           S7.Protocol.DataItem,
           S7.Protocol.Header,
           S7.Protocol.Item,
@@ -126,6 +140,8 @@ defmodule S7.MixProject do
           S7.Protocol.PDUPlanner,
           S7.Protocol.ReadVar,
           S7.Protocol.SetupCommunication,
+          S7.Protocol.SZL,
+          S7.Protocol.UserData,
           S7.Protocol.WriteVar
         ],
         Transport: [

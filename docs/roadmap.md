@@ -33,7 +33,7 @@ The exact scope and evidence rules are defined in
 | 13 | Remaining S7ANY areas and value representations | Complete |
 | 14 | Runtime COTP DR/DC shutdown | Complete |
 | 15 | Exclusive, bidirectional transactions and bounded push routing | Complete |
-| 16 | Block inventory and block information | Planned |
+| 16 | Block inventory and block information | Complete |
 | 17 | Clock and protected-session services | Planned |
 | 18 | Bounded block upload and block-image parsing | Planned |
 | 19 | Opt-in block download, replacement, and deletion | Planned |

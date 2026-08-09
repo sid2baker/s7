@@ -5,7 +5,17 @@
     observability: "S7.Telemetry",
     protocol: ["S7.Protocol", "S7.Protocol.*"],
     transport: "S7.Transport.*",
-    model: ["S7.Address", "S7.Data", "S7.Error", "S7.Result", "S7.TSAP"]
+    model: [
+      "S7.Address",
+      "S7.Block",
+      "S7.BlockEntry",
+      "S7.BlockInfo",
+      "S7.BlockInventory",
+      "S7.Data",
+      "S7.Error",
+      "S7.Result",
+      "S7.TSAP"
+    ]
   ],
   deps: [
     forbidden: [
@@ -35,7 +45,7 @@
     forbidden: [
       {"S7.Protocol*", [":gen_tcp.*", ":gen_statem.*", "GenServer.*"]},
       {"S7.Transport.*", [":gen_tcp.*", ":gen_statem.*", "GenServer.*"]},
-      {["S7.Address", "S7.Data", "S7.Error", "S7.Result", "S7.TSAP"],
+      {["S7.Address", "S7.Block*", "S7.Data", "S7.Error", "S7.Result", "S7.TSAP"],
        [":gen_tcp.*", ":gen_statem.*", "GenServer.*"]}
     ]
   ]

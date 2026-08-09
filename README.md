@@ -1,9 +1,9 @@
 # S7
 
 An Elixir client for classic S7comm over RFC 1006. The protocol surface includes COTP connection
-setup, S7 Setup Communication, single- or multi-item Read Var and Write Var jobs, and bounded
-userdata-backed System Status List (SZL/SSL) reads. One S7ANY item may represent either a scalar
-or a fixed-count range.
+setup, S7 Setup Communication, single- or multi-item Read Var and Write Var jobs, bounded
+userdata-backed System Status List (SZL/SSL) reads, and classic block directory and metadata
+queries. One S7ANY item may represent either a scalar or a fixed-count range.
 
 The implementation keeps protocol codecs pure and gives the TCP socket to one `:gen_statem`
 process. Its `active: :once` request engine correlates responses by PDU reference, bounds queued
@@ -16,9 +16,10 @@ reads and writes. CI also builds a server from a pinned Snap7 revision and verif
 splitting and read-after-write for every supported area and value type. PLCSIM Advanced and
 physical Siemens hardware remain external release gates, so `0.1.0` remains a release candidate.
 
-S7comm-plus, symbolic addressing, optimized/protected DB access, block transfer, PLC control,
-alarms, and programmer diagnostics are not supported. The common classic userdata envelope is
-implemented for SZL requests and safe handling of unsolicited indications.
+S7comm-plus, symbolic addressing, optimized/protected DB access, block upload/download, PLC
+control, alarms, and programmer diagnostics are not supported. The common classic userdata
+envelope is implemented for SZL and block-directory requests plus safe handling of unsolicited
+indications.
 
 ## Usage
 
@@ -33,6 +34,7 @@ implemented for SZL requests and safe handling of unsolicited indications.
 :ok = S7.Client.write(client, "DB1.DBW0", current + 1)
 {:ok, raw} = S7.Client.read_raw(client, "DB1.DBW0")
 {:ok, %S7.OrderCode{code: order_code}} = S7.Client.order_code(client)
+{:ok, dbs} = S7.Client.list_blocks(client, :db)
 :ok = S7.Client.close(client)
 ```
 
@@ -201,13 +203,37 @@ The order-code, component-identification, communication-limit, and status helper
 Siemens layouts. Every typed result retains either its source record or the complete component
 map; use `read_szl/4` for CPU-specific and firmware-specific records.
 
+## Block Directory
+
+Classic userdata block services expose inventory and metadata without transferring executable
+block images:
+
+```elixir
+{:ok, %S7.BlockInventory{counts: %{db: db_count}}} =
+  S7.Client.block_counts(client)
+
+{:ok, [%S7.BlockEntry{} | _] = dbs} =
+  S7.Client.list_blocks(client, :db,
+    max_bytes: 1_048_576,
+    max_fragments: 64
+  )
+
+{:ok, %S7.BlockInfo{name: name, mc7_size: size}} =
+  S7.Client.block_info(client, :db, 1)
+```
+
+`list_blocks/3` assembles the PLC's continuation sequence under aggregate byte and fragment
+limits. Directory entries and detailed metadata retain raw bytes and preserve unknown language,
+type, and security codes. Block upload and download use different stateful Job services and are
+not aliases for Read Var, Write Var, or these directory calls.
+
 ## Architecture
 
 ```text
 S7.Client
   -> S7.Connection (:gen_statem, active-once :gen_tcp owner)
     -> bounded queue / PDU-reference correlation / request timers / reconnect backoff
-    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL}
+    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL, Blocks}
       -> S7.Protocol.PDU / Header / Item / DataItem
         -> S7.Transport.COTP
           -> S7.Transport.TPKT
@@ -254,7 +280,7 @@ The script uses the ignored local Snap7 reference when present and otherwise che
 revision into a temporary directory.
 
 With Docker available, capture the same exchange and require tshark to identify Setup, Read Var,
-and Write Var without malformed packets:
+Write Var, SZL, and block-directory services without malformed packets:
 
 ```bash
 bash scripts/run_snap7_packet_check.sh

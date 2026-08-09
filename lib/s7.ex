@@ -5,9 +5,9 @@ defmodule S7 do
   The public API lives in `S7.Client`. Protocol and transport modules are pure
   binary codecs and can be used independently for diagnostics and testing.
 
-  S7comm-plus, symbolic addressing, block operations, PLC control, alarms,
-  and programmer diagnostics are outside the current scope. The classic
-  userdata envelope currently supports bounded SZL reads and typed CPU
-  metadata helpers.
+  S7comm-plus, symbolic addressing, block transfer, PLC control, alarms, and
+  programmer diagnostics are outside the current scope. The classic userdata
+  envelope currently supports bounded SZL reads, typed CPU metadata, and block
+  directory and information queries.
   """
 end

@@ -55,6 +55,9 @@ grep -q "Setup communication" <<<"${DECODED}"
 grep -q "Function:\[Read Var\]" <<<"${DECODED}"
 grep -q "Function:\[Write Var\]" <<<"${DECODED}"
 grep -q "Read SZL" <<<"${DECODED}"
+grep -Fq "[Block functions] -> [List blocks]" <<<"${DECODED}"
+grep -Fq "[Block functions] -> [List blocks of type]" <<<"${DECODED}"
+grep -Fq "[Block functions] -> [Get block info]" <<<"${DECODED}"
 test -z "${MALFORMED}"
 
 if [[ -n "${S7_CAPTURE_FILE:-}" ]]; then

@@ -72,6 +72,12 @@ prevents later work from sharing a connection with an abandoned server-side
 userdata transaction. A PLC-reported SZL parameter error is complete and does
 not invalidate the session.
 
+Block-list continuation follows the same correlation and connection rules.
+Changed data-unit identity, malformed four-byte entry geometry, fragment-count
+overflow, or aggregate-size overflow invalidates the session. Block counts and
+block information are fixed-size responses and reject continuation. A complete
+PLC-reported directory error leaves the session usable.
+
 Exclusive transactions are never replayed. A transaction has an overall
 deadline, a per-request timeout, aggregate message and byte limits, and a
 bounded inbox for PLC-initiated Jobs. An invalid owner/token or local option

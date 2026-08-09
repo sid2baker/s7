@@ -77,7 +77,7 @@ by the PLC during an exclusive transaction.
 | --- | ---: | --- | --- |
 | Programmer commands | `0x01` | Block/variable status, stacks, job inspection, supported maintenance commands | Planned, evidence-gated |
 | Cyclic services | `0x02` | Subscribe, transfer, change-driven transfer, modify, unsubscribe | Planned |
-| Block functions | `0x03` | List blocks, list by type, block information | Planned |
+| Block functions | `0x03` | List blocks, list by type, block information | Implemented; device qualification pending |
 | CPU functions | `0x04` | Read SZL, message service, diagnostics, alarm query/ack/indications | SZL implemented; remainder planned |
 | Security | `0x05` | Session password login/logout | Planned |
 | PBC BSEND | `0x06` | Raw preservation only | Adapter scope |

@@ -3,7 +3,20 @@ defmodule S7.Snap7ClientInteropTest do
 
   @moduletag :external
 
-  alias S7.{Address, Client, CPInfo, CPUInfo, OrderCode, PLCStatus, Result, SZL}
+  alias S7.{
+    Address,
+    Block,
+    BlockEntry,
+    BlockInfo,
+    BlockInventory,
+    Client,
+    CPInfo,
+    CPUInfo,
+    OrderCode,
+    PLCStatus,
+    Result,
+    SZL
+  }
 
   setup do
     host = System.fetch_env!("S7_TEST_HOST")
@@ -95,5 +108,27 @@ defmodule S7.Snap7ClientInteropTest do
     assert max_pdu > 0
     assert {:ok, %PLCStatus{state: state}} = Client.plc_status(client)
     assert state in [:run, :stop, :unknown]
+  end
+
+  test "reads the classic block directory and DB metadata", %{client: client} do
+    assert {:ok, %BlockInventory{counts: %{db: 1}}} = Client.block_counts(client)
+
+    assert {:ok,
+            [
+              %BlockEntry{
+                block: %Block{type: :db, number: 1},
+                language: :db,
+                flags: 0x22
+              }
+            ]} = Client.list_blocks(client, :db)
+
+    assert {:ok,
+            %BlockInfo{
+              block: %Block{type: :db, number: 1},
+              language: :db,
+              linked?: true,
+              mc7_size: 512,
+              load_memory_size: 604
+            }} = Client.block_info(client, :db, 1)
   end
 end

@@ -76,6 +76,7 @@ defmodule S7.ClientIntegrationTest do
 
     silent_server = start_server(disconnect_behavior: :silence)
     assert {:ok, silent_client} = Client.connect({127, 0, 0, 1}, port: silent_server.port)
+    monitor = Process.monitor(silent_client)
 
     started_at = System.monotonic_time(:millisecond)
     assert Client.close(silent_client, timeout: 20) == :ok
@@ -83,18 +84,19 @@ defmodule S7.ClientIntegrationTest do
 
     assert elapsed >= 15
     assert elapsed < 500
-    refute Process.alive?(silent_client)
+    assert_normal_exit(silent_client, monitor)
   end
 
   test "falls back to socket close for invalid COTP close responses" do
     for behavior <- [:invalid_confirm, :error] do
       server = start_server(disconnect_behavior: behavior)
       assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+      monitor = Process.monitor(client)
 
       assert Client.close(client, timeout: 100) == :ok
       assert_receive {:mock_plc_disconnect_request, %DisconnectRequest{}}, 500
       assert_receive :mock_plc_closed, 500
-      refute Process.alive?(client)
+      assert_normal_exit(client, monitor)
     end
   end
 
@@ -465,10 +467,11 @@ defmodule S7.ClientIntegrationTest do
     assert {:ok, client} =
              Client.start_link(host: {127, 0, 0, 1}, port: server.port, name: name)
 
+    monitor = Process.monitor(client)
     assert %{state: :ready} = Client.info(name)
     assert Client.read(name, "DB1.DBW0") == {:ok, 1234}
     assert Client.close(name) == :ok
-    refute Process.alive?(client)
+    assert_normal_exit(client, monitor)
   end
 
   test "correlates concurrent responses that arrive out of order" do
@@ -529,6 +532,7 @@ defmodule S7.ClientIntegrationTest do
   test "drains accepted work and rejects new work before closing" do
     server = start_server(read_response_delay: 100, notify_requests: true)
     assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port, timeout: 500)
+    monitor = Process.monitor(client)
 
     read = Task.async(fn -> Client.read(client, "DB1.DBW0") end)
     assert_receive {:mock_plc_request, :read, _reference}, 500
@@ -541,12 +545,13 @@ defmodule S7.ClientIntegrationTest do
 
     assert Task.await(read) == {:ok, 1234}
     assert Task.await(close) == :ok
-    refute Process.alive?(client)
+    assert_normal_exit(client, monitor)
   end
 
   test "bounds drain time and returns structured errors to accepted work" do
     server = start_server(read_fault: :silence, notify_requests: true)
     assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port, timeout: 1_000)
+    monitor = Process.monitor(client)
 
     read = Task.async(fn -> Client.read(client, "DB1.DBW0") end)
     assert_receive {:mock_plc_request, :read, _reference}, 500
@@ -555,7 +560,7 @@ defmodule S7.ClientIntegrationTest do
              Client.close(client, mode: :drain, timeout: 20)
 
     assert {:error, %Error{operation: :read, reason: :drain_timeout}} = Task.await(read)
-    refute Process.alive?(client)
+    assert_normal_exit(client, monitor)
   end
 
   test "validates close options without disturbing the session" do
@@ -965,6 +970,10 @@ defmodule S7.ClientIntegrationTest do
   end
 
   defp await_state(client, _expected, 0), do: Client.info(client)
+
+  defp assert_normal_exit(client, monitor) do
+    assert_receive {:DOWN, ^monitor, :process, ^client, :normal}, 1_000
+  end
 
   defp reserve_port do
     {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false])

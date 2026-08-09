@@ -15,6 +15,10 @@ cross-checked by the pinned Snap7 interoperability suite. The response contains 
 but internally consistent SZL record so geometry checks remain deterministic. Fixture assertions
 always check both directions:
 
+The block directory fixtures are S7 PDU bytes from frames 87-100 and 135-136 of the pinned
+`tia_s300_goOnline.pcapng` capture. They include count-by-type, DB listing, a real two-fragment SFC
+listing, and a successful DB1 metadata response.
+
 ```text
 fixture -> decode -> expected struct
 expected struct -> encode -> fixture

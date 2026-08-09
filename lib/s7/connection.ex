@@ -22,6 +22,7 @@ defmodule S7.Connection do
     SubscriptionRegistry
   }
 
+  alias S7.Protocol.Blocks, as: BlocksProtocol
   alias S7.Protocol.{PDU, PDUPlanner, ReadVar, SetupCommunication, UserData, WriteVar}
   alias S7.Protocol.SZL, as: SZLProtocol
   alias S7.Transport.{COTP, TPKT}
@@ -179,6 +180,25 @@ defmodule S7.Connection do
           {:ok, S7.SZL.t()} | {:error, Error.t()}
   def read_szl(connection, id, index, limits, operation) do
     :gen_statem.call(connection, {:read_szl, id, index, limits, operation}, :infinity)
+  end
+
+  @doc false
+  @spec block_counts(pid()) :: {:ok, S7.BlockInventory.t()} | {:error, Error.t()}
+  def block_counts(connection) do
+    :gen_statem.call(connection, {:blocks, :counts}, :infinity)
+  end
+
+  @doc false
+  @spec list_blocks(pid(), S7.Block.known_type(), S7.Block.limits()) ::
+          {:ok, [S7.BlockEntry.t()]} | {:error, Error.t()}
+  def list_blocks(connection, type, limits) do
+    :gen_statem.call(connection, {:blocks, :list, type, limits}, :infinity)
+  end
+
+  @doc false
+  @spec block_info(pid(), S7.Block.t()) :: {:ok, S7.BlockInfo.t()} | {:error, Error.t()}
+  def block_info(connection, block) do
+    :gen_statem.call(connection, {:blocks, :info, block}, :infinity)
   end
 
   @doc false
@@ -387,6 +407,20 @@ defmodule S7.Connection do
         data
       ),
       do: submit_request(from, operation, data)
+
+  def handle_event({:call, from}, {:blocks, :counts} = operation, :ready, data),
+    do: submit_request(from, operation, data)
+
+  def handle_event(
+        {:call, from},
+        {:blocks, :list, _type, _limits} = operation,
+        :ready,
+        data
+      ),
+      do: submit_request(from, operation, data)
+
+  def handle_event({:call, from}, {:blocks, :info, _block} = operation, :ready, data),
+    do: submit_request(from, operation, data)
 
   def handle_event(
         {:call, from},
@@ -2182,6 +2216,29 @@ defmodule S7.Connection do
     {:error, Error.new(:client, operation, :invalid_szl_request)}
   end
 
+  defp build_request(from, {:blocks, :counts}, _data) do
+    build_blocks_request(from, BlocksProtocol.start_counts(), :block_counts)
+  end
+
+  defp build_request(from, {:blocks, :list, type, limits}, _data) do
+    build_blocks_request(from, BlocksProtocol.start_list(type, limits), :list_blocks)
+  end
+
+  defp build_request(from, {:blocks, :info, block}, _data) do
+    build_blocks_request(from, BlocksProtocol.start_info(block), :block_info)
+  end
+
+  defp build_blocks_request(from, result, operation) do
+    case result do
+      {:ok, message, transaction} ->
+        request = new_request(from, :blocks, operation, [[message]])
+        {:ok, %{request | context: transaction}}
+
+      {:error, %Error{} = error} ->
+        {:error, %{error | operation: operation}}
+    end
+  end
+
   defp plan_read(addresses, data) do
     PDUPlanner.plan_read(addresses, data.pdu_size, maximum_items: data.max_items_per_pdu)
   end
@@ -2342,6 +2399,9 @@ defmodule S7.Connection do
     do: UserData.to_pdu(message, reference)
 
   defp encode_batch(%Request{kind: :szl}, [%UserData{} = message], reference),
+    do: UserData.to_pdu(message, reference)
+
+  defp encode_batch(%Request{kind: :blocks}, [%UserData{} = message], reference),
     do: UserData.to_pdu(message, reference)
 
   defp encode_batch(%Request{kind: :transaction}, [%PDU{} = pdu], reference) do
@@ -2595,6 +2655,28 @@ defmodule S7.Connection do
 
   defp decode_batch_response(
          %Request{
+           kind: :blocks,
+           current_batch: [%UserData{} = message],
+           context: transaction
+         } = request,
+         pdu
+       ) do
+    with {:ok, response} <- UserData.decode_response(pdu, message, request.reference) do
+      case BlocksProtocol.consume(response, transaction, request.operation) do
+        {:ok, result} ->
+          {:ok, [{:complete, result}]}
+
+        {:continue, next_message, transaction} ->
+          {:ok, [{:continue, next_message, transaction}]}
+
+        {:error, %Error{} = error} ->
+          {:error, error}
+      end
+    end
+  end
+
+  defp decode_batch_response(
+         %Request{
            kind: :szl,
            current_batch: [%UserData{} = message],
            context: transaction
@@ -2646,16 +2728,18 @@ defmodule S7.Connection do
     data
   end
 
-  defp handle_active_batch_results(data, %Request{kind: :szl} = request, [
+  defp handle_active_batch_results(data, %Request{kind: kind} = request, [
          {:complete, szl}
-       ]) do
+       ])
+       when kind in [:szl, :blocks] do
     finish_request(request, {:ok, szl})
     data
   end
 
-  defp handle_active_batch_results(data, %Request{kind: :szl} = request, [
+  defp handle_active_batch_results(data, %Request{kind: kind} = request, [
          {:continue, message, transaction}
-       ]) do
+       ])
+       when kind in [:szl, :blocks] do
     request = %{
       request
       | reference: nil,
@@ -2695,7 +2779,7 @@ defmodule S7.Connection do
   end
 
   defp request_failure_reply(%Request{kind: kind, operation: operation}, error, _send_state)
-       when kind in [:read, :write, :userdata, :szl, :transaction],
+       when kind in [:read, :write, :userdata, :szl, :blocks, :transaction],
        do: {:error, with_operation(error, operation)}
 
   defp request_failure_reply(%Request{kind: :read_multi} = request, error, send_state) do
@@ -3268,6 +3352,10 @@ defmodule S7.Connection do
 
   defp operation_name({:read_szl, _id, _index, _limits, operation}) when is_atom(operation),
     do: operation
+
+  defp operation_name({:blocks, :counts}), do: :block_counts
+  defp operation_name({:blocks, :list, _type, _limits}), do: :list_blocks
+  defp operation_name({:blocks, :info, _block}), do: :block_info
 
   defp operation_name({:begin_transaction, operation, _opts}) when is_atom(operation),
     do: operation

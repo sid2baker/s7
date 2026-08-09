@@ -31,11 +31,12 @@ The complete scope and risk policy are defined in
 | Concurrent jobs | Implemented, defaults to one | Bounded by negotiation |
 | Raw SZL reads and bounded continuation | Implemented | Supported after device qualification |
 | Order code, CPU/CP info, and PLC status | Implemented | Supported after device qualification |
+| Block counts, list by type, and block information | Implemented with bounded continuation | Supported after device qualification |
 | Common userdata envelope and request routing | Implemented | Supported |
 | Exclusive bidirectional service transactions | Implemented, internal typed-service boundary | Supported |
 | Bounded unsolicited userdata routing | Implemented, internal typed-service boundary | Supported |
 | Userdata diagnostics/services | Not implemented | Post-1.0 |
-| Block upload/download | Not implemented | Separate opt-in surface |
+| Block upload/download | Not implemented; distinct from directory and Read/Write Var services | Separate opt-in surface |
 | PLC control | Not implemented | Separate opt-in surface |
 | Alarms | Not implemented | Post-1.0 |
 
@@ -81,6 +82,13 @@ helpers cover Siemens-documented module/component records plus the established
 Snap7 CP-limit and operating-status layouts; raw source bytes remain available
 for forward compatibility. Component metadata recognizes the packed rack and
 master/reserve index used by S7-400H CPUs and retains each full 16-bit index.
+
+Block inventory returns all advertised type counts, preserving unknown wire
+types. Lists by type are assembled under caller-configurable aggregate byte and
+fragment bounds. Detailed block information validates the requested identity,
+fixed response geometry, and Siemens timestamps while preserving its complete
+raw payload. These read-only userdata services do not implement block image
+upload, download, replacement, or deletion.
 
 ## PLC Requirements
 
