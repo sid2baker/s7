@@ -272,6 +272,23 @@ defmodule S7.Connection do
   end
 
   @doc false
+  @spec rebind_userdata_subscription(pid(), reference(), Subscription.filter()) ::
+          :ok | {:error, Error.t()}
+  def rebind_userdata_subscription(connection, subscription, filter) do
+    :gen_statem.call(
+      connection,
+      {:rebind_userdata_subscription, subscription, filter},
+      :infinity
+    )
+  end
+
+  @doc false
+  @spec validate_userdata_subscription(pid(), reference()) :: :ok | {:error, Error.t()}
+  def validate_userdata_subscription(connection, subscription) do
+    :gen_statem.call(connection, {:validate_userdata_subscription, subscription}, :infinity)
+  end
+
+  @doc false
   @spec next_userdata(pid(), reference(), pos_integer()) ::
           {:ok, UserData.t()} | {:error, Error.t()}
   def next_userdata(connection, subscription, timeout \\ @default_timeout) do
@@ -536,6 +553,19 @@ defmodule S7.Connection do
     next_userdata_event(from, subscription, timeout, data)
   end
 
+  def handle_event(
+        {:call, from},
+        {:rebind_userdata_subscription, subscription, filter},
+        :ready,
+        data
+      ) do
+    rebind_userdata_subscription_owner(from, subscription, filter, data)
+  end
+
+  def handle_event({:call, from}, {:validate_userdata_subscription, subscription}, :ready, data) do
+    validate_userdata_subscription_owner(from, subscription, data)
+  end
+
   def handle_event({:call, from}, {:unsubscribe_userdata, subscription}, :ready, data) do
     unsubscribe_userdata_owner(from, subscription, data)
   end
@@ -651,6 +681,9 @@ defmodule S7.Connection do
       when state in [:ready, :draining] do
     case handle_owner_down(data, monitor) do
       {:exclusive, error, data} ->
+        disconnect_with_error(state, data, error)
+
+      {:session_bound, error, data} ->
         disconnect_with_error(state, data, error)
 
       {:ok, data} ->
@@ -1847,7 +1880,7 @@ defmodule S7.Connection do
 
   defp subscribe_userdata_owner(from, filter, opts, data) do
     with {:ok, filter} <- validate_subscription_filter(filter),
-         {:ok, queue_limit} <- validate_subscription_options(opts),
+         {:ok, subscription_options} <- validate_subscription_options(opts),
          :ok <- ensure_subscription_capacity(data) do
       {owner, _tag} = from
       reference = make_ref()
@@ -1859,7 +1892,8 @@ defmodule S7.Connection do
         monitor: monitor,
         filter: filter,
         queue: :queue.new(),
-        queue_limit: queue_limit
+        queue_limit: subscription_options.queue_limit,
+        session_bound: subscription_options.session_bound
       }
 
       registry = data.subscription_registry
@@ -1945,24 +1979,54 @@ defmodule S7.Connection do
     do: subscription_error(:subscribe_userdata, :invalid_filter, %{type: type})
 
   defp validate_subscription_options(opts) when is_list(opts) do
-    if Keyword.keyword?(opts) and Enum.all?(Keyword.keys(opts), &(&1 == :queue_limit)) do
-      value = Keyword.get(opts, :queue_limit, @default_subscription_queue_limit)
+    allowed = [:queue_limit, :session_bound]
 
-      if is_integer(value) and value > 0 do
-        {:ok, value}
-      else
-        subscription_error(:subscribe_userdata, :invalid_option, %{
-          option: :queue_limit,
-          value: value
-        })
-      end
+    with true <- Keyword.keyword?(opts),
+         nil <- Enum.find(Keyword.keys(opts), &(&1 not in allowed)),
+         {:ok, queue_limit} <-
+           validate_positive_subscription_option(
+             opts,
+             :queue_limit,
+             @default_subscription_queue_limit
+           ),
+         {:ok, session_bound} <-
+           validate_boolean_subscription_option(opts, :session_bound, false) do
+      {:ok, %{queue_limit: queue_limit, session_bound: session_bound}}
     else
-      subscription_error(:subscribe_userdata, :invalid_options, %{options: opts})
+      false ->
+        subscription_error(:subscribe_userdata, :invalid_options, %{options: opts})
+
+      option when is_atom(option) ->
+        subscription_error(:subscribe_userdata, :invalid_option, %{
+          option: option,
+          value: Keyword.get(opts, option)
+        })
+
+      {:error, %Error{} = error} ->
+        {:error, error}
     end
   end
 
   defp validate_subscription_options(opts),
     do: subscription_error(:subscribe_userdata, :invalid_options, %{options: opts})
+
+  defp validate_positive_subscription_option(opts, option, default) do
+    value = Keyword.get(opts, option, default)
+
+    if is_integer(value) and value > 0,
+      do: {:ok, value},
+      else:
+        subscription_error(:subscribe_userdata, :invalid_option, %{option: option, value: value})
+  end
+
+  defp validate_boolean_subscription_option(opts, option, default) do
+    value = Keyword.get(opts, option, default)
+
+    if is_boolean(value),
+      do: {:ok, value},
+      else:
+        subscription_error(:subscribe_userdata, :invalid_option, %{option: option, value: value})
+  end
 
   defp ensure_subscription_capacity(data) do
     registry = data.subscription_registry
@@ -2018,6 +2082,51 @@ defmodule S7.Connection do
     {:keep_state, put_subscription(data, subscription)}
   end
 
+  defp rebind_userdata_subscription_owner(from, reference, filter, data) do
+    with {:ok, filter} <- validate_subscription_filter(filter),
+         {:ok, subscription} <- fetch_subscription(data, reference, from) do
+      subscription = rebind_subscription(subscription, filter)
+      data = put_subscription(data, subscription)
+
+      reply =
+        case subscription.error do
+          nil -> :ok
+          %Error{} = error -> {:error, error}
+        end
+
+      {:keep_state, data, [{:reply, from, reply}]}
+    else
+      {:error, %Error{} = error} ->
+        {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  defp rebind_subscription(subscription, filter) do
+    messages =
+      subscription.queue
+      |> :queue.to_list()
+      |> Enum.filter(fn message ->
+        subscription_matches?(%{subscription | filter: filter}, message)
+      end)
+
+    %{
+      subscription
+      | filter: filter,
+        queue: :queue.from_list(messages),
+        queued_count: length(messages)
+    }
+  end
+
+  defp validate_userdata_subscription_owner(from, reference, data) do
+    reply =
+      case fetch_subscription(data, reference, from) do
+        {:ok, _subscription} -> :ok
+        {:error, %Error{} = error} -> {:error, error}
+      end
+
+    {:keep_state_and_data, [{:reply, from, reply}]}
+  end
+
   defp unsubscribe_userdata_owner(from, reference, data) do
     case fetch_subscription(data, reference, from) do
       {:ok, subscription} ->
@@ -2061,7 +2170,22 @@ defmodule S7.Connection do
       end)
 
     if matches == 0, do: telemetry_unhandled_userdata(message, pdu)
-    data
+    {data, matches}
+  end
+
+  defp handle_userdata_indication(message, pdu, pdus, data) do
+    {data, matches} = route_userdata_indication(data, message, pdu)
+    continue_userdata_indication(matches, pdu, pdus, data)
+  end
+
+  defp continue_userdata_indication(matches, _pdu, pdus, data) when matches > 0,
+    do: handle_received_pdus(pdus, data)
+
+  defp continue_userdata_indication(0, pdu, pdus, data) do
+    case account_incoming_transaction_pdu(data, pdu) do
+      {:ok, data} -> handle_received_pdus(pdus, data)
+      {:error, %Error{} = error} -> {:disconnect, error, data}
+    end
   end
 
   defp subscription_matches?(%Subscription{filter: filter}, message) do
@@ -2198,18 +2322,29 @@ defmodule S7.Connection do
         {:ok, cancel_request(data, monitor)}
 
       {reference, index} ->
-        case Map.pop(registry.entries, reference) do
-          {nil, _subscriptions} ->
-            registry = %{registry | monitor_index: index}
-            {:ok, %{data | subscription_registry: registry}}
-
-          {%Subscription{} = subscription, subscriptions} ->
-            cancel_timer(subscription.timer)
-            registry = %{registry | entries: subscriptions, monitor_index: index}
-            {:ok, %{data | subscription_registry: registry}}
-        end
+        remove_owner_subscription(data, registry, reference, index)
     end
   end
+
+  defp remove_owner_subscription(data, registry, reference, index) do
+    case Map.pop(registry.entries, reference) do
+      {nil, _subscriptions} ->
+        registry = %{registry | monitor_index: index}
+        {:ok, %{data | subscription_registry: registry}}
+
+      {%Subscription{} = subscription, subscriptions} ->
+        cancel_timer(subscription.timer)
+        registry = %{registry | entries: subscriptions, monitor_index: index}
+        finish_owner_subscription(%{data | subscription_registry: registry}, subscription)
+    end
+  end
+
+  defp finish_owner_subscription(data, %Subscription{session_bound: true}) do
+    error = Error.new(:client, :cyclic_subscription, :subscription_owner_down)
+    {:session_bound, error, data}
+  end
+
+  defp finish_owner_subscription(data, %Subscription{}), do: {:ok, data}
 
   defp continue_after_owner_down(state, data) do
     case schedule_requests(data) do
@@ -2662,14 +2797,7 @@ defmodule S7.Connection do
        ) do
     case UserData.from_pdu(pdu) do
       {:ok, %UserData{parameter: %{type: :indication}} = message} ->
-        case account_incoming_transaction_pdu(data, pdu) do
-          {:ok, data} ->
-            data = route_userdata_indication(data, message, pdu)
-            handle_received_pdus(pdus, data)
-
-          {:error, %Error{} = error} ->
-            {:disconnect, error, data}
-        end
+        handle_userdata_indication(message, pdu, pdus, data)
 
       {:ok, _message} ->
         handle_correlatable_pdu(pdu, pdus, data)
@@ -3578,10 +3706,18 @@ defmodule S7.Connection do
        do: operation
 
   defp operation_name({operation, _value})
-       when operation in [:end_transaction, :unsubscribe_userdata],
+       when operation in [
+              :end_transaction,
+              :unsubscribe_userdata,
+              :validate_userdata_subscription
+            ],
        do: operation
 
   defp operation_name({:subscribe_userdata, _filter, _opts}), do: :subscribe_userdata
+
+  defp operation_name({:rebind_userdata_subscription, _subscription, _filter}),
+    do: :next_userdata
+
   defp operation_name({:next_userdata, _subscription, _timeout}), do: :next_userdata
 
   defp operation_name({operation, _address, _value}), do: operation

@@ -7,8 +7,9 @@ queries. Bounded classic block upload, PLC clock access, and classic session-pas
 authorization are also supported. Destructive block download, replacement, and deletion are
 available only through an explicit two-level opt-in, as are CPU stop/start, RAM-to-ROM copy, and
 memory compression. Capture-backed read-only programmer diagnostics and one-shot variable-status
-sampling are raw-first and bounded. One S7ANY item may represent either a scalar or a fixed-count
-range.
+sampling are raw-first and bounded. Typed fixed-cycle subscriptions and raw change-driven cyclic
+jobs use owner-bound, session-local handles with bounded pull queues. One S7ANY item may represent
+either a scalar or a fixed-count range.
 
 The implementation keeps protocol codecs pure and gives the TCP socket to one `:gen_statem`
 process. Its `active: :once` request engine correlates responses by PDU reference, bounds queued
@@ -23,8 +24,8 @@ physical Siemens hardware remain external release gates, so `0.1.0` remains a re
 
 S7comm-plus, symbolic addressing, optimized DB access, alarms, and destructive programmer
 commands are not supported. The common classic userdata envelope is implemented for SZL,
-block-directory, clock, protected-session, and evidence-backed read-only programmer jobs plus
-safe handling of unsolicited indications.
+block-directory, clock, protected-session, evidence-backed read-only programmer jobs, and bounded
+cyclic subscriptions.
 
 ## Usage
 
@@ -43,6 +44,10 @@ safe handling of unsolicited indications.
 {:ok, %S7.PLCClock{datetime: plc_time}} = S7.Client.read_clock(client)
 {:ok, %S7.VariableStatus{items: status_items}} =
   S7.Client.variable_status(client, ["MB0", "DB1.DBW0"])
+{:ok, cyclic} = S7.Client.subscribe_cyclic(client, ["DB1.DBW0"], interval: 1_000)
+{:ok, %S7.CyclicEvent{items: [%S7.CyclicEvent.Item{value: next_value}]}} =
+  S7.Client.next_cyclic(client, cyclic)
+:ok = S7.Client.unsubscribe_cyclic(client, cyclic)
 :ok = S7.Client.close(client)
 ```
 
@@ -350,13 +355,40 @@ jobs complete before login/logout and later jobs wait behind it. Authorization i
 logout or session loss and is never restored automatically after reconnect. This legacy exchange
 provides no encryption, integrity, or peer authentication; see [Security policy](SECURITY.md).
 
+## Cyclic Subscriptions
+
+Fixed-cycle subscriptions decode standard S7ANY values using the same address and value model as
+Read Var:
+
+```elixir
+{:ok, subscription} =
+  S7.Client.subscribe_cyclic(client, ["MW10", "DB1.DBD20"],
+    interval: 1_000,
+    queue_limit: 32
+  )
+
+initial_snapshot = subscription.initial
+{:ok, %S7.CyclicEvent{items: items}} = S7.Client.next_cyclic(client, subscription)
+:ok = S7.Client.unsubscribe_cyclic(client, subscription)
+```
+
+Intervals must be represented exactly by the classic 100 ms, 1 s, or 10 s wire bases; the client
+never rounds. `subscribe_cyclic_raw/4` additionally supports fixed and change-driven jobs using
+complete S7ANY or DBREAD specifications, and `modify_cyclic_raw/4` replaces a change-driven item
+set without changing its remote job ID. CPU-specific change records remain raw.
+
+The creating process owns the handle. Pull timeouts leave the remote job active. Queue overflow is
+terminal for event delivery but `unsubscribe_cyclic/3` still releases the PLC job. Owner death or
+an ambiguous setup, modification, or teardown invalidates the session; reconnect never restores a
+subscription, and handles from an earlier session are rejected.
+
 ## Architecture
 
 ```text
 S7.Client
   -> S7.Connection (:gen_statem, active-once :gen_tcp owner)
     -> bounded queue / PDU-reference correlation / request timers / reconnect backoff
-    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL, Blocks, BlockUpload, BlockDownload, PIService, Clock, Security}
+    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL, Blocks, BlockUpload, BlockDownload, PIService, Clock, Security, Programmer, Cyclic}
       -> S7.Protocol.PDU / Header / Item / DataItem
         -> S7.Transport.COTP
           -> S7.Transport.TPKT
@@ -403,8 +435,8 @@ The script uses the ignored local Snap7 reference when present and otherwise che
 revision into a temporary directory.
 
 With Docker available, capture the same exchange and require tshark to identify Setup, Read Var,
-Write Var, SZL, block-directory, block transfer, CPU control, set-clock, and session-password
-services without malformed packets:
+Write Var, SZL, block-directory, block transfer, CPU control, set-clock, session-password,
+programmer, and cyclic services without malformed packets:
 
 ```bash
 bash scripts/run_snap7_packet_check.sh

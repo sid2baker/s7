@@ -39,7 +39,7 @@ The exact scope and evidence rules are defined in
 | 19 | Opt-in block download, replacement, and deletion | Complete |
 | 20 | Opt-in PLC control | Complete |
 | 21 | Raw-first programmer diagnostics and variable status | Complete |
-| 22 | Cyclic subscriptions | Planned |
+| 22 | Cyclic subscriptions | Complete |
 | 23 | Alarm subscription, query, and acknowledgment | Planned |
 | 24 | Cross-family qualification and classic `1.0.0` release | Planned |
 

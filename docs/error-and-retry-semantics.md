@@ -132,9 +132,17 @@ transaction owned and usable; the owner must either continue it or finish it.
 
 Userdata subscriptions are session-local and pull based. A waiter timeout does
 not remove its subscription. Queue overflow makes only that subscription
-terminal with `:subscription_overflow`; the connection remains usable. Caller
-death removes its subscriptions, while connection loss wakes all subscription
-waiters and requires explicit resubscription after reconnect.
+terminal with `:subscription_overflow`; the connection remains usable and a
+cyclic job can still be unsubscribed remotely. Caller death removes ordinary
+local subscriptions. Cyclic subscriptions are remote-backed, so owner death
+invalidates the session to guarantee remote cleanup. Connection loss wakes all
+subscription waiters and requires explicit resubscription after reconnect.
+
+Cyclic setup and modification use bounded exclusive exchanges. A complete PLC
+rejection leaves the session usable. Timeout, malformed traffic, or disconnect
+after transmission makes the remote job state ambiguous and invalidates the
+session. Unsubscribe also invalidates the session unless remote success is
+confirmed; stale handles are never reused after reconnect.
 
 ## Multi-Item Contract
 

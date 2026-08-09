@@ -14,7 +14,8 @@ defmodule S7.Connection.Subscription do
     :error,
     queue: {[], []},
     queued_count: 0,
-    queue_limit: 64
+    queue_limit: 64,
+    session_bound: false
   ]
 
   @type filter :: %{
@@ -35,6 +36,7 @@ defmodule S7.Connection.Subscription do
           error: S7.Error.t() | nil,
           queue: :queue.queue(UserData.t()),
           queued_count: non_neg_integer(),
-          queue_limit: pos_integer()
+          queue_limit: pos_integer(),
+          session_bound: boolean()
         }
 end

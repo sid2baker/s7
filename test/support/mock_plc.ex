@@ -8,6 +8,7 @@ defmodule S7.Test.MockPLC do
   alias S7.Protocol.{
     BlockDownload,
     Clock,
+    Cyclic,
     DataItem,
     Item,
     PDU,
@@ -80,6 +81,7 @@ defmodule S7.Test.MockPLC do
       download_fault: Keyword.get(opts, :download_fault),
       control_fault: Keyword.get(opts, :control_fault),
       programmer_fault: Keyword.get(opts, :programmer_fault),
+      cyclic_fault: Keyword.get(opts, :cyclic_fault),
       clock: Keyword.get(opts, :clock, ~N[2024-08-09 12:34:56.123]),
       security_password: Security.encode_password(security_password),
       authenticated: false,
@@ -88,6 +90,8 @@ defmodule S7.Test.MockPLC do
       upload_pending: nil,
       download_pending: nil,
       programmer_pending: nil,
+      cyclic_jobs: %{},
+      next_cyclic_job: 1,
       deferred_reads: [],
       client_reference: nil,
       server_reference: 1,
@@ -437,7 +441,7 @@ defmodule S7.Test.MockPLC do
         <<0x1B, 0, 0::16, 0::32, 9, filename::binary>>
       end
 
-    :ok = send_pdu(state, PDU.new(:job, reference, parameters))
+    _result = send_pdu(state, PDU.new(:job, reference, parameters))
     state = notify_request(state, :download_pull, %{header: %{pdu_reference: reference}})
 
     fault =
@@ -835,6 +839,29 @@ defmodule S7.Test.MockPLC do
     send_userdata_response(%{state | userdata_fault: nil}, request_pdu, request,
       subfunction: request.parameter.subfunction + 1
     )
+  end
+
+  defp handle_userdata(
+         state,
+         request_pdu,
+         %UserData{parameter: %Parameter{function_group: :cyclic}} = request
+       ) do
+    case Cyclic.decode_request(request, :mock_cyclic) do
+      {:ok, %{action: :subscribe} = decoded} ->
+        handle_cyclic_subscribe(state, request_pdu, request, decoded)
+
+      {:ok, %{action: :modify} = decoded} ->
+        handle_cyclic_modify(state, request_pdu, request, decoded)
+
+      {:ok, %{action: :unsubscribe} = decoded} ->
+        handle_cyclic_unsubscribe(state, request_pdu, request, decoded)
+
+      {:error, _error} ->
+        send_userdata_response(state, request_pdu, request,
+          error_code: 0xD20C,
+          data: <<>>
+        )
+    end
   end
 
   defp handle_userdata(
@@ -1459,7 +1486,7 @@ defmodule S7.Test.MockPLC do
     }
 
     {:ok, indication_pdu} = UserData.to_pdu(indication, 0)
-    :ok = send_pdu(state, indication_pdu)
+    _result = send_pdu(state, indication_pdu)
     state
   end
 
@@ -1530,6 +1557,267 @@ defmodule S7.Test.MockPLC do
   defp programmer_value(_values, 6, 0), do: <<0x41, 0x33, 0x85, 0x1F, 0xDE, 0xAD>>
   defp programmer_value(_values, 1, 1), do: <<2>>
   defp programmer_value(_values, size, _index), do: :binary.copy(<<0>>, size)
+
+  defp handle_cyclic_subscribe(state, request_pdu, request, decoded) do
+    state = notify_request(state, :cyclic_subscribe, request_pdu)
+    job_id = Keyword.get(state.options, :cyclic_job_id, state.next_cyclic_job)
+
+    case state.cyclic_fault do
+      :setup_silence ->
+        %{state | cyclic_fault: nil}
+
+      :setup_rejected ->
+        send_userdata_response(%{state | cyclic_fault: nil}, request_pdu, request,
+          sequence: job_id,
+          error_code: 0xD241,
+          data: <<>>
+        )
+
+      :malformed_setup ->
+        send_userdata_response(%{state | cyclic_fault: nil}, request_pdu, request,
+          sequence: job_id,
+          data: <<0>>
+        )
+
+      _other ->
+        job = %{
+          id: job_id,
+          mode: decoded.mode,
+          interval: decoded.interval,
+          item_specs: decoded.item_specs,
+          subfunction: request.parameter.subfunction
+        }
+
+        data =
+          if Keyword.get(state.options, :cyclic_empty_initial, false),
+            do: <<>>,
+            else: cyclic_event_data(state, job, 0)
+
+        state =
+          send_userdata_response(state, request_pdu, request,
+            sequence: job_id,
+            data: data
+          )
+
+        state = %{
+          state
+          | cyclic_jobs: Map.put(state.cyclic_jobs, job_id, job),
+            next_cyclic_job: next_job_id(job_id)
+        }
+
+        send_cyclic_pushes(state, job)
+    end
+  end
+
+  defp handle_cyclic_modify(state, request_pdu, request, decoded) do
+    state = notify_request(state, :cyclic_modify, request_pdu)
+
+    case {Map.get(state.cyclic_jobs, decoded.job_id), state.cyclic_fault} do
+      {_job, :modify_rejected} ->
+        send_userdata_response(%{state | cyclic_fault: nil}, request_pdu, request,
+          sequence: decoded.job_id,
+          error_code: 0xD241,
+          data: <<>>
+        )
+
+      {nil, _fault} ->
+        send_userdata_response(state, request_pdu, request,
+          sequence: decoded.job_id,
+          error_code: 0xD209,
+          data: <<>>
+        )
+
+      {job, _fault} ->
+        job = %{
+          job
+          | interval: decoded.interval,
+            item_specs: decoded.item_specs,
+            subfunction: request.parameter.subfunction
+        }
+
+        state =
+          send_userdata_response(state, request_pdu, request,
+            sequence: decoded.job_id,
+            data: cyclic_event_data(state, job, 0)
+          )
+
+        state = %{state | cyclic_jobs: Map.put(state.cyclic_jobs, decoded.job_id, job)}
+        send_cyclic_pushes(state, job)
+    end
+  end
+
+  defp handle_cyclic_unsubscribe(state, request_pdu, request, decoded) do
+    state = notify_request(state, :cyclic_unsubscribe, request_pdu)
+
+    case state.cyclic_fault do
+      :unsubscribe_silence ->
+        %{state | cyclic_fault: nil}
+
+      :unsubscribe_rejected ->
+        send_userdata_response(%{state | cyclic_fault: nil}, request_pdu, request,
+          sequence: decoded.job_id,
+          error_code: 0xD241,
+          return_code: 0x0A,
+          transport_size: 0,
+          data: <<>>
+        )
+
+      :malformed_unsubscribe ->
+        send_userdata_response(%{state | cyclic_fault: nil}, request_pdu, request,
+          sequence: decoded.job_id,
+          data: <<0>>
+        )
+
+      _other ->
+        state =
+          send_userdata_response(state, request_pdu, request,
+            sequence: decoded.job_id,
+            return_code: 0x0A,
+            transport_size: 0,
+            data: <<>>
+          )
+
+        %{state | cyclic_jobs: Map.delete(state.cyclic_jobs, decoded.job_id)}
+    end
+  end
+
+  defp send_cyclic_pushes(state, job) do
+    count = Keyword.get(state.options, :cyclic_push_count, 2)
+
+    if count > 0 do
+      Process.sleep(Keyword.get(state.options, :cyclic_push_delay, 20))
+
+      Enum.reduce(1..count, state, fn index, state ->
+        send_cyclic_indication(state, job, index)
+      end)
+    else
+      state
+    end
+  end
+
+  defp send_cyclic_indication(%{cyclic_fault: :silence_indication} = state, _job, _index),
+    do: %{state | cyclic_fault: nil}
+
+  defp send_cyclic_indication(state, job, index) do
+    sequence =
+      if state.cyclic_fault == :wrong_cyclic_sequence,
+        do: next_job_id(job.id),
+        else: job.id
+
+    data =
+      if state.cyclic_fault == :malformed_indication,
+        do: <<0, 2, 0>>,
+        else: cyclic_event_data(state, job, index)
+
+    indication = %UserData{
+      parameter: %Parameter{
+        method: 0x12,
+        type: :indication,
+        function_group: :cyclic,
+        subfunction: job.subfunction,
+        sequence: sequence,
+        data_unit_reference: 0,
+        last_data_unit: 0,
+        error_code: 0
+      },
+      payload: %Payload{return_code: 0xFF, transport_size: 0x09, data: data}
+    }
+
+    {:ok, indication_pdu} = UserData.to_pdu(indication, 0)
+    :ok = send_pdu(state, indication_pdu)
+
+    if state.cyclic_fault in [:wrong_cyclic_sequence, :malformed_indication],
+      do: %{state | cyclic_fault: nil},
+      else: state
+  end
+
+  defp cyclic_event_data(state, %{mode: :cyclic, item_specs: specs}, event_index) do
+    values = Keyword.get(state.options, :cyclic_values, [])
+
+    encoded =
+      specs
+      |> Enum.with_index()
+      |> Enum.map(fn {spec, index} ->
+        {:ok, item, <<>>} = Item.decode(spec)
+        size = cyclic_item_size(item)
+        value = cyclic_value(values, size, index, event_index)
+        transport = DataItem.expected_transport(item.transport_size)
+
+        data_item = %DataItem{
+          return_code: 0xFF,
+          transport_size: transport,
+          encoded_length: DataItem.expected_encoded_length(item.transport_size, size),
+          data: value
+        }
+
+        data_item |> DataItem.encode() |> IO.iodata_to_binary()
+      end)
+
+    encode_cyclic_items(encoded)
+  end
+
+  defp cyclic_event_data(state, %{mode: :change_driven, item_specs: specs}, event_index) do
+    values = Keyword.get(state.options, :cyclic_change_values, [])
+
+    encoded =
+      specs
+      |> Enum.with_index()
+      |> Enum.map(fn {_spec, index} ->
+        value = Enum.at(values, index, "change-#{event_index}-#{index}")
+        true = is_binary(value) and byte_size(value) <= 0xFFFF
+        <<0xFF, 0x09, byte_size(value)::unsigned-big-16, value::binary>>
+      end)
+
+    encode_cyclic_items(encoded)
+  end
+
+  defp encode_cyclic_items(items) do
+    count = length(items)
+
+    encoded =
+      items
+      |> Enum.with_index()
+      |> Enum.map(fn {item, index} ->
+        if rem(byte_size(item) - 4, 2) == 1 and index < count - 1,
+          do: [item, <<0>>],
+          else: item
+      end)
+
+    IO.iodata_to_binary([<<count::unsigned-big-16>>, encoded])
+  end
+
+  defp cyclic_item_size(%Item{transport_size: :bit, count: count}), do: div(count + 7, 8)
+
+  defp cyclic_item_size(%Item{transport_size: transport, count: count})
+       when transport in [:byte, :char],
+       do: count
+
+  defp cyclic_item_size(%Item{transport_size: transport, count: count})
+       when transport in [:word, :int, :date, :s5time, :counter, :timer],
+       do: count * 2
+
+  defp cyclic_item_size(%Item{count: count}), do: count * 4
+
+  defp cyclic_value(values, size, index, event_index) do
+    case Enum.at(values, index) do
+      nil ->
+        default_cyclic_value(size, event_index)
+
+      value when is_binary(value) and byte_size(value) == size ->
+        value
+
+      value ->
+        raise ArgumentError,
+              "cyclic value #{inspect(value)} at index #{index} does not contain #{size} bytes"
+    end
+  end
+
+  defp default_cyclic_value(1, event_index), do: <<rem(event_index, 0x100)>>
+  defp default_cyclic_value(2, event_index), do: <<1_234 + event_index::unsigned-big-16>>
+  defp default_cyclic_value(size, _event_index), do: :binary.copy(<<0>>, size)
+
+  defp next_job_id(0xFF), do: 1
+  defp next_job_id(job_id), do: job_id + 1
 
   defp handle_read(%{read_fault: :wrong_reference} = state, request, _item_binary) do
     response = successful_read_response(request, :word, <<0x04, 0xD2>>)

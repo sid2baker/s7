@@ -175,7 +175,21 @@ defmodule S7.ConnectionRoutingIntegrationTest do
     assert {:error, %Error{reason: :invalid_filter}} =
              Connection.subscribe_userdata(client, %{function_group: :unknown})
 
+    assert {:error, %Error{reason: :invalid_option}} =
+             Connection.subscribe_userdata(client, %{}, session_bound: :invalid)
+
     assert {:ok, subscription} = Connection.subscribe_userdata(client, %{})
+    assert Connection.validate_userdata_subscription(client, subscription) == :ok
+
+    assert Connection.rebind_userdata_subscription(client, subscription, %{
+             function_group: :cpu,
+             subfunction: 1
+           }) == :ok
+
+    non_owner =
+      Task.async(fn -> Connection.validate_userdata_subscription(client, subscription) end)
+
+    assert {:error, %Error{reason: :invalid_subscription}} = Task.await(non_owner)
 
     assert {:error, %Error{reason: :subscription_limit, details: %{limit: 1}}} =
              Connection.subscribe_userdata(client, %{})

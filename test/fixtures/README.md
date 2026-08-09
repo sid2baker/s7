@@ -47,6 +47,13 @@ Programmer fixtures are S7 PDU bytes from frames 1-7 and 547-548 of
 `step7_s300_readDiagData.pcapng`. They preserve the temporary-job setup,
 enable, indication, and delete records for variable status and block status v2.
 
+`cyclic/change_*` and `cyclic/unsubscribe_*` are exact S7 PDU bytes from frames
+28, 29, 60, 61, 70, 71, 84, 119, and 120 of
+`wincc_s400_production.pcapng`. The fixed-cycle request, response, and
+indication are independently constructed from the pinned PLC4X `s7.mspec`
+grammar and checked against the pinned Wireshark cyclic-service decoder; the
+local capture corpus has no fixed-cycle (`0x01`) exchange.
+
 ```text
 fixture -> decode -> expected struct
 expected struct -> encode -> fixture

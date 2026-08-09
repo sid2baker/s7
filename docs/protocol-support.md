@@ -43,6 +43,7 @@ The complete scope and risk policy are defined in
 | Exclusive bidirectional service transactions | Implemented, internal typed-service boundary | Supported |
 | Bounded unsolicited userdata routing | Implemented, internal typed-service boundary | Supported |
 | Programmer diagnostics and variable status | Raw-first, read-only, capture-backed implementation | Supported after device qualification |
+| Cyclic subscriptions | Typed fixed-cycle plus raw fixed/change-driven setup, modification, indications, and teardown | Supported after device qualification |
 | Alarms | Not implemented | Post-1.0 |
 
 S7comm-plus, secure PG/HMI sessions, and symbolic access to optimized data
@@ -71,6 +72,15 @@ queue, and deletes the remote job before releasing the connection. Variable
 status returns typed values alongside complete raw item records. Other
 diagnostic layouts remain raw, and force, modify, breakpoint, memory-reset, and
 flash-LED commands are rejected before any packet is sent.
+
+Cyclic jobs reserve the connection only for bounded setup, modification, and
+teardown exchanges. Ordinary requests may run while an established job pushes
+sequence-scoped indications into its bounded pull queue. Typed fixed-cycle
+items use the standard address/value codecs; raw fixed and change-driven jobs
+preserve complete S7ANY, DBREAD, and returned query records. Exact intervals
+range from 100 ms to 2,550,000 ms. Handles belong to one process and one S7
+session. Owner death closes that session to release the remote job, and
+reconnect requires explicit resubscription.
 
 ## Addressing And Values
 

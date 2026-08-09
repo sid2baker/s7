@@ -10,6 +10,7 @@ defmodule S7 do
   block transfer, opt-in destructive block management and CPU control, bounded
   SZL reads, typed CPU metadata, block directory and information queries, PLC
   clock access, protected-session authorization, and raw-first read-only
-  programmer diagnostics.
+  programmer diagnostics. Fixed-cycle typed subscriptions and raw
+  change-driven cyclic jobs use bounded session-local pull queues.
   """
 end

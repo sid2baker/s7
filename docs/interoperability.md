@@ -10,7 +10,7 @@ security configuration.
 | --- | --- | --- | --- |
 | In-process fault server | TCP/COTP fragmentation, malformed frames, out-of-order responses, concurrency, timeout, reconnect, drain | Every commit | Passing |
 | Snap7 server | `valiot/snap7` commit `a1845454f5f16f3b127b987807f1cbc59205db70` | Every commit | Passing |
-| Wireshark/tshark | Pinned netshoot image; Setup, Read/Write Var, SZL, block directory/transfer/control, clock, security, and programmer-service filters; zero malformed frames | Every commit | Passing |
+| Wireshark/tshark | Pinned netshoot image; Setup, Read/Write Var, SZL, block directory/transfer/control, clock, security, programmer, and cyclic-service filters; zero malformed frames | Every commit | Passing |
 | Request soak | 20,000 mixed concurrent reads/writes with bounded memory and empty final mailbox | Weekly/manual | Automated |
 
 The Snap7 gate negotiates four jobs, exercises concurrent reads, all supported
@@ -41,7 +41,14 @@ the exact programmer-job setup, enable, indication, and delete envelopes for
 variable status and block status v2. The fault server validates successful
 sampling and cleanup. The pinned Snap7 server silently drops the programmer
 request; the gate requires that wait to remain bounded and the ambiguous
-session to be invalidated.
+session to be invalidated. The pinned Snap7 server also silently drops cyclic
+setup. That gate likewise requires a bounded timeout, removal of the
+provisional local subscription, and session invalidation; tshark must still
+identify the emitted fixed-transfer request without malformed bytes. Exact
+S7-400 WinCC captures qualify change-driven setup, modification, indication,
+and teardown. The fixed-transfer fixtures are derived independently from the
+pinned PLC4X grammar and Wireshark decoder because the local capture corpus has
+no `0x01` exchange. PLCSIM and physical-device cyclic execution remain pending.
 
 ## Release Qualification Matrix
 

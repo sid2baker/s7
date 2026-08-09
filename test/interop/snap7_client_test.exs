@@ -173,6 +173,14 @@ defmodule S7.Snap7ClientInteropTest do
              Client.info(client)
   end
 
+  test "bounds the pinned server's silent cyclic-service drop", %{client: client} do
+    assert {:error, %Error{reason: :transaction_timeout}} =
+             Client.subscribe_cyclic(client, ["MB0"], timeout: 200, step_timeout: 200)
+
+    assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
+             Client.info(client)
+  end
+
   test "decodes download protection and emits a PI block-control request", %{client: client} do
     image = captured_download_image()
 

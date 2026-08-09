@@ -17,6 +17,8 @@ defmodule S7.Client do
     Connection,
     CPInfo,
     CPUInfo,
+    CyclicEvent,
+    CyclicSubscription,
     Data,
     Destructive,
     Error,
@@ -30,7 +32,7 @@ defmodule S7.Client do
     VariableStatus
   }
 
-  alias S7.Connection.{BlockDownloader, BlockUploader, Controller}
+  alias S7.Connection.{BlockDownloader, BlockUploader, Controller, Cyclic}
   alias S7.Connection.Programmer, as: ProgrammerRuntime
   alias S7.SZL.Metadata
 
@@ -341,6 +343,98 @@ defmodule S7.Client do
       call(
         fn -> ProgrammerRuntime.variable_status(client, addresses, limits) end,
         :variable_status
+      )
+    end
+  end
+
+  @doc """
+  Starts a fixed-interval classic cyclic subscription for typed addresses.
+
+  Options are `:interval` in exact milliseconds (default `1000`),
+  `:queue_limit`, `:timeout`, and `:step_timeout`. The returned handle belongs
+  to the calling process and current S7 session. Its `initial` field contains
+  the optional snapshot returned by the PLC.
+  """
+  @spec subscribe_cyclic(t(), [address()], keyword()) ::
+          {:ok, CyclicSubscription.t()} | {:error, Error.t()}
+  def subscribe_cyclic(client, addresses, opts \\ []) do
+    with {:ok, addresses} <- normalize_addresses(addresses, :subscribe_cyclic),
+         {:ok, options} <- Cyclic.validate_subscribe_options(opts, :subscribe_cyclic) do
+      call(fn -> Cyclic.subscribe(client, addresses, options) end, :subscribe_cyclic)
+    end
+  end
+
+  @doc """
+  Starts a raw cyclic or change-driven subscription.
+
+  `mode` is `:cyclic` or `:change_driven`. Each item must be one complete
+  S7ANY (`0x10`) or DBREAD (`0xB0`) variable specification beginning with
+  `0x12`. Incoming records are preserved in `S7.CyclicEvent.Item` without
+  CPU-specific interpretation.
+  """
+  @spec subscribe_cyclic_raw(
+          t(),
+          CyclicSubscription.mode(),
+          [binary()],
+          keyword()
+        ) :: {:ok, CyclicSubscription.t()} | {:error, Error.t()}
+  def subscribe_cyclic_raw(client, mode, item_specs, opts \\ []) do
+    with {:ok, options} <- Cyclic.validate_subscribe_options(opts, :subscribe_cyclic_raw) do
+      call(
+        fn -> Cyclic.subscribe_raw(client, mode, item_specs, options) end,
+        :subscribe_cyclic_raw
+      )
+    end
+  end
+
+  @doc """
+  Pulls the next bounded update from a cyclic subscription.
+
+  The caller must be the process that created the handle. A timeout does not
+  cancel the remote subscription and the handle remains usable.
+  """
+  @spec next_cyclic(t(), CyclicSubscription.t(), pos_integer()) ::
+          {:ok, CyclicEvent.t()} | {:error, Error.t()}
+  def next_cyclic(client, subscription, timeout \\ 5_000) do
+    call(fn -> Cyclic.next(client, subscription, timeout) end, :next_cyclic)
+  end
+
+  @doc """
+  Replaces the raw item set of an active change-driven subscription.
+
+  A successful response returns an updated handle with the same remote job ID
+  and optional new initial snapshot.
+  """
+  @spec modify_cyclic_raw(t(), CyclicSubscription.t(), [binary()], keyword()) ::
+          {:ok, CyclicSubscription.t()} | {:error, Error.t()}
+  def modify_cyclic_raw(client, subscription, item_specs, opts \\ [])
+
+  def modify_cyclic_raw(client, %CyclicSubscription{} = subscription, item_specs, opts) do
+    with {:ok, options} <-
+           Cyclic.validate_modify_options(opts, subscription.interval, :modify_cyclic) do
+      call(
+        fn -> Cyclic.modify(client, subscription, item_specs, options) end,
+        :modify_cyclic
+      )
+    end
+  end
+
+  def modify_cyclic_raw(_client, _subscription, _item_specs, _opts),
+    do: {:error, Error.new(:client, :modify_cyclic, :invalid_cyclic_subscription)}
+
+  @doc """
+  Releases a remote cyclic job and its local bounded queue.
+
+  If the remote outcome is ambiguous, the connection is invalidated so a
+  stale job ID cannot be reused in a later session.
+  """
+  @spec unsubscribe_cyclic(t(), CyclicSubscription.t(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def unsubscribe_cyclic(client, subscription, opts \\ []) do
+    with {:ok, options} <- Cyclic.validate_unsubscribe_options(opts, :unsubscribe_cyclic) do
+      call(
+        fn -> Cyclic.unsubscribe(client, subscription, options) end,
+        :unsubscribe_cyclic
       )
     end
   end

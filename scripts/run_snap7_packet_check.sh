@@ -69,6 +69,7 @@ grep -Fq 'PI-Service] -> P_PROGRAM("C ")' <<<"${DECODED}"
 grep -Fq 'PI-Service] -> _MODU("EP")' <<<"${DECODED}"
 grep -Fq 'PI-Service] -> _GARB()' <<<"${DECODED}"
 grep -Fq '[Programmer commands] -> [Variable status]' <<<"${DECODED}"
+grep -Fq '[Cyclic services] -> [Cyclic transfer]' <<<"${DECODED}"
 test -z "${MALFORMED}"
 
 if [[ -n "${S7_CAPTURE_FILE:-}" ]]; then
