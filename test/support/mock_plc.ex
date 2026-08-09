@@ -13,6 +13,7 @@ defmodule S7.Test.MockPLC do
     PDU,
     PIService,
     PLCControl,
+    Programmer,
     Security,
     SetupCommunication,
     UserData
@@ -78,6 +79,7 @@ defmodule S7.Test.MockPLC do
       upload_fault: Keyword.get(opts, :upload_fault),
       download_fault: Keyword.get(opts, :download_fault),
       control_fault: Keyword.get(opts, :control_fault),
+      programmer_fault: Keyword.get(opts, :programmer_fault),
       clock: Keyword.get(opts, :clock, ~N[2024-08-09 12:34:56.123]),
       security_password: Security.encode_password(security_password),
       authenticated: false,
@@ -85,6 +87,7 @@ defmodule S7.Test.MockPLC do
       block_pending: nil,
       upload_pending: nil,
       download_pending: nil,
+      programmer_pending: nil,
       deferred_reads: [],
       client_reference: nil,
       server_reference: 1,
@@ -835,6 +838,124 @@ defmodule S7.Test.MockPLC do
   end
 
   defp handle_userdata(
+         state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{
+             method: 0x12,
+             type: :request,
+             function_group: :programmer,
+             subfunction: subfunction
+           },
+           payload: %Payload{data: service_data}
+         } = request
+       )
+       when subfunction in [0x01, 0x02, 0x03, 0x04, 0x05, 0x10, 0x11, 0x13] do
+    state = notify_request(state, :programmer_setup, request_pdu)
+
+    case state.programmer_fault do
+      :setup_rejected ->
+        send_userdata_response(%{state | programmer_fault: nil}, request_pdu, request,
+          sequence: 2,
+          error_code: 0xD241,
+          return_code: 0x0A,
+          transport_size: 0,
+          data: <<>>
+        )
+
+      :malformed_setup ->
+        send_userdata_response(%{state | programmer_fault: nil}, request_pdu, request,
+          sequence: 2,
+          data: <<>>
+        )
+
+      _other ->
+        {:ok, setup_parameters, setup_data} =
+          Programmer.decode_service_data(service_data, :programmer_diagnostic)
+
+        pending = %{
+          subfunction: subfunction,
+          sequence: 2,
+          setup_parameters: setup_parameters,
+          setup_data: setup_data
+        }
+
+        send_userdata_response(%{state | programmer_pending: pending}, request_pdu, request,
+          sequence: 2,
+          return_code: 0x0A,
+          transport_size: 0,
+          data: <<>>
+        )
+    end
+  end
+
+  defp handle_userdata(
+         %{programmer_pending: %{subfunction: subfunction, sequence: sequence}} = state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{
+             method: 0x12,
+             type: :request,
+             function_group: :programmer,
+             subfunction: 0x0E
+           },
+           payload: %Payload{data: service_data}
+         } = request
+       ) do
+    {:ok, _parameters, <<^subfunction, ^sequence>>} =
+      Programmer.decode_service_data(service_data, :programmer_diagnostic)
+
+    state = notify_request(state, :programmer_enable, request_pdu)
+
+    state =
+      send_userdata_response(state, request_pdu, request,
+        sequence: 3,
+        return_code: 0x0A,
+        transport_size: 0,
+        data: <<>>
+      )
+
+    Process.sleep(Keyword.get(state.options, :programmer_indication_delay, 0))
+    send_programmer_indication(state)
+  end
+
+  defp handle_userdata(
+         %{programmer_pending: %{subfunction: subfunction, sequence: sequence}} = state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{
+             method: 0x12,
+             type: :request,
+             function_group: :programmer,
+             subfunction: 0x0F
+           },
+           payload: %Payload{data: service_data}
+         } = request
+       ) do
+    {:ok, _parameters, <<1::16, ^subfunction, ^sequence>>} =
+      Programmer.decode_service_data(service_data, :programmer_diagnostic)
+
+    state = notify_request(state, :programmer_delete, request_pdu)
+
+    if state.programmer_fault == :delete_rejected do
+      send_userdata_response(state, request_pdu, request,
+        sequence: 4,
+        error_code: 0xD241,
+        return_code: 0x0A,
+        transport_size: 0,
+        data: <<>>
+      )
+    else
+      send_userdata_response(%{state | programmer_pending: nil}, request_pdu, request,
+        sequence: 4,
+        return_code: 0x0A,
+        transport_size: 0,
+        data: <<>>
+      )
+    end
+  end
+
+  defp handle_userdata(
          %{clock_fault: :malformed_timestamp} = state,
          request_pdu,
          %UserData{parameter: %Parameter{function_group: :time, subfunction: 1}} = request
@@ -1295,7 +1416,7 @@ defmodule S7.Test.MockPLC do
         type: :response,
         function_group: request_parameter.function_group,
         subfunction: Keyword.get(opts, :subfunction, request_parameter.subfunction),
-        sequence: request_parameter.sequence,
+        sequence: Keyword.get(opts, :sequence, request_parameter.sequence),
         data_unit_reference: 1,
         last_data_unit: 0,
         error_code: Keyword.get(opts, :error_code, 0)
@@ -1311,6 +1432,104 @@ defmodule S7.Test.MockPLC do
     :ok = send_pdu(state, response_pdu)
     state
   end
+
+  defp send_programmer_indication(%{programmer_fault: :silence_indication} = state), do: state
+
+  defp send_programmer_indication(%{programmer_pending: pending} = state) do
+    sequence =
+      if state.programmer_fault == :wrong_programmer_sequence,
+        do: pending.sequence + 1,
+        else: pending.sequence
+
+    indication = %UserData{
+      parameter: %Parameter{
+        method: 0x12,
+        type: :indication,
+        function_group: :programmer,
+        subfunction: pending.subfunction,
+        sequence: sequence,
+        data_unit_reference: 0,
+        last_data_unit: 0,
+        error_code: 0
+      },
+      payload: %Payload{
+        transport_size: 9,
+        data: programmer_indication_service_data(state, pending)
+      }
+    }
+
+    {:ok, indication_pdu} = UserData.to_pdu(indication, 0)
+    :ok = send_pdu(state, indication_pdu)
+    state
+  end
+
+  defp programmer_indication_service_data(%{programmer_fault: :malformed_indication}, _pending),
+    do: <<0, 4, 0, 2, 1>>
+
+  defp programmer_indication_service_data(state, %{subfunction: 2} = pending) do
+    parameters = Keyword.get(state.options, :programmer_event_parameters, <<1, 0, 0, 2>>)
+    data = programmer_variable_data(state, pending.setup_data)
+    {:ok, encoded} = Programmer.encode_service_data(parameters, data, :variable_status)
+    encoded
+  end
+
+  defp programmer_indication_service_data(state, pending) do
+    parameters =
+      Keyword.get(
+        state.options,
+        :programmer_event_parameters,
+        <<1, 0, pending.sequence::unsigned-big-16>>
+      )
+
+    data = Keyword.get(state.options, :programmer_event_data, "diagnostic")
+    {:ok, encoded} = Programmer.encode_service_data(parameters, data, :programmer_diagnostic)
+    encoded
+  end
+
+  defp programmer_variable_data(state, <<count::unsigned-big-16, addresses::binary>>) do
+    <<address_items::binary-size(count * 6)>> = addresses
+    values = Keyword.get(state.options, :programmer_values)
+
+    encoded =
+      address_items
+      |> programmer_address_sizes([])
+      |> Enum.with_index()
+      |> Enum.map(fn {size, index} ->
+        value = programmer_value(values, size, index)
+        padding = if rem(size, 2) == 1, do: <<0>>, else: <<>>
+        <<0xFF, 9, size::unsigned-big-16, value::binary, padding::binary>>
+      end)
+
+    IO.iodata_to_binary([<<count::unsigned-big-16>>, encoded])
+  end
+
+  defp programmer_address_sizes(<<>>, sizes), do: Enum.reverse(sizes)
+
+  defp programmer_address_sizes(
+         <<area, repetition, _db::unsigned-big-16, _offset::unsigned-big-16, rest::binary>>,
+         sizes
+       ) do
+    width =
+      cond do
+        area in [0x54, 0x64] -> 2
+        Bitwise.band(area, 0x0F) == 0 -> 1
+        Bitwise.band(area, 0x0F) == 3 -> 4
+        true -> Bitwise.band(area, 0x0F)
+      end
+
+    count = if Bitwise.band(area, 0x0F) == 0, do: 1, else: repetition
+    programmer_address_sizes(rest, [width * count | sizes])
+  end
+
+  defp programmer_value(values, size, index) when is_list(values) do
+    value = Enum.at(values, index, :binary.copy(<<0>>, size))
+    true = is_binary(value) and byte_size(value) == size
+    value
+  end
+
+  defp programmer_value(_values, 6, 0), do: <<0x41, 0x33, 0x85, 0x1F, 0xDE, 0xAD>>
+  defp programmer_value(_values, 1, 1), do: <<2>>
+  defp programmer_value(_values, size, _index), do: :binary.copy(<<0>>, size)
 
   defp handle_read(%{read_fault: :wrong_reference} = state, request, _item_binary) do
     response = successful_read_response(request, :word, <<0x04, 0xD2>>)

@@ -37,6 +37,7 @@ Changes currently targeted for `0.1.0` are listed below.
 - Bounded classic block upload with exclusive lifecycle ownership, exact capture fixtures, raw image preservation, and structured load-memory image parsing.
 - Opt-in classic block download, replacement, and deletion with negotiated PLC-driven slicing, exact STEP 7 fixtures, two-level destructive authorization, and explicit indeterminate outcomes.
 - Opt-in CPU stop, warm/cold start, RAM-to-ROM copy, and memory compression with capture-derived codecs, exclusive no-replay execution, and Snap7/PCAP qualification.
+- Raw-first read-only programmer diagnostics and variable-status sampling with capture-derived job setup, sequence-scoped indications, bounded exclusive execution, and deterministic remote-job deletion.
 
 The date remains unset until the external release qualification in
 `docs/interoperability.md` is complete.

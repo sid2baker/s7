@@ -10,7 +10,7 @@ security configuration.
 | --- | --- | --- | --- |
 | In-process fault server | TCP/COTP fragmentation, malformed frames, out-of-order responses, concurrency, timeout, reconnect, drain | Every commit | Passing |
 | Snap7 server | `valiot/snap7` commit `a1845454f5f16f3b127b987807f1cbc59205db70` | Every commit | Passing |
-| Wireshark/tshark | Pinned netshoot image; Setup, Read/Write Var, SZL, block directory/transfer/control, clock, and security-service filters; zero malformed frames | Every commit | Passing |
+| Wireshark/tshark | Pinned netshoot image; Setup, Read/Write Var, SZL, block directory/transfer/control, clock, security, and programmer-service filters; zero malformed frames | Every commit | Passing |
 | Request soak | 20,000 mixed concurrent reads/writes with bounded memory and empty final mailbox | Weekly/manual | Automated |
 
 The Snap7 gate negotiates four jobs, exercises concurrent reads, all supported
@@ -36,7 +36,12 @@ disposable server gate performs stop, warm start, cold start, RAM-to-ROM copy,
 and memory compression, checks observable RUN/STOP transitions, and requires
 tshark to identify every control service without malformed frames. Captured
 STEP 7/Snap7 S7-300 exchanges provide independent golden bytes; PLCSIM and
-physical-client execution remain pending.
+physical-client execution remain pending. STEP 7 S7-300 captures also provide
+the exact programmer-job setup, enable, indication, and delete envelopes for
+variable status and block status v2. The fault server validates successful
+sampling and cleanup. The pinned Snap7 server silently drops the programmer
+request; the gate requires that wait to remain bounded and the ambiguous
+session to be invalidated.
 
 ## Release Qualification Matrix
 

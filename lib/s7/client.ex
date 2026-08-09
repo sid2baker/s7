@@ -23,12 +23,15 @@ defmodule S7.Client do
     OrderCode,
     PLCClock,
     PLCStatus,
+    ProgrammerEvent,
     Result,
     SessionPassword,
-    SZL
+    SZL,
+    VariableStatus
   }
 
   alias S7.Connection.{BlockDownloader, BlockUploader, Controller}
+  alias S7.Connection.Programmer, as: ProgrammerRuntime
   alias S7.SZL.Metadata
 
   @opaque t :: GenServer.server()
@@ -282,6 +285,65 @@ defmodule S7.Client do
   """
   @spec logout(t()) :: :ok | {:error, Error.t()}
   def logout(client), do: call(fn -> Connection.logout(client) end, :logout)
+
+  @doc """
+  Samples one capture-backed classic programmer diagnostic job.
+
+  `service` may be a documented service atom or its raw subfunction byte.
+  `setup_parameters` and `setup_data` are preserved service records derived
+  from a known packet exchange. Only read-only programmer subfunctions are
+  accepted. Options are `:timeout` and `:step_timeout`.
+
+  The job is set up, enabled once, deleted, and released before this function
+  returns. The indication remains raw in `S7.ProgrammerEvent` because record
+  layouts vary across CPU families.
+  """
+  @spec programmer_diagnostic_raw(
+          t(),
+          ProgrammerEvent.service() | byte(),
+          binary(),
+          binary(),
+          keyword()
+        ) :: {:ok, ProgrammerEvent.t()} | {:error, Error.t()}
+  def programmer_diagnostic_raw(client, service, setup_parameters, setup_data, opts \\ []) do
+    operation = :programmer_diagnostic
+
+    with {:ok, limits} <- ProgrammerRuntime.validate_options(opts, operation) do
+      call(
+        fn ->
+          ProgrammerRuntime.diagnostic(
+            client,
+            service,
+            setup_parameters,
+            setup_data,
+            limits,
+            operation
+          )
+        end,
+        operation
+      )
+    end
+  end
+
+  @doc """
+  Samples addresses through the classic STEP 7 variable-status service.
+
+  This is distinct from Read Var: the PLC creates a temporary programmer job,
+  emits one indication, and the client then deletes that job. Returned items
+  retain the raw transport record and include a typed value when its PLC return
+  code is successful. Options are `:timeout` and `:step_timeout`.
+  """
+  @spec variable_status(t(), [address()], keyword()) ::
+          {:ok, VariableStatus.t()} | {:error, Error.t()}
+  def variable_status(client, addresses, opts \\ []) do
+    with {:ok, addresses} <- normalize_addresses(addresses, :variable_status),
+         {:ok, limits} <- ProgrammerRuntime.validate_options(opts, :variable_status) do
+      call(
+        fn -> ProgrammerRuntime.variable_status(client, addresses, limits) end,
+        :variable_status
+      )
+    end
+  end
 
   @doc """
   Returns the number of blocks in each directory type advertised by the PLC.

@@ -6,7 +6,9 @@ userdata-backed System Status List (SZL/SSL) reads, and classic block directory 
 queries. Bounded classic block upload, PLC clock access, and classic session-password
 authorization are also supported. Destructive block download, replacement, and deletion are
 available only through an explicit two-level opt-in, as are CPU stop/start, RAM-to-ROM copy, and
-memory compression. One S7ANY item may represent either a scalar or a fixed-count range.
+memory compression. Capture-backed read-only programmer diagnostics and one-shot variable-status
+sampling are raw-first and bounded. One S7ANY item may represent either a scalar or a fixed-count
+range.
 
 The implementation keeps protocol codecs pure and gives the TCP socket to one `:gen_statem`
 process. Its `active: :once` request engine correlates responses by PDU reference, bounds queued
@@ -19,9 +21,10 @@ reads and writes. CI also builds a server from a pinned Snap7 revision and verif
 splitting and read-after-write for every supported area and value type. PLCSIM Advanced and
 physical Siemens hardware remain external release gates, so `0.1.0` remains a release candidate.
 
-S7comm-plus, symbolic addressing, optimized DB access, alarms, and programmer diagnostics are not
-supported. The common classic userdata envelope is implemented for SZL, block-directory, clock,
-and protected-session requests plus safe handling of unsolicited indications.
+S7comm-plus, symbolic addressing, optimized DB access, alarms, and destructive programmer
+commands are not supported. The common classic userdata envelope is implemented for SZL,
+block-directory, clock, protected-session, and evidence-backed read-only programmer jobs plus
+safe handling of unsolicited indications.
 
 ## Usage
 
@@ -38,6 +41,8 @@ and protected-session requests plus safe handling of unsolicited indications.
 {:ok, %S7.OrderCode{code: order_code}} = S7.Client.order_code(client)
 {:ok, dbs} = S7.Client.list_blocks(client, :db)
 {:ok, %S7.PLCClock{datetime: plc_time}} = S7.Client.read_clock(client)
+{:ok, %S7.VariableStatus{items: status_items}} =
+  S7.Client.variable_status(client, ["MB0", "DB1.DBW0"])
 :ok = S7.Client.close(client)
 ```
 

@@ -288,6 +288,7 @@ defmodule S7.ConnectionRoutingIntegrationTest do
           %{unknown: 1},
           %{function_group: :unknown},
           %{subfunction: 256},
+          %{sequence: 256},
           %{type: :unknown}
         ] do
       assert {:error, %Error{reason: :invalid_filter}} =

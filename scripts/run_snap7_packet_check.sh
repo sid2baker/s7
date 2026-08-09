@@ -68,6 +68,7 @@ grep -Fq 'PI-Service] -> P_PROGRAM()' <<<"${DECODED}"
 grep -Fq 'PI-Service] -> P_PROGRAM("C ")' <<<"${DECODED}"
 grep -Fq 'PI-Service] -> _MODU("EP")' <<<"${DECODED}"
 grep -Fq 'PI-Service] -> _GARB()' <<<"${DECODED}"
+grep -Fq '[Programmer commands] -> [Variable status]' <<<"${DECODED}"
 test -z "${MALFORMED}"
 
 if [[ -n "${S7_CAPTURE_FILE:-}" ]]; then

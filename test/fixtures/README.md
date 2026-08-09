@@ -42,6 +42,11 @@ and compression. The warm-start request is normalized from the independently
 matching pinned Snap7 request structure because that capture set has no warm
 start exchange.
 
+Programmer fixtures are S7 PDU bytes from frames 1-7 and 547-548 of
+`step7_s300_readVarTab.pcapng` plus frames 22-28 of
+`step7_s300_readDiagData.pcapng`. They preserve the temporary-job setup,
+enable, indication, and delete records for variable status and block status v2.
+
 ```text
 fixture -> decode -> expected struct
 expected struct -> encode -> fixture

@@ -165,6 +165,14 @@ defmodule S7.Snap7ClientInteropTest do
     assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 
+  test "bounds the pinned server's silent programmer-service drop", %{client: client} do
+    assert {:error, %Error{reason: :transaction_timeout}} =
+             Client.variable_status(client, ["MB0"], timeout: 200, step_timeout: 200)
+
+    assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
+             Client.info(client)
+  end
+
   test "decodes download protection and emits a PI block-control request", %{client: client} do
     image = captured_download_image()
 

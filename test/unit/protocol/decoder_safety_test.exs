@@ -2,7 +2,7 @@ defmodule S7.Protocol.DecoderSafetyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias S7.Protocol.{DataItem, Header, Item, PDU, SetupCommunication}
+  alias S7.Protocol.{DataItem, Header, Item, PDU, Programmer, SetupCommunication}
   alias S7.Transport.{COTP, TPKT}
 
   property "public wire decoders return tagged results for arbitrary binaries" do
@@ -14,6 +14,7 @@ defmodule S7.Protocol.DecoderSafetyTest do
       assert tagged?(Item.decode(binary))
       assert tagged?(DataItem.decode(binary))
       assert tagged?(SetupCommunication.decode(binary))
+      assert tagged?(Programmer.decode_service_data(binary, :programmer_diagnostic))
     end
   end
 

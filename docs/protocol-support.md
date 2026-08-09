@@ -42,7 +42,7 @@ The complete scope and risk policy are defined in
 | Common userdata envelope and request routing | Implemented | Supported |
 | Exclusive bidirectional service transactions | Implemented, internal typed-service boundary | Supported |
 | Bounded unsolicited userdata routing | Implemented, internal typed-service boundary | Supported |
-| Userdata diagnostics/services | Not implemented | Post-1.0 |
+| Programmer diagnostics and variable status | Raw-first, read-only, capture-backed implementation | Supported after device qualification |
 | Alarms | Not implemented | Post-1.0 |
 
 S7comm-plus, secure PG/HMI sessions, and symbolic access to optimized data
@@ -65,6 +65,12 @@ the authorization change. Block upload runs exclusively and has independent
 aggregate byte, fragment, step-timeout, and overall-deadline bounds.
 Block download uses the same ownership boundary but handles Jobs initiated by
 the PLC and splits response data against the negotiated PDU size.
+Read-only programmer services run as temporary exclusive jobs. The client
+correlates indications by the PLC-assigned job sequence, bounds every wait and
+queue, and deletes the remote job before releasing the connection. Variable
+status returns typed values alongside complete raw item records. Other
+diagnostic layouts remain raw, and force, modify, breakpoint, memory-reset, and
+flash-LED commands are rejected before any packet is sent.
 
 ## Addressing And Values
 

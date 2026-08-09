@@ -1614,7 +1614,9 @@ defmodule S7.Connection do
     disconnect_with_error(state, data, error)
   end
 
-  defp validate_transaction_request_pdu(%PDU{header: %{rosctr: :job}}, _operation), do: :ok
+  defp validate_transaction_request_pdu(%PDU{header: %{rosctr: rosctr}}, _operation)
+       when rosctr in [:job, :userdata],
+       do: :ok
 
   defp validate_transaction_request_pdu(pdu, operation),
     do: transaction_error(operation, :invalid_transaction_pdu, %{rosctr: pdu.header.rosctr})
@@ -1878,16 +1880,18 @@ defmodule S7.Connection do
   end
 
   defp validate_subscription_filter(filter) when is_map(filter) do
-    allowed = [:function_group, :subfunction, :type]
+    allowed = [:function_group, :subfunction, :sequence, :type]
 
     with nil <- Enum.find(Map.keys(filter), &(&1 not in allowed)),
          :ok <- validate_subscription_group(Map.get(filter, :function_group, :any)),
          :ok <- validate_subscription_subfunction(Map.get(filter, :subfunction, :any)),
+         :ok <- validate_subscription_sequence(Map.get(filter, :sequence, :any)),
          :ok <- validate_subscription_type(Map.get(filter, :type, :any)) do
       {:ok,
        %{
          function_group: Map.get(filter, :function_group, :any),
          subfunction: Map.get(filter, :subfunction, :any),
+         sequence: Map.get(filter, :sequence, :any),
          type: Map.get(filter, :type, :any)
        }}
     else
@@ -1927,6 +1931,12 @@ defmodule S7.Connection do
 
   defp validate_subscription_subfunction(value),
     do: subscription_error(:subscribe_userdata, :invalid_filter, %{subfunction: value})
+
+  defp validate_subscription_sequence(:any), do: :ok
+  defp validate_subscription_sequence(value) when value in 0..0xFF, do: :ok
+
+  defp validate_subscription_sequence(value),
+    do: subscription_error(:subscribe_userdata, :invalid_filter, %{sequence: value})
 
   defp validate_subscription_type(type) when type in [:any, :indication, :request, :response],
     do: :ok
@@ -2059,6 +2069,7 @@ defmodule S7.Connection do
 
     filter_match?(filter.function_group, parameter.function_group) and
       filter_match?(filter.subfunction, parameter.subfunction) and
+      filter_match?(filter.sequence, parameter.sequence) and
       filter_match?(filter.type, parameter.type)
   end
 

@@ -20,6 +20,7 @@ defmodule S7.Connection.Subscription do
   @type filter :: %{
           optional(:function_group) => UserData.Parameter.function_group() | :any,
           optional(:subfunction) => byte() | :any,
+          optional(:sequence) => byte() | :any,
           optional(:type) => UserData.Parameter.function_type() | :any
         }
 

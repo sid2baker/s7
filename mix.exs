@@ -129,9 +129,12 @@ defmodule S7.MixProject do
           S7.Data,
           S7.Error,
           S7.PLCClock,
+          S7.ProgrammerEvent,
           S7.Result,
           S7.SZL,
-          S7.Telemetry
+          S7.Telemetry,
+          S7.VariableStatus,
+          S7.VariableStatus.Item
         ],
         "S7 Protocol": [
           S7.Protocol.BlockDownload,
@@ -145,6 +148,8 @@ defmodule S7.MixProject do
           S7.Protocol.PDUPlanner,
           S7.Protocol.PIService,
           S7.Protocol.PLCControl,
+          S7.Protocol.Programmer,
+          S7.Protocol.Programmer.Job,
           S7.Protocol.ReadVar,
           S7.Protocol.Security,
           S7.Protocol.SetupCommunication,
