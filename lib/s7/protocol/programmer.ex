@@ -293,7 +293,7 @@ defmodule S7.Protocol.Programmer do
     expected = parameter_size + data_size
 
     if byte_size(rest) == expected do
-      <<parameters::binary-size(parameter_size), data::binary-size(data_size)>> = rest
+      <<parameters::binary-size(^parameter_size), data::binary-size(^data_size)>> = rest
       {:ok, parameters, data}
     else
       malformed(operation, %{expected_size: expected + 4, received_size: byte_size(rest) + 4})
@@ -499,7 +499,7 @@ defmodule S7.Protocol.Programmer do
     required = payload_size + padding_size
 
     if byte_size(rest) >= required do
-      <<data::binary-size(payload_size), padding::binary-size(padding_size), remaining::binary>> =
+      <<data::binary-size(^payload_size), padding::binary-size(^padding_size), remaining::binary>> =
         rest
 
       item_raw = binary_part(raw, 0, 4 + required)

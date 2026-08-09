@@ -250,7 +250,7 @@ defmodule S7.Protocol.BlocksTest do
   end
 
   defp replace_byte(binary, index, value) do
-    <<prefix::binary-size(index), _old, suffix::binary>> = binary
+    <<prefix::binary-size(^index), _old, suffix::binary>> = binary
     <<prefix::binary, value, suffix::binary>>
   end
 

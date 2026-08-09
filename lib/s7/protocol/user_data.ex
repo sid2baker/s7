@@ -204,7 +204,7 @@ defmodule S7.Protocol.UserData do
       {:more, item_length - byte_size(rest)}
     else
       case rest do
-        <<item::binary-size(item_length)>> -> decode_parameter_item(item)
+        <<item::binary-size(^item_length)>> -> decode_parameter_item(item)
         _trailing -> {:error, :malformed_userdata_parameter}
       end
     end

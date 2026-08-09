@@ -1437,7 +1437,7 @@ defmodule S7.Test.MockPLC do
     do: Enum.reverse([binary | chunks])
 
   defp do_split_szl(binary, size, chunks) do
-    <<chunk::binary-size(size), remaining::binary>> = binary
+    <<chunk::binary-size(^size), remaining::binary>> = binary
     do_split_szl(remaining, size, [chunk | chunks])
   end
 
@@ -1551,7 +1551,7 @@ defmodule S7.Test.MockPLC do
   end
 
   defp programmer_variable_data(state, <<count::unsigned-big-16, addresses::binary>>) do
-    <<address_items::binary-size(count * 6)>> = addresses
+    <<address_items::binary-size(^count * 6)>> = addresses
     values = Keyword.get(state.options, :programmer_values)
 
     encoded =
@@ -2129,7 +2129,7 @@ defmodule S7.Test.MockPLC do
     response = successful_read_response(request, :word, <<0x04, 0xD2>>)
     payload = response |> PDU.encode() |> IO.iodata_to_binary()
     truncated_size = byte_size(payload) - 1
-    <<truncated::binary-size(truncated_size), _last>> = payload
+    <<truncated::binary-size(^truncated_size), _last>> = payload
     :ok = send_tpdu(state, %Data{payload: truncated})
     %{state | read_fault: nil}
   end
@@ -2478,7 +2478,7 @@ defmodule S7.Test.MockPLC do
 
     if Keyword.get(state.options, :cotp_fragment_responses, false) and byte_size(payload) > 1 do
       split = div(byte_size(payload), 2)
-      <<first::binary-size(split), second::binary>> = payload
+      <<first::binary-size(^split), second::binary>> = payload
 
       :ok = send_tpdu(state, %Data{payload: first, eot: false})
       send_tpdu(state, %Data{payload: second, tpdu_number: 0})

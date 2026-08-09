@@ -28,7 +28,7 @@ defmodule S7.Transport.TPKTTest do
     binary = packet |> TPKT.encode() |> IO.iodata_to_binary()
 
     for split <- 0..(byte_size(binary) - 1) do
-      <<fragment::binary-size(split), rest::binary>> = binary
+      <<fragment::binary-size(^split), rest::binary>> = binary
       assert {:more, needed} = TPKT.decode(fragment)
       assert needed > 0
       assert {:ok, ^packet, <<>>} = TPKT.decode(fragment <> rest)

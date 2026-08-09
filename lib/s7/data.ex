@@ -305,9 +305,9 @@ defmodule S7.Data do
   def decode({:string, maximum_length} = type, binary)
       when maximum_length in 1..@maximum_string_length and is_binary(binary) do
     case binary do
-      <<^maximum_length, current_length, storage::binary-size(maximum_length)>>
+      <<^maximum_length, current_length, storage::binary-size(^maximum_length)>>
       when current_length <= maximum_length ->
-        <<value::binary-size(current_length), _padding::binary>> = storage
+        <<value::binary-size(^current_length), _padding::binary>> = storage
         {:ok, value}
 
       _other ->
@@ -319,9 +319,9 @@ defmodule S7.Data do
       when maximum_length in 1..@maximum_wstring_length and is_binary(binary) do
     case binary do
       <<^maximum_length::unsigned-big-16, current_length::unsigned-big-16,
-        storage::binary-size(maximum_length * 2)>>
+        storage::binary-size(^maximum_length * 2)>>
       when current_length <= maximum_length ->
-        <<encoded::binary-size(current_length * 2), _padding::binary>> = storage
+        <<encoded::binary-size(^current_length * 2), _padding::binary>> = storage
 
         case utf16_decode(encoded) do
           {:ok, value} -> {:ok, value}
@@ -486,7 +486,7 @@ defmodule S7.Data do
     do: {:ok, Enum.reverse(values)}
 
   defp decode_values(data_type, binary, element_size, values) do
-    <<element::binary-size(element_size), remaining::binary>> = binary
+    <<element::binary-size(^element_size), remaining::binary>> = binary
 
     case decode(data_type, element) do
       {:ok, value} -> decode_values(data_type, remaining, element_size, [value | values])

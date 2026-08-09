@@ -435,7 +435,7 @@ defmodule S7.Protocol.Cyclic do
     if byte_size(binary) < total do
       {:more, total - byte_size(binary)}
     else
-      <<item::binary-size(total), remaining::binary>> = binary
+      <<item::binary-size(^total), remaining::binary>> = binary
 
       case validate_raw_item(item) do
         :ok -> decode_item_specs(remaining, count - 1, operation, [item | items])
@@ -605,7 +605,7 @@ defmodule S7.Protocol.Cyclic do
     if byte_size(rest) < length do
       {:more, length - byte_size(rest)}
     else
-      <<data::binary-size(length), remaining::binary>> = rest
+      <<data::binary-size(^length), remaining::binary>> = rest
       consumed = byte_size(binary) - byte_size(remaining)
 
       item = %{

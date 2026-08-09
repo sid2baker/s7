@@ -85,7 +85,7 @@ defmodule S7.Protocol.DataItem do
       if byte_size(rest) < size do
         {:more, size - byte_size(rest)}
       else
-        <<data::binary-size(size), remaining::binary>> = rest
+        <<data::binary-size(^size), remaining::binary>> = rest
 
         {:ok,
          %__MODULE__{

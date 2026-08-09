@@ -85,7 +85,7 @@ defmodule S7.Transport.TPKT do
 
       true ->
         payload_size = length - @header_size
-        <<payload::binary-size(payload_size), remaining::binary>> = rest
+        <<payload::binary-size(^payload_size), remaining::binary>> = rest
         {:ok, %__MODULE__{payload: payload}, remaining}
     end
   end

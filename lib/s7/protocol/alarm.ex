@@ -605,7 +605,7 @@ defmodule S7.Protocol.Alarm do
         Protocol.malformed(operation, %{bytes_needed: total - byte_size(binary)})
 
       true ->
-        <<record_raw::binary-size(total), remaining::binary>> = binary
+        <<record_raw::binary-size(^total), remaining::binary>> = binary
 
         record = decode_query_record(record_raw)
         decode_query_record_list(remaining, operation, [record | records])
@@ -670,7 +670,7 @@ defmodule S7.Protocol.Alarm do
     if byte_size(rest) < length do
       {:more, length - byte_size(rest)}
     else
-      <<body::binary-size(length), associated_data::binary>> = rest
+      <<body::binary-size(^length), associated_data::binary>> = rest
       specification_raw = <<0x12, length, body::binary>>
 
       with {:ok, fields} <- decode_object_body(body, operation),
@@ -812,7 +812,7 @@ defmodule S7.Protocol.Alarm do
     if byte_size(rest) < payload_size do
       {:more, payload_size - byte_size(rest)}
     else
-      <<data::binary-size(payload_size), remaining::binary>> = rest
+      <<data::binary-size(^payload_size), remaining::binary>> = rest
       consumed = byte_size(binary) - byte_size(remaining)
       raw = binary_part(binary, 0, consumed)
 

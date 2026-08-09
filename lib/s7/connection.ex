@@ -2463,10 +2463,8 @@ defmodule S7.Connection do
     end
   end
 
-  defp build_request(_from, {:read_szl, _id, _index, _limits, operation}, _data) do
-    operation = if is_atom(operation), do: operation, else: :read_szl
-    {:error, Error.new(:client, operation, :invalid_szl_request)}
-  end
+  defp build_request(_from, {:read_szl, _id, _index, _limits, _operation}, _data),
+    do: {:error, Error.new(:client, :read_szl, :invalid_szl_request)}
 
   defp build_request(from, {:blocks, :counts}, _data) do
     build_blocks_request(from, BlocksProtocol.start_counts(), :block_counts)

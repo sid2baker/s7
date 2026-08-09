@@ -303,7 +303,7 @@ defmodule S7.Protocol.CyclicTest do
              Cyclic.decode_request(trailing, :test_decode_request)
 
     truncated_size = byte_size(request.payload.data) - 1
-    <<truncated::binary-size(truncated_size), _last>> = request.payload.data
+    <<truncated::binary-size(^truncated_size), _last>> = request.payload.data
 
     assert {:error, %Error{reason: :malformed_response, details: %{bytes_needed: 1}}} =
              Cyclic.decode_request(
@@ -414,7 +414,7 @@ defmodule S7.Protocol.CyclicTest do
              )
 
     truncated_size = byte_size(indication.payload.data) - 1
-    <<truncated::binary-size(truncated_size), _last>> = indication.payload.data
+    <<truncated::binary-size(^truncated_size), _last>> = indication.payload.data
 
     assert {:error, %Error{reason: :malformed_response}} =
              Cyclic.decode_indication(

@@ -67,12 +67,14 @@ defmodule S7.Protocol.PDU do
   def encoded_size(%__MODULE__{} = pdu), do: IO.iodata_length(encode(pdu))
 
   defp decode_fields(header, payload) do
-    expected = header.parameter_length + header.data_length
+    parameter_length = header.parameter_length
+    data_length = header.data_length
+    expected = parameter_length + data_length
 
     if byte_size(payload) < expected do
       {:more, expected - byte_size(payload)}
     else
-      <<parameters::binary-size(header.parameter_length), data::binary-size(header.data_length),
+      <<parameters::binary-size(^parameter_length), data::binary-size(^data_length),
         remaining::binary>> = payload
 
       {:ok, %__MODULE__{header: header, parameters: parameters, data: data}, remaining}

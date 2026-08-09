@@ -43,7 +43,7 @@ defmodule S7.Connection.StreamTest do
     pdu = PDU.new(:ack_data, 42, <<0x05, 1>>, <<0xFF>>, error_class: 0, error_code: 0)
     payload = pdu |> PDU.encode() |> IO.iodata_to_binary()
     split = div(byte_size(payload), 2)
-    <<first::binary-size(split), second::binary>> = payload
+    <<first::binary-size(^split), second::binary>> = payload
 
     binary =
       frame_tpdu(%Data{payload: first, eot: false, tpdu_number: 0}) <>
@@ -99,7 +99,7 @@ defmodule S7.Connection.StreamTest do
     pdu = PDU.new(:ack_data, 1, <<0x05, 1>>, <<0xFF>>)
     encoded = pdu |> PDU.encode() |> IO.iodata_to_binary()
     truncated_size = byte_size(encoded) - 1
-    <<truncated::binary-size(truncated_size), _last>> = encoded
+    <<truncated::binary-size(^truncated_size), _last>> = encoded
 
     assert {:error, %Error{reason: :malformed_response}} =
              Stream.push(Stream.new(), frame_tpdu(%Data{payload: truncated}), @opts)

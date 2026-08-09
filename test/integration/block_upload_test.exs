@@ -224,7 +224,7 @@ defmodule S7.BlockUploadIntegrationTest do
 
   defp replace(binary, offset, replacement) do
     size = byte_size(replacement)
-    <<prefix::binary-size(offset), _old::binary-size(size), suffix::binary>> = binary
+    <<prefix::binary-size(^offset), _old::binary-size(^size), suffix::binary>> = binary
     prefix <> replacement <> suffix
   end
 

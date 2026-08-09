@@ -299,7 +299,7 @@ defmodule S7.Transport.COTP do
 
     case rest do
       <<destination_reference::unsigned-big-16, source_reference::unsigned-big-16, class_option,
-        parameters::binary-size(parameter_size)>> ->
+        parameters::binary-size(^parameter_size)>> ->
         with {:ok, decoded} <- decode_parameters(parameters) do
           fields =
             Map.merge(decoded, %{
@@ -323,7 +323,7 @@ defmodule S7.Transport.COTP do
 
     case rest do
       <<destination_reference::unsigned-big-16, source_reference::unsigned-big-16, reason,
-        parameters::binary-size(parameter_size)>> ->
+        parameters::binary-size(^parameter_size)>> ->
         with {:ok, decoded} <-
                decode_control_parameters(parameters, 0xE0, :additional_information) do
           {:ok,
@@ -348,7 +348,7 @@ defmodule S7.Transport.COTP do
 
     case rest do
       <<destination_reference::unsigned-big-16, source_reference::unsigned-big-16,
-        parameters::binary-size(parameter_size)>> ->
+        parameters::binary-size(^parameter_size)>> ->
         with {:ok, decoded} <- decode_control_parameters(parameters, nil, nil) do
           {:ok,
            %DisconnectConfirm{
@@ -370,7 +370,7 @@ defmodule S7.Transport.COTP do
 
     case rest do
       <<destination_reference::unsigned-big-16, reject_cause,
-        parameters::binary-size(parameter_size)>> ->
+        parameters::binary-size(^parameter_size)>> ->
         with {:ok, decoded} <- decode_control_parameters(parameters, 0xC1, :invalid_tpdu) do
           {:ok,
            %ErrorTPDU{
@@ -403,7 +403,7 @@ defmodule S7.Transport.COTP do
          decoded
        )
        when byte_size(rest) >= length do
-    <<value::binary-size(length), remaining::binary>> = rest
+    <<value::binary-size(^length), remaining::binary>> = rest
 
     if code == known_code do
       case decoded.known do
@@ -433,7 +433,7 @@ defmodule S7.Transport.COTP do
 
   defp decode_parameters(<<code, length, rest::binary>>, decoded)
        when byte_size(rest) >= length do
-    <<value::binary-size(length), remaining::binary>> = rest
+    <<value::binary-size(^length), remaining::binary>> = rest
 
     with {:ok, decoded} <- put_parameter(decoded, code, value) do
       decode_parameters(remaining, decoded)
@@ -521,7 +521,7 @@ defmodule S7.Transport.COTP do
        do: Enum.reverse([binary | chunks])
 
   defp split_binary(binary, maximum_payload, chunks) do
-    <<chunk::binary-size(maximum_payload), remaining::binary>> = binary
+    <<chunk::binary-size(^maximum_payload), remaining::binary>> = binary
     split_binary(remaining, maximum_payload, [chunk | chunks])
   end
 end

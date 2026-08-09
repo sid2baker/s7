@@ -143,7 +143,7 @@ defmodule S7.SZL do
   defp split_records(<<>>, _record_length, 0, records), do: Enum.reverse(records)
 
   defp split_records(data, record_length, count, records) do
-    <<record::binary-size(record_length), remaining::binary>> = data
+    <<record::binary-size(^record_length), remaining::binary>> = data
     split_records(remaining, record_length, count - 1, [record | records])
   end
 end
