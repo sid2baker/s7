@@ -61,6 +61,8 @@ grep -Fq "[Block functions] -> [Get block info]" <<<"${DECODED}"
 grep -Fq "[Time functions] -> [Set clock]" <<<"${DECODED}"
 grep -Fq "[Security] -> [PLC password]" <<<"${DECODED}"
 grep -q "Function:\[Start upload\]" <<<"${DECODED}"
+grep -q "Function:\[Request download\]" <<<"${DECODED}"
+grep -Fq "PI-Service] -> _DELE(DB65000)" <<<"${DECODED}"
 test -z "${MALFORMED}"
 
 if [[ -n "${S7_CAPTURE_FILE:-}" ]]; then

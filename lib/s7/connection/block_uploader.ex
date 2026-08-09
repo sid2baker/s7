@@ -2,6 +2,7 @@ defmodule S7.Connection.BlockUploader do
   @moduledoc false
 
   alias S7.{Block, BlockImage, Connection, Error}
+  alias S7.Connection.TransactionCleanup
   alias S7.Protocol.BlockUpload
 
   @spec validate_options(term(), atom()) ::
@@ -35,7 +36,7 @@ defmodule S7.Connection.BlockUploader do
         if BlockUpload.initial_rejection?(error) do
           release_after_unsent_start(connection, token, error)
         else
-          abort(connection, token, error)
+          TransactionCleanup.abort(connection, token, error)
         end
     end
   end
@@ -52,7 +53,7 @@ defmodule S7.Connection.BlockUploader do
          {:ok, response} <- Connection.transaction_request(connection, token, request) do
       consume_segment(connection, token, response, transaction, raw?)
     else
-      {:error, %Error{} = error} -> abort(connection, token, error)
+      {:error, %Error{} = error} -> TransactionCleanup.abort(connection, token, error)
     end
   end
 
@@ -68,7 +69,7 @@ defmodule S7.Connection.BlockUploader do
         if BlockUpload.local_limit_error?(error) do
           finish_bounded_failure(connection, token, transaction, error)
         else
-          abort(connection, token, error)
+          TransactionCleanup.abort(connection, token, error)
         end
     end
   end
@@ -107,35 +108,12 @@ defmodule S7.Connection.BlockUploader do
          :ok <- Connection.end_transaction(connection, token) do
       :ok
     else
-      {:error, %Error{} = error} -> abort(connection, token, error)
+      {:error, %Error{} = error} -> TransactionCleanup.abort(connection, token, error)
     end
   end
 
   defp release_after_unsent_start(connection, token, error) do
-    case Connection.end_transaction(connection, token) do
-      :ok -> {:error, error}
-      {:error, %Error{reason: :not_connected}} -> {:error, error}
-      {:error, %Error{}} -> abort(connection, token, error)
-    end
-  end
-
-  defp abort(connection, token, error) do
-    case Connection.abort_transaction(connection, token, error) do
-      :ok ->
-        {:error, error}
-
-      {:error, %Error{} = abort_error} ->
-        {:error,
-         %{
-           error
-           | details:
-               Map.put_new(error.details, :cleanup, %{
-                 layer: abort_error.layer,
-                 reason: abort_error.reason,
-                 code: abort_error.code
-               })
-         }}
-    end
+    TransactionCleanup.release(connection, token, error)
   end
 
   defp transaction_options(limits) do

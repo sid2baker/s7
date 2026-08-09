@@ -22,6 +22,9 @@ configuration are outside the implementation boundary of this package.
   non-optimized data blocks. Do not weaken unrelated PLC protections.
 - Treat every write timeout or session loss as indeterminate. Verify process
   state before deciding whether an operational write may be retried.
+- Keep `allow_destructive` disabled on monitoring and normal process-data
+  clients. Use a separate least-privilege maintenance connection when block or
+  CPU control is required.
 
 ## Library Controls
 
@@ -40,6 +43,14 @@ Uploaded block images can contain proprietary control logic, symbols, comments,
 and operational details. Treat both `%S7.BlockImage{}` values and raw upload
 binaries as sensitive program material; do not emit them through telemetry,
 logs, exceptions, fixtures, or public packet captures.
+
+Block download, replacement, and deletion can stop a process, alter control
+logic, or leave a passive image on the PLC even when activation fails. These
+APIs require both `allow_destructive: true` when opening the connection and an
+operation-specific confirmation atom on every call. Those controls reduce
+accidental invocation; they are not authorization, authentication, rollback,
+or a safety system. The library never retries a destructive operation after an
+ambiguous outcome.
 
 ## Session Passwords
 

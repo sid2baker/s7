@@ -78,6 +78,21 @@ outcome and releases ownership. A local byte or fragment limit sends End Upload
 before release; malformed, timed-out, disconnected, or otherwise ambiguous
 mid-sequence outcomes abort the transaction and invalidate the session.
 
+Block download uses the bidirectional side of the same boundary. After the
+initial correlated request, PLC-initiated Download Block and Download Ended
+Jobs enter the bounded transaction inbox. The owner validates identity,
+direction, sequence, and reference uniqueness before replying. Download data
+responses are sized from the negotiated S7 PDU limit. `_INSE` activation stays
+inside the reservation, so ordinary requests cannot observe a half-finished
+local transaction. Deletion is also serialized through a short exclusive
+PI-Service transaction.
+
+Destructive authority is immutable connection configuration and defaults off.
+The public facade additionally requires an exact confirmation atom for every
+download, replacement, deletion, and control call. Reconnect preserves only
+the configured capability; it never replays the operation that lost its
+session.
+
 Unsolicited userdata indications never enter PDU-reference correlation. They
 are routed by group, subfunction, and type to monitored subscriptions. Each
 subscription has one pull waiter and a bounded queue. Queue overflow terminates

@@ -59,6 +59,7 @@ defmodule S7.Connection do
   @maximum_tpkt_size 0xFFFF
   @maximum_receive_buffer_size 1_048_576
   @connection_options [
+    :allow_destructive,
     :connection_type,
     :dst_tsap,
     :initial_reference,
@@ -98,6 +99,7 @@ defmodule S7.Connection do
     :max_jobs,
     :max_items_per_pdu,
     :max_queue_size,
+    :allow_destructive,
     :reference,
     :receive_buffer_limit,
     :stream,
@@ -593,6 +595,7 @@ defmodule S7.Connection do
       reconnect: data.reconnect.enabled,
       reconnect_attempts: data.reconnect.attempts,
       reconnect_delay: data.reconnect.delay,
+      destructive_operations: data.allow_destructive,
       exclusive_transaction: not is_nil(data.exclusive),
       transaction_waiting: not is_nil(data.exclusive_waiter),
       subscriptions: map_size(data.subscription_registry.entries),
@@ -789,6 +792,7 @@ defmodule S7.Connection do
              @default_subscription_limit,
              @maximum_receive_buffer_size
            ),
+         {:ok, allow_destructive} <- boolean_option(opts, :allow_destructive, false),
          {:ok, reconnect} <- reconnect_options(opts),
          {:ok, src_tsap} <- source_tsap(opts),
          {:ok, dst_tsap} <- destination_tsap(opts),
@@ -811,6 +815,7 @@ defmodule S7.Connection do
          max_jobs: max_jobs,
          max_items_per_pdu: max_items_per_pdu,
          max_queue_size: max_queue_size,
+         allow_destructive: allow_destructive,
          subscription_registry: %SubscriptionRegistry{limit: max_subscriptions},
          reference: reference,
          receive_buffer_limit: receive_buffer_limit,

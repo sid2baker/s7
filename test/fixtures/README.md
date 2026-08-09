@@ -29,6 +29,12 @@ Block-upload fixtures are S7 PDU bytes from frames 17-22 and 44 of the pinned
 upload and a PLC-reported OB0 rejection. The complete uploaded load-memory
 image remains embedded in the captured segment response.
 
+Block-download fixtures are S7 PDU bytes from frames 87-94 of the pinned
+`step7_s300_download.pcapng` capture. They contain Request Download, the
+PLC-driven Download Block and Download Ended jobs and replies, and `_INSE`
+activation for a complete 216-byte DB1 image. The `_DELE` DB1 fixture uses the
+same independently documented PI-Service layout with the delete command.
+
 ```text
 fixture -> decode -> expected struct
 expected struct -> encode -> fixture

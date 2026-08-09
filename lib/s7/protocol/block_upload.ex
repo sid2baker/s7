@@ -10,7 +10,7 @@ defmodule S7.Protocol.BlockUpload do
 
   alias S7.{Block, Error, Options}
   alias S7.Protocol.BlockUpload.Transaction
-  alias S7.Protocol.PDU
+  alias S7.Protocol.{Job, PDU}
 
   @start_upload 0x1D
   @upload 0x1E
@@ -40,7 +40,7 @@ defmodule S7.Protocol.BlockUpload do
   def validate_options(opts, operation) when is_list(opts) do
     allowed = [:max_bytes, :max_fragments, :timeout, :step_timeout]
 
-    with :ok <- validate_option_keys(opts, allowed, operation),
+    with :ok <- Options.validate_keys(opts, allowed, operation),
          {:ok, max_bytes} <-
            Options.positive(opts, :max_bytes, @default_max_bytes, @maximum_bytes, operation),
          {:ok, max_fragments} <-
@@ -73,13 +73,7 @@ defmodule S7.Protocol.BlockUpload do
   def start_request(%Block{} = block, limits, operation) do
     with {:ok, %Block{type: type, number: number} = block} <- Block.validate(block, operation),
          :ok <- validate_limits(limits, operation) do
-      filename =
-        IO.iodata_to_binary([
-          "_",
-          Block.encode_type(type),
-          number |> Integer.to_string() |> String.pad_leading(5, "0"),
-          "A"
-        ])
+      filename = Block.encode_filename(%Block{type: type, number: number}, :active)
 
       parameters = <<@start_upload, 0, 0::16, 0::32, byte_size(filename), filename::binary>>
 
@@ -176,15 +170,7 @@ defmodule S7.Protocol.BlockUpload do
 
   @doc false
   @spec initial_rejection?(Error.t()) :: boolean()
-  def initial_rejection?(%Error{reason: reason}) do
-    reason in [
-      :access_denied,
-      :object_not_found,
-      :invalid_block,
-      :resource_busy,
-      :plc_error
-    ]
-  end
+  def initial_rejection?(%Error{} = error), do: Job.complete_rejection?(error)
 
   @doc false
   @spec local_limit_error?(Error.t()) :: boolean()
@@ -277,44 +263,13 @@ defmodule S7.Protocol.BlockUpload do
     end
   end
 
-  defp validate_response_header(%PDU{header: header}, operation) do
-    code = (header.error_class || 0) <<< 8 ||| (header.error_code || 0)
-
-    cond do
-      code != 0 -> plc_error(operation, code)
-      header.rosctr != :ack_data -> malformed(operation, %{rosctr: header.rosctr})
-      true -> :ok
-    end
-  end
+  defp validate_response_header(pdu, operation),
+    do: Job.validate_response_header(pdu, operation)
 
   defp validate_empty_data(%PDU{data: <<>>}, _operation), do: :ok
 
   defp validate_empty_data(%PDU{data: data}, operation),
     do: malformed(operation, %{unexpected_data_size: byte_size(data)})
-
-  defp plc_error(operation, code) do
-    reason =
-      case code do
-        0xD241 -> :access_denied
-        code when code in [0xD209, 0xD20E] -> :object_not_found
-        code when code in [0xD20C, 0xD20D, 0xD210, 0xD212, 0xD219, 0xD220] -> :invalid_block
-        code when code in [0xD2A1, 0xD2A4] -> :resource_busy
-        _other -> :plc_error
-      end
-
-    {:error, Error.new(:s7, operation, reason, code: code)}
-  end
-
-  defp validate_option_keys(opts, allowed, operation) do
-    if Keyword.keyword?(opts) do
-      case Enum.find(Keyword.keys(opts), &(&1 not in allowed)) do
-        nil -> :ok
-        option -> invalid_option(operation, option, Keyword.get(opts, option))
-      end
-    else
-      {:error, Error.new(:client, operation, :invalid_options, details: %{options: opts})}
-    end
-  end
 
   defp optional_timeout(opts, operation) do
     case Keyword.fetch(opts, :step_timeout) do

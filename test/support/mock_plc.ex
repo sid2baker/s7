@@ -4,7 +4,19 @@ defmodule S7.Test.MockPLC do
   import Bitwise
 
   alias S7.{Block, Connection, SessionPassword}
-  alias S7.Protocol.{Clock, DataItem, Item, PDU, Security, SetupCommunication, UserData}
+
+  alias S7.Protocol.{
+    BlockDownload,
+    Clock,
+    DataItem,
+    Item,
+    PDU,
+    PIService,
+    Security,
+    SetupCommunication,
+    UserData
+  }
+
   alias S7.Protocol.UserData.{Parameter, Payload}
   alias S7.Transport.{COTP, TPKT}
 
@@ -63,12 +75,14 @@ defmodule S7.Test.MockPLC do
       block_fault: Keyword.get(opts, :block_fault),
       clock_fault: Keyword.get(opts, :clock_fault),
       upload_fault: Keyword.get(opts, :upload_fault),
+      download_fault: Keyword.get(opts, :download_fault),
       clock: Keyword.get(opts, :clock, ~N[2024-08-09 12:34:56.123]),
       security_password: Security.encode_password(security_password),
       authenticated: false,
       szl_pending: nil,
       block_pending: nil,
       upload_pending: nil,
+      download_pending: nil,
       deferred_reads: [],
       client_reference: nil,
       server_reference: 1,
@@ -198,6 +212,33 @@ defmodule S7.Test.MockPLC do
   end
 
   defp handle_received(
+         {:ok, %PDU{header: %{rosctr: :job}, parameters: <<0x1A, _rest::binary>>} = request,
+          state}
+       ) do
+    state |> handle_download_start(request) |> serve()
+  end
+
+  defp handle_received(
+         {:ok, %PDU{header: %{rosctr: :ack_data}, parameters: <<0x1B, _status>>} = response,
+          state}
+       ) do
+    state |> handle_download_response(response) |> serve()
+  end
+
+  defp handle_received(
+         {:ok, %PDU{header: %{rosctr: :ack_data}, parameters: <<0x1C>>} = response, state}
+       ) do
+    state |> handle_download_end_response(response) |> serve()
+  end
+
+  defp handle_received(
+         {:ok, %PDU{header: %{rosctr: :job}, parameters: <<0x28, _rest::binary>>} = request,
+          state}
+       ) do
+    state |> handle_pi_service(request) |> serve()
+  end
+
+  defp handle_received(
          {:ok, %PDU{header: %{rosctr: :job}, parameters: <<0xEE, 0x01>>} = request, state}
        ) do
     count = Keyword.get(state.options, :transaction_jobs, 1)
@@ -318,6 +359,217 @@ defmodule S7.Test.MockPLC do
     else
       :error -> send_upload_header_error(state, request, 0xD209)
     end
+  end
+
+  defp handle_download_start(state, request) do
+    state = notify_request(state, :download_start, request)
+
+    case BlockDownload.decode_start_request(request, :mock_download) do
+      {:ok, start} -> start_download(state, request, start)
+      {:error, _error} -> send_upload_header_error(state, request, 0xD20C)
+    end
+  end
+
+  defp start_download(%{download_fault: :start_rejected} = state, request, _start) do
+    send_upload_header_error(%{state | download_fault: nil}, request, 0xD241)
+  end
+
+  defp start_download(%{download_fault: :malformed_start_response} = state, request, start) do
+    :ok = send_pdu(state, PDU.new(:ack_data, request.header.pdu_reference, <<0x1A, 0>>))
+    %{state | download_fault: nil, download_pending: new_download_pending(start)}
+  end
+
+  defp start_download(state, request, start) do
+    expected_block = Keyword.get(state.options, :expected_download_block, start.block)
+    expected_image = Keyword.get(state.options, :expected_download_image)
+
+    valid_image? =
+      is_nil(expected_image) or
+        (is_binary(expected_image) and byte_size(expected_image) == start.load_memory_size)
+
+    if expected_block == start.block and valid_image? do
+      :ok = send_pdu(state, PDU.new(:ack_data, request.header.pdu_reference, <<0x1A>>))
+      state = %{state | download_pending: new_download_pending(start)}
+      begin_download_pull(state)
+    else
+      send_upload_header_error(state, request, 0xD20C)
+    end
+  end
+
+  defp begin_download_pull(%{download_fault: :segment_silence} = state),
+    do: %{state | download_fault: nil}
+
+  defp begin_download_pull(%{download_fault: :segment_disconnect} = state) do
+    :ok = :gen_tcp.close(state.socket)
+    %{state | download_fault: nil}
+  end
+
+  defp begin_download_pull(state), do: send_download_job(state)
+
+  defp send_download_job(%{download_pending: pending} = state) do
+    Process.sleep(Keyword.get(state.options, :download_response_delay, 0))
+    reference = pending.next_reference
+
+    block =
+      if state.download_fault == :wrong_download_identity do
+        %{pending.block | number: pending.block.number + 1}
+      else
+        pending.block
+      end
+
+    parameters =
+      if state.download_fault == :malformed_download_job do
+        <<0x1B, 0>>
+      else
+        filename = Block.encode_filename(block, :passive)
+        <<0x1B, 0, 0::16, 0::32, 9, filename::binary>>
+      end
+
+    :ok = send_pdu(state, PDU.new(:job, reference, parameters))
+    state = notify_request(state, :download_pull, %{header: %{pdu_reference: reference}})
+
+    fault =
+      if state.download_fault in [:wrong_download_identity, :malformed_download_job],
+        do: nil,
+        else: state.download_fault
+
+    pending = %{pending | outstanding_reference: reference, next_reference: reference + 1}
+    %{state | download_fault: fault, download_pending: pending}
+  end
+
+  defp handle_download_response(%{download_pending: pending} = state, response) do
+    state = notify_request(state, :download_segment, response)
+
+    with true <- response.header.pdu_reference == pending.outstanding_reference,
+         {:ok, decoded} <- BlockDownload.decode_download_response(response, :mock_download),
+         true <- pending.received_size + byte_size(decoded.data) <= pending.load_memory_size do
+      pending = %{
+        pending
+        | parts: [decoded.data | pending.parts],
+          received_size: pending.received_size + byte_size(decoded.data),
+          outstanding_reference: nil
+      }
+
+      continue_download_response(%{state | download_pending: pending}, decoded.more?)
+    else
+      _other ->
+        :ok = :gen_tcp.close(state.socket)
+        state
+    end
+  end
+
+  defp continue_download_response(%{download_pending: pending} = state, true)
+       when pending.received_size < pending.load_memory_size do
+    send_download_job(state)
+  end
+
+  defp continue_download_response(%{download_pending: pending} = state, false)
+       when pending.received_size == pending.load_memory_size do
+    send_download_end_job(state)
+  end
+
+  defp continue_download_response(state, _more?) do
+    :ok = :gen_tcp.close(state.socket)
+    state
+  end
+
+  defp send_download_end_job(%{download_pending: pending} = state) do
+    reference = pending.next_reference
+    filename = Block.encode_filename(pending.block, :passive)
+    error_code = if state.download_fault == :download_end_rejected, do: 0xD241, else: 0
+
+    parameters =
+      if state.download_fault == :malformed_download_end do
+        <<0x1C, 0>>
+      else
+        <<0x1C, 0, error_code::16, 0::32, 9, filename::binary>>
+      end
+
+    :ok = send_pdu(state, PDU.new(:job, reference, parameters))
+    state = notify_request(state, :download_end, %{header: %{pdu_reference: reference}})
+    pending = %{pending | outstanding_reference: reference, stage: :download_ended}
+    %{state | download_pending: pending}
+  end
+
+  defp handle_download_end_response(%{download_pending: pending} = state, response) do
+    with true <- pending.stage == :download_ended,
+         true <- response.header.pdu_reference == pending.outstanding_reference,
+         :ok <- BlockDownload.decode_end_response(response, :mock_download) do
+      raw = pending.parts |> Enum.reverse() |> IO.iodata_to_binary()
+      send(state.owner, {:mock_plc_downloaded, pending.block, raw})
+      pending = %{pending | image: raw, stage: :activation, outstanding_reference: nil}
+      %{state | download_pending: pending}
+    else
+      _other ->
+        :ok = :gen_tcp.close(state.socket)
+        state
+    end
+  end
+
+  defp handle_pi_service(state, request) do
+    case PIService.decode_block_request(request, :mock_pi_service) do
+      {:ok, %{action: :insert, block: block}} -> handle_block_insert(state, request, block)
+      {:ok, %{action: :delete, block: block}} -> handle_block_delete(state, request, block)
+      {:error, _error} -> send_upload_header_error(state, request, 0xD20C)
+    end
+  end
+
+  defp handle_block_insert(
+         %{download_pending: %{stage: :activation, block: block} = pending} = state,
+         request,
+         block
+       ) do
+    state = notify_request(state, :insert_block, request)
+
+    case state.download_fault do
+      :insert_rejected ->
+        state
+        |> Map.put(:download_pending, nil)
+        |> Map.put(:download_fault, nil)
+        |> send_upload_header_error(request, 0xD241)
+
+      :malformed_insert_response ->
+        :ok = send_pdu(state, PDU.new(:ack_data, request.header.pdu_reference, <<0x28, 0>>))
+        %{state | download_pending: nil, download_fault: nil}
+
+      :insert_disconnect ->
+        :ok = :gen_tcp.close(state.socket)
+        %{state | download_pending: nil, download_fault: nil}
+
+      _other ->
+        :ok = send_pdu(state, PDU.new(:ack_data, request.header.pdu_reference, <<0x28>>))
+        send(state.owner, {:mock_plc_block_activated, block, pending.image})
+        %{state | download_pending: nil, download_fault: nil}
+    end
+  end
+
+  defp handle_block_insert(state, request, _block),
+    do: send_upload_header_error(state, request, 0xD20C)
+
+  defp handle_block_delete(state, request, block) do
+    state = notify_request(state, :delete_block, request)
+
+    if state.download_fault == :delete_rejected do
+      send_upload_header_error(%{state | download_fault: nil}, request, 0xD241)
+    else
+      :ok = send_pdu(state, PDU.new(:ack_data, request.header.pdu_reference, <<0x28>>))
+      send(state.owner, {:mock_plc_block_deleted, block})
+      state
+    end
+  end
+
+  defp new_download_pending(start) do
+    %{
+      block: start.block,
+      load_memory_size: start.load_memory_size,
+      mc7_size: start.mc7_size,
+      received_size: 0,
+      parts: [],
+      stage: :download,
+      next_reference: 0x6501,
+      outstanding_reference: nil,
+      image: nil
+    }
   end
 
   defp handle_upload_segment(

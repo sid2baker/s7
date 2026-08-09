@@ -96,6 +96,21 @@ defmodule S7.Block do
   def encode_type(type), do: <<Map.fetch!(@type_codes, type)::unsigned-big-16>>
 
   @doc false
+  @spec encode_filename(t(), :active | :passive) :: binary()
+  def encode_filename(%__MODULE__{type: type, number: number}, destination)
+      when is_map_key(@type_codes, type) and number in 0..0xFFFF and
+             destination in [:active, :passive] do
+    suffix = if destination == :active, do: "A", else: "P"
+
+    IO.iodata_to_binary([
+      "_",
+      encode_type(type),
+      number |> Integer.to_string() |> String.pad_leading(5, "0"),
+      suffix
+    ])
+  end
+
+  @doc false
   @spec decode_type(0..0xFFFF) :: decoded_type()
   def decode_type(code), do: Map.get(@code_to_type, code, {:unknown, code})
 

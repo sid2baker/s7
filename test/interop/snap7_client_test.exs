@@ -7,6 +7,7 @@ defmodule S7.Snap7ClientInteropTest do
     Address,
     Block,
     BlockEntry,
+    BlockImage,
     BlockInfo,
     BlockInventory,
     Client,
@@ -19,10 +20,21 @@ defmodule S7.Snap7ClientInteropTest do
     SZL
   }
 
+  alias S7.Protocol.{BlockDownload, PDU}
+  alias S7.Test.Fixture
+
   setup do
     host = System.fetch_env!("S7_TEST_HOST")
     port = System.fetch_env!("S7_TEST_PORT") |> String.to_integer()
-    {:ok, client} = Client.connect(host, port: port, timeout: 2_000, max_jobs: 4)
+
+    {:ok, client} =
+      Client.connect(host,
+        port: port,
+        timeout: 2_000,
+        max_jobs: 4,
+        allow_destructive: true
+      )
+
     on_exit(fn -> Client.close(client) end)
     {:ok, client: client}
   end
@@ -151,5 +163,27 @@ defmodule S7.Snap7ClientInteropTest do
 
     assert %{state: :ready, exclusive_transaction: false} = Client.info(client)
     assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+  end
+
+  test "decodes download protection and emits a PI block-control request", %{client: client} do
+    image = captured_download_image()
+
+    assert {:error,
+            %Error{
+              reason: :access_denied,
+              code: 0xD241,
+              details: %{outcome: :rejected, stage: :request_download}
+            }} = Client.download_block(client, image, confirm: :download_block)
+
+    assert Client.delete_block(client, :db, 65_000, confirm: :delete_block) == :ok
+    assert %{state: :ready, exclusive_transaction: false} = Client.info(client)
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+  end
+
+  defp captured_download_image do
+    assert {:ok, pdu, <<>>} = Fixture.read!("download/block_response.bin") |> PDU.decode()
+    assert {:ok, %{data: raw}} = BlockDownload.decode_download_response(pdu, :interop)
+    assert {:ok, image} = BlockImage.decode(raw, %Block{type: :db, number: 1})
+    image
   end
 end

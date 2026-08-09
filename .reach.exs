@@ -13,6 +13,7 @@
       "S7.BlockImage",
       "S7.BlockInventory",
       "S7.Data",
+      "S7.Destructive",
       "S7.Error",
       "S7.Options",
       "S7.PLCClock",
@@ -49,8 +50,8 @@
     forbidden: [
       {"S7.Protocol*", [":gen_tcp.*", ":gen_statem.*", "GenServer.*"]},
       {"S7.Transport.*", [":gen_tcp.*", ":gen_statem.*", "GenServer.*"]},
-      {["S7.Address", "S7.Block*", "S7.Data", "S7.Error", "S7.Options", "S7.PLCClock",
-        "S7.Result", "S7.SessionPassword", "S7.TSAP"],
+      {["S7.Address", "S7.Block*", "S7.Data", "S7.Destructive", "S7.Error", "S7.Options",
+        "S7.PLCClock", "S7.Result", "S7.SessionPassword", "S7.TSAP"],
        [":gen_tcp.*", ":gen_statem.*", "GenServer.*"]}
     ]
   ]

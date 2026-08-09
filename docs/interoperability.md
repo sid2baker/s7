@@ -10,7 +10,7 @@ security configuration.
 | --- | --- | --- | --- |
 | In-process fault server | TCP/COTP fragmentation, malformed frames, out-of-order responses, concurrency, timeout, reconnect, drain | Every commit | Passing |
 | Snap7 server | `valiot/snap7` commit `a1845454f5f16f3b127b987807f1cbc59205db70` | Every commit | Passing |
-| Wireshark/tshark | Pinned netshoot image; Setup, Read/Write Var, SZL, block directory/upload, clock, and security-service filters; zero malformed frames | Every commit | Passing |
+| Wireshark/tshark | Pinned netshoot image; Setup, Read/Write Var, SZL, block directory/transfer/control, clock, and security-service filters; zero malformed frames | Every commit | Passing |
 | Request soak | 20,000 mixed concurrent reads/writes with bounded memory and empty final mailbox | Weekly/manual | Automated |
 
 The Snap7 gate negotiates four jobs, exercises concurrent reads, all supported
@@ -26,6 +26,12 @@ requires its `0xD241` rejection to decode as `:access_denied`, verifies the
 session remains usable, and requires tshark to identify Start Upload. Successful
 Start/Upload/End assembly is qualified against an exact real-PLC capture and the
 fault server; successful PLCSIM and physical-device execution remains pending.
+The STEP 7 S7-300 download capture supplies an exact successful Request
+Download, PLC-driven data response, Download Ended, and `_INSE` sequence. The
+fault server repeats it with negotiated multi-PDU splitting and malformed-path
+coverage. The pinned Snap7 server deliberately returns `0xD241` to Request
+Download but accepts the generated `_DELE` envelope on its disposable target;
+the gate verifies the session remains usable after both outcomes.
 
 ## Release Qualification Matrix
 

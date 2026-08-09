@@ -100,6 +100,21 @@ the completed image occurs only after End Upload succeeds, so an unsupported
 image variant can be returned as a structured error without abandoning remote
 state; `upload_block_raw` preserves that image for inspection.
 
+Block download is destructive and never replayed. Invalid image bytes,
+identity mismatches, a disabled connection capability, or a missing per-call
+confirmation fail before transmission. A PLC rejection of Request Download is
+complete and leaves the session usable. After acceptance, malformed pull Jobs,
+timeouts, disconnects, duplicate references, and ambiguous replies return
+`details.outcome: :indeterminate` and invalidate the session. A Download Ended
+error is complete. If `_INSE` is explicitly rejected, the error reports
+`:downloaded_not_activated`; the passive image may remain on the PLC.
+
+Replacement uses the same wire sequence and differs by explicit caller intent.
+Deletion is one exclusive `_DELE` PI-Service request. Complete PI errors are
+reported as `:rejected` without disconnecting; a missing or malformed response
+after transmission is indeterminate. Applications must inspect PLC state or
+restore a known project before deciding on any follow-up action.
+
 Exclusive transactions are never replayed. A transaction has an overall
 deadline, a per-request timeout, aggregate message and byte limits, and a
 bounded inbox for PLC-initiated Jobs. An invalid owner/token or local option

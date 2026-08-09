@@ -57,13 +57,13 @@ adapters may be added later without weakening the core support claim.
 | --- | ---: | --- | --- | --- |
 | Read Var | `0x04` | Single and multi-variable reads | Read-only | Implemented |
 | Write Var | `0x05` | Single and multi-variable writes | State-changing | Implemented |
-| Request Download | `0x1A` | Negotiate a block download | Destructive | Planned |
-| Download Block | `0x1B` | PLC-driven block data transfer | Destructive | Planned |
-| Download Ended | `0x1C` | Finish block transfer | Destructive | Planned |
+| Request Download | `0x1A` | Negotiate a block download | Destructive | Implemented; device qualification pending |
+| Download Block | `0x1B` | PLC-driven block data transfer | Destructive | Implemented; device qualification pending |
+| Download Ended | `0x1C` | Finish block transfer | Destructive | Implemented; device qualification pending |
 | Start Upload | `0x1D` | Open a block upload session | Read-only | Implemented; device qualification pending |
 | Upload | `0x1E` | Transfer one upload segment | Read-only | Implemented; device qualification pending |
 | End Upload | `0x1F` | Close an upload session | Read-only | Implemented; device qualification pending |
-| PI-Service | `0x28` | Start, insert/delete, compress, copy memory | Destructive | Planned |
+| PI-Service | `0x28` | Insert/delete implemented; start, compress, copy memory planned | Destructive | Partial; device qualification pending |
 | PLC Stop | `0x29` | Stop CPU execution | Destructive | Planned |
 | Setup Communication | `0xF0` | Negotiate PDU and AMQ limits | Session | Implemented |
 

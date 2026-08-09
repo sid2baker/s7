@@ -18,6 +18,7 @@ defmodule S7.Client do
     CPInfo,
     CPUInfo,
     Data,
+    Destructive,
     Error,
     OrderCode,
     PLCClock,
@@ -27,7 +28,7 @@ defmodule S7.Client do
     SZL
   }
 
-  alias S7.Connection.BlockUploader
+  alias S7.Connection.{BlockDownloader, BlockUploader}
   alias S7.SZL.Metadata
 
   @opaque t :: GenServer.server()
@@ -85,7 +86,9 @@ defmodule S7.Client do
   Options include `:rack` (default `0`), `:slot` (default `2`), `:port`
   (default `102`), `:timeout` in milliseconds (default `5000`),
   `:connection_type`, explicit `:src_tsap`/`:dst_tsap`, `:tpdu_size`, and the
-  requested S7 `:pdu_size`, requested `:max_jobs`, and local `:queue_limit`.
+  requested S7 `:pdu_size`, requested `:max_jobs`, local `:queue_limit`, and
+  `:allow_destructive` (default `false`). Destructive calls also require their
+  operation-specific confirmation option.
   """
   @spec connect(:inet.hostname() | :inet.ip_address(), keyword()) ::
           {:ok, t()} | {:error, Error.t()}
@@ -373,6 +376,113 @@ defmodule S7.Client do
   end
 
   @doc """
+  Downloads and activates one parsed classic load-memory block image.
+
+  The connection must be opened with `allow_destructive: true`, and this call
+  requires `confirm: :download_block`. The PLC may replace an existing block;
+  use `replace_block/3` when replacement is the caller's explicit intent.
+  """
+  @spec download_block(t(), BlockImage.t(), keyword()) :: :ok | {:error, Error.t()}
+  def download_block(client, image, opts \\ [])
+
+  def download_block(client, %BlockImage{} = image, opts) do
+    download_block_operation(client, image, opts, :download_block, :download_block)
+  end
+
+  def download_block(_client, _image, _opts),
+    do: {:error, Error.new(:client, :download_block, :invalid_block_image)}
+
+  @doc """
+  Validates, downloads, and activates a raw load-memory image for one block.
+  """
+  @spec download_block_raw(t(), Block.t(), binary(), keyword()) :: :ok | {:error, Error.t()}
+  def download_block_raw(client, block, raw, opts \\ [])
+
+  def download_block_raw(client, %Block{} = block, raw, opts) do
+    download_raw_operation(client, block, raw, opts, :download_block, :download_block)
+  end
+
+  @spec download_block_raw(t(), Block.known_type(), 0..0xFFFF, binary()) ::
+          :ok | {:error, Error.t()}
+  def download_block_raw(client, type, number, raw),
+    do: download_block_raw(client, type, number, raw, [])
+
+  @spec download_block_raw(t(), Block.known_type(), 0..0xFFFF, binary(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def download_block_raw(client, type, number, raw, opts) do
+    with {:ok, block} <- Block.normalize(type, number, :download_block) do
+      download_raw_operation(client, block, raw, opts, :download_block, :download_block)
+    end
+  end
+
+  @doc """
+  Replaces a block through the classic download and activation sequence.
+
+  Requires `allow_destructive: true` on the connection and
+  `confirm: :replace_block` on this call.
+  """
+  @spec replace_block(t(), BlockImage.t(), keyword()) :: :ok | {:error, Error.t()}
+  def replace_block(client, image, opts \\ [])
+
+  def replace_block(client, %BlockImage{} = image, opts) do
+    download_block_operation(client, image, opts, :replace_block, :replace_block)
+  end
+
+  def replace_block(_client, _image, _opts),
+    do: {:error, Error.new(:client, :replace_block, :invalid_block_image)}
+
+  @doc """
+  Validates and replaces a block from its raw load-memory image.
+  """
+  @spec replace_block_raw(t(), Block.t(), binary(), keyword()) :: :ok | {:error, Error.t()}
+  def replace_block_raw(client, block, raw, opts \\ [])
+
+  def replace_block_raw(client, %Block{} = block, raw, opts) do
+    download_raw_operation(client, block, raw, opts, :replace_block, :replace_block)
+  end
+
+  @spec replace_block_raw(t(), Block.known_type(), 0..0xFFFF, binary()) ::
+          :ok | {:error, Error.t()}
+  def replace_block_raw(client, type, number, raw),
+    do: replace_block_raw(client, type, number, raw, [])
+
+  @spec replace_block_raw(t(), Block.known_type(), 0..0xFFFF, binary(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def replace_block_raw(client, type, number, raw, opts) do
+    with {:ok, block} <- Block.normalize(type, number, :replace_block) do
+      download_raw_operation(client, block, raw, opts, :replace_block, :replace_block)
+    end
+  end
+
+  @doc """
+  Deletes one classic PLC block.
+
+  Requires `allow_destructive: true` on the connection and
+  `confirm: :delete_block` on this call.
+  """
+  @spec delete_block(t(), Block.t(), keyword()) :: :ok | {:error, Error.t()}
+  def delete_block(client, block, opts \\ [])
+
+  def delete_block(client, %Block{} = block, opts) do
+    with {:ok, block} <- Block.validate(block, :delete_block),
+         {:ok, limits} <-
+           Destructive.validate_options(opts, :delete_block, :delete_block) do
+      call(fn -> BlockDownloader.delete(client, block, limits, :delete_block) end, :delete_block)
+    end
+  end
+
+  @spec delete_block(t(), Block.known_type(), 0..0xFFFF) :: :ok | {:error, Error.t()}
+  def delete_block(client, type, number), do: delete_block(client, type, number, [])
+
+  @spec delete_block(t(), Block.known_type(), 0..0xFFFF, keyword()) ::
+          :ok | {:error, Error.t()}
+  def delete_block(client, type, number, opts) do
+    with {:ok, block} <- Block.normalize(type, number, :delete_block) do
+      delete_block(client, block, opts)
+    end
+  end
+
+  @doc """
   Returns negotiated connection information.
   """
   @spec info(t()) :: map() | {:error, Error.t()}
@@ -465,6 +575,19 @@ defmodule S7.Client do
         fn -> BlockUploader.upload(client, block, limits, raw?, :upload_block) end,
         :upload_block
       )
+    end
+  end
+
+  defp download_raw_operation(client, block, raw, opts, confirmation, operation) do
+    with {:ok, image} <- BlockImage.decode(raw, block, operation) do
+      download_block_operation(client, image, opts, confirmation, operation)
+    end
+  end
+
+  defp download_block_operation(client, image, opts, confirmation, operation) do
+    with {:ok, limits} <- Destructive.validate_options(opts, confirmation, operation),
+         {:ok, image} <- BlockImage.decode(image.raw, image.block, operation) do
+      call(fn -> BlockDownloader.download(client, image, limits, operation) end, operation)
     end
   end
 

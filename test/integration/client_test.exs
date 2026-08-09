@@ -356,6 +356,9 @@ defmodule S7.ClientIntegrationTest do
              Client.connect({127, 0, 0, 1}, reconnect_jitter: 1.1)
 
     assert {:error, %Error{reason: :invalid_option}} =
+             Client.connect({127, 0, 0, 1}, allow_destructive: :sometimes)
+
+    assert {:error, %Error{reason: :invalid_option}} =
              Client.start_link(host: {127, 0, 0, 1}, name: {:invalid, :name})
 
     assert {:error, %Error{reason: :missing_host}} = Client.start_link([])

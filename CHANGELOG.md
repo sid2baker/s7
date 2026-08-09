@@ -35,6 +35,7 @@ Changes currently targeted for `0.1.0` are listed below.
 - Bounded classic block inventory, list-by-type continuation, and detailed block metadata with capture-derived golden packets and Snap7/PCAP qualification.
 - Timezone-free PLC clock read/set services and classic protected-session login/logout with strict queue barriers, credential redaction, and Snap7/PCAP qualification.
 - Bounded classic block upload with exclusive lifecycle ownership, exact capture fixtures, raw image preservation, and structured load-memory image parsing.
+- Opt-in classic block download, replacement, and deletion with negotiated PLC-driven slicing, exact STEP 7 fixtures, two-level destructive authorization, and explicit indeterminate outcomes.
 
 The date remains unset until the external release qualification in
 `docs/interoperability.md` is complete.

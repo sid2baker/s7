@@ -134,6 +134,7 @@ defmodule S7.MixProject do
           S7.Telemetry
         ],
         "S7 Protocol": [
+          S7.Protocol.BlockDownload,
           S7.Protocol.BlockUpload,
           S7.Protocol.Blocks,
           S7.Protocol.Clock,
@@ -142,6 +143,7 @@ defmodule S7.MixProject do
           S7.Protocol.Item,
           S7.Protocol.PDU,
           S7.Protocol.PDUPlanner,
+          S7.Protocol.PIService,
           S7.Protocol.ReadVar,
           S7.Protocol.Security,
           S7.Protocol.SetupCommunication,

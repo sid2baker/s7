@@ -35,11 +35,12 @@ The complete scope and risk policy are defined in
 | Read/set PLC clock | Implemented; timezone-free wire value retained | Supported after device qualification |
 | Protected-session login/logout | Implemented with credential redaction and queue barriers | Supported after device qualification |
 | Block upload and load-memory image parsing | Implemented with exclusive bounded transactions | Supported after successful device qualification |
+| Block download and replacement | Implemented with PLC-driven PDU splitting and explicit destructive authorization | Supported after successful device qualification |
+| Block deletion | Implemented through PI-Service with explicit destructive authorization | Supported after successful device qualification |
 | Common userdata envelope and request routing | Implemented | Supported |
 | Exclusive bidirectional service transactions | Implemented, internal typed-service boundary | Supported |
 | Bounded unsolicited userdata routing | Implemented, internal typed-service boundary | Supported |
 | Userdata diagnostics/services | Not implemented | Post-1.0 |
-| Block download, replacement, and deletion | Not implemented; distinct from upload and Read/Write Var services | Separate opt-in surface |
 | PLC control | Not implemented | Separate opt-in surface |
 | Alarms | Not implemented | Post-1.0 |
 
@@ -61,6 +62,8 @@ routed to bounded monitored subscriptions. Session login/logout is serialized
 as a queue barrier: earlier jobs complete first and later jobs cannot overtake
 the authorization change. Block upload runs exclusively and has independent
 aggregate byte, fragment, step-timeout, and overall-deadline bounds.
+Block download uses the same ownership boundary but handles Jobs initiated by
+the PLC and splits response data against the negotiated PDU size.
 
 ## Addressing And Values
 
@@ -98,7 +101,11 @@ the requested identity, declared load-memory and MC7 sizes, timestamps, and
 known footer fields while retaining the exact image. The raw API preserves
 CPU-specific variants. Classic image MC7 and footer ranges can overlap, so the
 model does not incorrectly treat them as disjoint sections. Download,
-replacement, and deletion remain unimplemented.
+replacement, and deletion are separate destructive APIs. They are disabled by
+default at connection creation and require a distinct confirmation atom on
+every call. Raw images are fully parsed before transmission. Download covers
+Request Download, bounded PLC-driven data pulls, Download Ended, and `_INSE`;
+delete uses `_DELE`. No destructive request is automatically replayed.
 
 Clock reads return a timezone-free `S7.PLCClock` with the complete ten-byte
 timestamp. Clock writes accept millisecond-precision `NaiveDateTime` values.

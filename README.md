@@ -4,8 +4,9 @@ An Elixir client for classic S7comm over RFC 1006. The protocol surface includes
 setup, S7 Setup Communication, single- or multi-item Read Var and Write Var jobs, bounded
 userdata-backed System Status List (SZL/SSL) reads, and classic block directory and metadata
 queries. Bounded classic block upload, PLC clock access, and classic session-password
-authorization are also supported. One S7ANY item may represent either a scalar or a fixed-count
-range.
+authorization are also supported. Destructive block download, replacement, and deletion are
+available only through an explicit two-level opt-in. One S7ANY item may represent either a scalar
+or a fixed-count range.
 
 The implementation keeps protocol codecs pure and gives the TCP socket to one `:gen_statem`
 process. Its `active: :once` request engine correlates responses by PDU reference, bounds queued
@@ -18,10 +19,10 @@ reads and writes. CI also builds a server from a pinned Snap7 revision and verif
 splitting and read-after-write for every supported area and value type. PLCSIM Advanced and
 physical Siemens hardware remain external release gates, so `0.1.0` remains a release candidate.
 
-S7comm-plus, symbolic addressing, optimized DB access, block download/replacement/deletion, PLC
-control, alarms, and programmer diagnostics are not supported. The common classic userdata
-envelope is implemented for SZL, block-directory, clock, and protected-session requests plus safe
-handling of unsolicited indications.
+S7comm-plus, symbolic addressing, optimized DB access, PLC control, alarms, and programmer
+diagnostics are not supported. The common classic userdata envelope is implemented for SZL,
+block-directory, clock, and protected-session requests plus safe handling of unsolicited
+indications.
 
 ## Usage
 
@@ -85,6 +86,7 @@ The client returned by `connect/2` is the PID that owns the socket. All public f
 | `:receive_buffer_limit` | derived | Maximum buffered TCP bytes; at least `:max_tpkt_size` |
 | `:max_items_per_pdu` | `20` | Conservative peer-compatible Read/Write Var item limit |
 | `:subscription_limit` | `16` | Maximum session-local userdata indication subscriptions |
+| `:allow_destructive` | `false` | Enables destructive APIs; every call still requires its exact confirmation atom |
 
 The PLC may negotiate smaller PDU or job limits. `S7.Client.info/1` reports negotiated limits,
 the next reference, and current queue/in-flight counts. The default remains one job for broad PLC
@@ -257,6 +259,47 @@ Successful upload is qualified by an independently captured real-PLC exchange an
 server. The pinned Snap7 server rejects upload with `0xD241`, which the interoperability gate
 checks explicitly.
 
+## Destructive Block Management
+
+Block download is a PLC-driven, bidirectional transaction and is not Write Var. It is disabled by
+default. Both the connection capability and the operation-specific confirmation are required:
+
+```elixir
+{:ok, maintenance_client} =
+  S7.Client.connect("192.168.1.10",
+    rack: 0,
+    slot: 2,
+    allow_destructive: true
+  )
+
+:ok =
+  S7.Client.download_block(maintenance_client, image,
+    confirm: :download_block
+  )
+
+:ok =
+  S7.Client.replace_block(maintenance_client, replacement,
+    confirm: :replace_block
+  )
+
+:ok =
+  S7.Client.delete_block(maintenance_client, :db, 1,
+    confirm: :delete_block
+  )
+```
+
+`download_block_raw/4` and `replace_block_raw/4` validate the complete image and requested block
+identity before sending. Download reserves the connection for Request Download, every
+PLC-initiated Download Block job, Download Ended, and `_INSE` activation. Responses are split
+against the negotiated PDU size. A complete PLC rejection leaves the connection usable; timeout,
+disconnect, malformed traffic, or an ambiguous activation response invalidates the session and
+returns `details.outcome: :indeterminate`. No destructive operation is replayed after reconnect.
+
+The exact successful transfer is capture- and fault-server-qualified. The pinned Snap7 server
+deliberately rejects Request Download, so successful PLCSIM and physical-PLC qualification remains
+a release gate. Whether `_INSE` creates or replaces an existing block is PLC-dependent;
+`replace_block/3` records explicit caller intent but uses the same classic wire service.
+
 ## PLC Clock And Session Authorization
 
 Classic PLC clock values are timezone-free local civil time:
@@ -289,7 +332,7 @@ provides no encryption, integrity, or peer authentication; see [Security policy]
 S7.Client
   -> S7.Connection (:gen_statem, active-once :gen_tcp owner)
     -> bounded queue / PDU-reference correlation / request timers / reconnect backoff
-    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL, Blocks, BlockUpload, Clock, Security}
+    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL, Blocks, BlockUpload, BlockDownload, PIService, Clock, Security}
       -> S7.Protocol.PDU / Header / Item / DataItem
         -> S7.Transport.COTP
           -> S7.Transport.TPKT
@@ -336,8 +379,8 @@ The script uses the ignored local Snap7 reference when present and otherwise che
 revision into a temporary directory.
 
 With Docker available, capture the same exchange and require tshark to identify Setup, Read Var,
-Write Var, SZL, block-directory, block-upload, set-clock, and session-password services without
-malformed packets:
+Write Var, SZL, block-directory, block transfer, PI block control, set-clock, and session-password
+services without malformed packets:
 
 ```bash
 bash scripts/run_snap7_packet_check.sh
