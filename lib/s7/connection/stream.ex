@@ -4,7 +4,7 @@ defmodule S7.Connection.Stream do
   alias S7.Error
   alias S7.Protocol.PDU
   alias S7.Transport.{COTP, TPKT}
-  alias S7.Transport.COTP.{Data, DisconnectRequest, ErrorTPDU}
+  alias S7.Transport.COTP.{Data, DisconnectConfirm, DisconnectRequest, ErrorTPDU}
 
   defstruct buffer: <<>>,
             fragment_parts: [],
@@ -28,7 +28,9 @@ defmodule S7.Connection.Stream do
   @spec new(binary()) :: t()
   def new(buffer \\ <<>>) when is_binary(buffer), do: %__MODULE__{buffer: buffer}
 
-  @spec push(t(), binary(), [option()]) :: {:ok, [PDU.t()], t()} | {:error, Error.t()}
+  @type event :: PDU.t() | DisconnectRequest.t() | DisconnectConfirm.t() | ErrorTPDU.t()
+
+  @spec push(t(), binary(), [option()]) :: {:ok, [event()], t()} | {:error, Error.t()}
   def push(%__MODULE__{} = stream, bytes, opts) when is_binary(bytes) and is_list(opts) do
     buffer = stream.buffer <> bytes
     limit = Keyword.fetch!(opts, :receive_buffer_limit)
@@ -82,18 +84,13 @@ defmodule S7.Connection.Stream do
         append_fragment(stream, data, opts, Keyword.fetch!(opts, :maximum_fragments))
 
       {:ok, %DisconnectRequest{} = request} ->
-        {:error,
-         error(:cotp, :remote_disconnect, %{
-           reason: request.reason,
-           additional_information: request.additional_information
-         })}
+        {:ok, request, reset_fragments(stream)}
+
+      {:ok, %DisconnectConfirm{} = confirm} ->
+        {:ok, confirm, reset_fragments(stream)}
 
       {:ok, %ErrorTPDU{} = tpdu} ->
-        {:error,
-         error(:cotp, :protocol_error, %{
-           reject_cause: tpdu.reject_cause,
-           invalid_tpdu: tpdu.invalid_tpdu
-         })}
+        {:ok, tpdu, reset_fragments(stream)}
 
       {:ok, _tpdu} ->
         {:error, error(:cotp, :unexpected_tpdu)}

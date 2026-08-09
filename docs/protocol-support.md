@@ -16,7 +16,7 @@ The complete scope and risk policy are defined in
 | COTP Connection Request/Confirm | Implemented | Supported |
 | COTP Data TPDU segmentation/reassembly | Implemented; bounded from negotiated sizes | Supported |
 | COTP class | Class 0 | Class 0 |
-| COTP DR/DC/ER codecs | Implemented; runtime close uses TCP FIN | Evidence-driven |
+| COTP DR/DC/ER codecs | Implemented with runtime peer/local disconnect handling | Supported after device qualification |
 
 ## S7 Services
 
@@ -44,8 +44,11 @@ blocks are outside this project's protocol boundary.
 
 The client supports OTP child specifications, registered connection workers,
 caller cancellation by process monitoring, bounded graceful drain, and opt-in
-reconnect with bounded exponential backoff. Reconnect creates a new COTP and S7
-session and never replays work from the failed session.
+reconnect with bounded exponential backoff. Close sends COTP DR when a session
+exists, accepts DC or TCP FIN, and force-closes after the caller's timeout.
+Peer DR is acknowledged before requests fail; unexpected DC, ER, FIN, and TCP
+socket errors retain distinct structured reasons. Reconnect creates a new COTP
+and S7 session and never replays work from the failed session.
 
 ## Addressing And Values
 

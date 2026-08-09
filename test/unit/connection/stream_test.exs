@@ -5,7 +5,14 @@ defmodule S7.Connection.StreamTest do
   alias S7.Error
   alias S7.Protocol.PDU
   alias S7.Transport.{COTP, TPKT}
-  alias S7.Transport.COTP.{ConnectionConfirm, Data, DisconnectRequest, ErrorTPDU}
+
+  alias S7.Transport.COTP.{
+    ConnectionConfirm,
+    Data,
+    DisconnectConfirm,
+    DisconnectRequest,
+    ErrorTPDU
+  }
 
   @opts [
     max_tpkt_size: 1024,
@@ -78,24 +85,14 @@ defmodule S7.Connection.StreamTest do
              )
   end
 
-  test "surfaces COTP disconnect and error diagnostics" do
+  test "surfaces COTP control TPDUs as ordered runtime events" do
     disconnect = %DisconnectRequest{reason: 0x80, additional_information: "maintenance"}
-
-    assert {:error,
-            %Error{
-              layer: :cotp,
-              reason: :remote_disconnect,
-              details: %{reason: 0x80, additional_information: "maintenance"}
-            }} = Stream.push(Stream.new(), frame_tpdu(disconnect), @opts)
-
+    confirm = %DisconnectConfirm{destination_reference: 1, source_reference: 2}
     error = %ErrorTPDU{reject_cause: 2, invalid_tpdu: <<2, 0xF0, 0x81>>}
+    binary = frame_tpdu(disconnect) <> frame_tpdu(confirm) <> frame_tpdu(error)
 
-    assert {:error,
-            %Error{
-              layer: :cotp,
-              reason: :protocol_error,
-              details: %{reject_cause: 2, invalid_tpdu: <<2, 0xF0, 0x81>>}
-            }} = Stream.push(Stream.new(), frame_tpdu(error), @opts)
+    assert {:ok, [^disconnect, ^confirm, ^error], %Stream{fragment_count: 0}} =
+             Stream.push(Stream.new(), binary, @opts)
   end
 
   test "rejects malformed, invalid, and trailing S7 payloads" do

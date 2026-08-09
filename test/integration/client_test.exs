@@ -5,6 +5,7 @@ defmodule S7.ClientIntegrationTest do
   alias S7.Connection
   alias S7.Protocol.UserData
   alias S7.Test.MockPLC
+  alias S7.Transport.COTP.{DisconnectConfirm, DisconnectRequest}
 
   test "connects, negotiates, reads, writes, verifies, and disconnects" do
     server = start_server(cotp_fragment_responses: true, negotiated_pdu: 240)
@@ -54,8 +55,83 @@ defmodule S7.ClientIntegrationTest do
     assert Client.read(client, real_address) == {:ok, 12.5}
 
     assert Client.close(client) == :ok
+
+    assert_receive {:mock_plc_disconnect_request,
+                    %DisconnectRequest{
+                      destination_reference: 1,
+                      source_reference: 1,
+                      reason: 0x80
+                    }},
+                   1_000
+
     assert_receive :mock_plc_closed, 1_000
     assert {:error, %Error{reason: :connection_closed}} = Client.read(client, "DB1.DBW0")
+  end
+
+  test "accepts TCP FIN and bounds a silent COTP disconnect" do
+    fin_server = start_server(disconnect_behavior: :fin)
+    assert {:ok, fin_client} = Client.connect({127, 0, 0, 1}, port: fin_server.port)
+    assert Client.close(fin_client, timeout: 100) == :ok
+    assert_receive {:mock_plc_disconnect_request, %DisconnectRequest{reason: 0x80}}, 500
+
+    silent_server = start_server(disconnect_behavior: :silence)
+    assert {:ok, silent_client} = Client.connect({127, 0, 0, 1}, port: silent_server.port)
+
+    started_at = System.monotonic_time(:millisecond)
+    assert Client.close(silent_client, timeout: 20) == :ok
+    elapsed = System.monotonic_time(:millisecond) - started_at
+
+    assert elapsed >= 15
+    assert elapsed < 500
+    refute Process.alive?(silent_client)
+  end
+
+  test "falls back to socket close for invalid COTP close responses" do
+    for behavior <- [:invalid_confirm, :error] do
+      server = start_server(disconnect_behavior: behavior)
+      assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+      assert Client.close(client, timeout: 100) == :ok
+      assert_receive {:mock_plc_disconnect_request, %DisconnectRequest{}}, 500
+      assert_receive :mock_plc_closed, 500
+      refute Process.alive?(client)
+    end
+  end
+
+  test "answers a peer disconnect request and preserves its diagnostic" do
+    server = start_server(read_fault: :remote_disconnect)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+    assert {:error,
+            %Error{
+              layer: :cotp,
+              reason: :remote_disconnect,
+              code: 0x80,
+              details: %{additional_information: "maintenance"}
+            }} = Client.read(client, "DB1.DBW0")
+
+    assert_receive {:mock_plc_disconnect_confirm,
+                    %DisconnectConfirm{destination_reference: 1, source_reference: 1}},
+                   500
+
+    assert %{state: :disconnected} = Client.info(client)
+    assert Client.close(client) == :ok
+  end
+
+  test "distinguishes COTP error and unexpected disconnect-confirm TPDUs" do
+    for {fault, reason, code} <- [
+          {:error_tpdu, :protocol_error, 2},
+          {:disconnect_confirm, :unexpected_disconnect_confirm, nil}
+        ] do
+      server = start_server(read_fault: fault)
+      assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+
+      assert {:error, %Error{layer: :cotp, reason: ^reason, code: ^code}} =
+               Client.read(client, "DB1.DBW0")
+
+      assert %{state: :disconnected} = Client.info(client)
+      assert Client.close(client) == :ok
+    end
   end
 
   test "a wrong PDU reference invalidates the session without crashing its owner" do

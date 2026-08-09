@@ -52,7 +52,18 @@ Setup Communication exchange resets the series.
 
 Graceful close is also bounded. A drain timeout returns `:drain_timeout` to the
 closing caller and every still-accepted operation, with each error's operation
-field adjusted for its recipient.
+field adjusted for its recipient. Once work is cancelled or drained, the
+client sends COTP DR and accepts a matching DC or TCP FIN. A missing or invalid
+confirmation only changes the internal disconnect diagnostic; the client
+still force-closes the socket and returns `:ok` because its local close
+postcondition has been met.
+
+A peer DR is acknowledged with DC when its references match, then fails
+pending work as `:remote_disconnect` while retaining the reason octet and
+additional information. An unsolicited DC is
+`:unexpected_disconnect_confirm`; COTP ER is `:protocol_error`; TCP FIN is
+`:connection_closed`; other socket failures are `:tcp_error` with the original
+reason in `code`.
 
 SZL continuation is one logical request with fresh correlated PDU references
 for each data unit. Fragment-count overflow, aggregate-size overflow, changed

@@ -10,7 +10,7 @@ defmodule S7.Connection do
   @behaviour :gen_statem
 
   alias S7.{Address, Error, Result, Telemetry, TSAP}
-  alias S7.Connection.{Drain, Reconnect, Request, Stream}
+  alias S7.Connection.{Close, Drain, Reconnect, Request, Stream}
   alias S7.Protocol.{PDU, PDUPlanner, ReadVar, SetupCommunication, UserData, WriteVar}
   alias S7.Protocol.SZL, as: SZLProtocol
   alias S7.Transport.{COTP, TPKT}
@@ -19,6 +19,7 @@ defmodule S7.Connection do
     ConnectionConfirm,
     ConnectionRequest,
     Data,
+    DisconnectConfirm,
     DisconnectRequest,
     ErrorTPDU
   }
@@ -69,6 +70,7 @@ defmodule S7.Connection do
     :dst_tsap,
     :requested_tpdu_size,
     :tpdu_size,
+    :local_reference,
     :remote_reference,
     :requested_setup,
     :negotiated_setup,
@@ -81,6 +83,7 @@ defmodule S7.Connection do
     :stream,
     :reconnect,
     :drain,
+    :close,
     receive_buffer: <<>>,
     max_tpkt_size: @maximum_tpkt_size,
     queue: {[], []},
@@ -97,6 +100,7 @@ defmodule S7.Connection do
           | :ready
           | :reconnecting
           | :draining
+          | :disconnecting
 
   @type t :: %__MODULE__{}
 
@@ -312,7 +316,7 @@ defmodule S7.Connection do
 
   def handle_event({:call, from}, {:close, opts}, :ready, data) do
     case close_options(opts, data.timeout) do
-      {:ok, :immediate, _timeout} -> close_immediately(from, data)
+      {:ok, :immediate, timeout} -> close_immediately(from, data, timeout)
       {:ok, :drain, timeout} -> begin_drain(from, data, timeout)
       {:error, error} -> {:keep_state_and_data, [{:reply, from, {:error, error}}]}
     end
@@ -320,15 +324,22 @@ defmodule S7.Connection do
 
   def handle_event({:call, from}, {:close, opts}, :draining, data) do
     case close_options(opts, data.timeout) do
-      {:ok, :immediate, _timeout} -> close_immediately(from, data)
+      {:ok, :immediate, timeout} -> close_immediately(from, data, timeout)
       {:ok, :drain, _timeout} -> reply_already_draining(from)
+      {:error, error} -> {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  def handle_event({:call, from}, {:close, opts}, :disconnecting, data) do
+    case close_options(opts, data.timeout) do
+      {:ok, _mode, _timeout} -> reply_already_draining(from)
       {:error, error} -> {:keep_state_and_data, [{:reply, from, {:error, error}}]}
     end
   end
 
   def handle_event({:call, from}, {:close, opts}, _state, data) do
     case close_options(opts, data.timeout) do
-      {:ok, _mode, _timeout} -> close_immediately(from, data)
+      {:ok, _mode, timeout} -> close_immediately(from, data, timeout)
       {:error, error} -> {:keep_state_and_data, [{:reply, from, {:error, error}}]}
     end
   end
@@ -372,8 +383,24 @@ defmodule S7.Connection do
           {:disconnect, error, data} -> disconnect_with_error(state, data, error)
         end
 
+      {:close_confirmed, data} ->
+        complete_disconnect(data, Error.new(:cotp, :close, :disconnect_confirmed))
+
       {:disconnect, error, data} ->
         disconnect_with_error(state, data, error)
+    end
+  end
+
+  def handle_event(:info, {:tcp, socket, bytes}, :disconnecting, %{socket: socket} = data) do
+    case receive_active_bytes(data, bytes) do
+      {:close_confirmed, data} ->
+        complete_disconnect(data, Error.new(:cotp, :close, :disconnect_confirmed))
+
+      {:disconnect, error, data} ->
+        complete_disconnect(data, with_operation(error, :close))
+
+      {:ok, data} ->
+        rearm_disconnect(data)
     end
   end
 
@@ -410,6 +437,28 @@ defmodule S7.Connection do
     fail_drain(data, error)
   end
 
+  def handle_event(
+        :info,
+        {:disconnect_timeout, token},
+        :disconnecting,
+        %{close: %Close{token: token}} = data
+      ) do
+    complete_disconnect(data, Error.new(:cotp, :close, :disconnect_timeout))
+  end
+
+  def handle_event(:info, {:tcp_closed, socket}, :disconnecting, %{socket: socket} = data) do
+    complete_disconnect(data, Error.new(:tcp, :close, :connection_closed))
+  end
+
+  def handle_event(
+        :info,
+        {:tcp_error, socket, reason},
+        :disconnecting,
+        %{socket: socket} = data
+      ) do
+    complete_disconnect(data, tcp_error(:close, reason))
+  end
+
   def handle_event(:info, {:tcp_closed, socket}, state, %{socket: socket} = data) do
     error = Error.new(:tcp, :request, :connection_closed)
     telemetry_connection_disconnected(data, error)
@@ -428,7 +477,7 @@ defmodule S7.Connection do
 
   @impl :gen_statem
   def terminate(_reason, _state, data) do
-    data |> cancel_reconnect() |> cancel_drain() |> close_socket()
+    data |> cancel_reconnect() |> cancel_drain() |> cancel_close() |> close_socket()
     :ok
   end
 
@@ -482,7 +531,8 @@ defmodule S7.Connection do
          max_tpkt_size: max_tpkt_size,
          stream: Stream.new(),
          reconnect: struct!(Reconnect, Map.put(reconnect, :delay, reconnect.min_delay)),
-         drain: %Drain{}
+         drain: %Drain{},
+         close: %Close{}
        }}
     end
   end
@@ -874,7 +924,7 @@ defmodule S7.Connection do
 
   defp begin_drain(from, data, timeout) do
     if requests_idle?(data) do
-      close_immediately(from, data)
+      close_immediately(from, data, timeout)
     else
       token = make_ref()
       timer = Process.send_after(self(), {:drain_timeout, token}, timeout)
@@ -883,19 +933,17 @@ defmodule S7.Connection do
     end
   end
 
-  defp close_immediately(from, data) do
+  defp close_immediately(from, data, timeout) do
     reply_closing_caller(data, :ok)
     error = Error.new(:client, :request, :connection_closed)
-    telemetry_connection_disconnected(data, error)
 
     data =
       data
       |> cancel_reconnect()
       |> cancel_drain()
       |> fail_all_requests(error)
-      |> close_socket()
 
-    {:stop_and_reply, :normal, [{:reply, from, :ok}], data}
+    begin_disconnect(from, data, timeout)
   end
 
   defp reply_already_draining(from) do
@@ -904,10 +952,9 @@ defmodule S7.Connection do
   end
 
   defp complete_drain(data) do
-    reply_closing_caller(data, :ok)
-    telemetry_connection_disconnected(data, Error.new(:client, :close, :connection_closed))
-    data = data |> cancel_drain() |> close_socket()
-    {:stop, :normal, data}
+    from = data.drain.from
+    data = cancel_drain(data)
+    begin_disconnect(from, data, data.timeout)
   end
 
   defp fail_drain(data, error, emit? \\ true) do
@@ -929,6 +976,75 @@ defmodule S7.Connection do
   defp cancel_drain(data) do
     cancel_timer(data.drain.timer)
     %{data | drain: %Drain{}}
+  end
+
+  defp begin_disconnect(from, data, timeout) do
+    if cotp_connected?(data) do
+      start_cotp_disconnect(from, data, timeout)
+    else
+      force_close(from, data, Error.new(:client, :close, :connection_closed))
+    end
+  end
+
+  defp start_cotp_disconnect(from, data, timeout) do
+    request = %DisconnectRequest{
+      destination_reference: data.remote_reference,
+      source_reference: data.local_reference,
+      reason: 0x80
+    }
+
+    with :ok <- send_cotp(data, request, :close),
+         :ok <- :inet.setopts(data.socket, active: :once) do
+      token = make_ref()
+      timer = Process.send_after(self(), {:disconnect_timeout, token}, timeout)
+      close = %Close{from: from, timer: timer, token: token}
+      {:next_state, :disconnecting, %{data | close: close}}
+    else
+      {:error, %Error{} = error} -> force_close(from, data, error)
+      {:error, reason} -> force_close(from, data, tcp_error(:close, reason))
+    end
+  end
+
+  defp complete_disconnect(data, error) do
+    reply_close_caller(data, :ok)
+    telemetry_connection_disconnected(data, local_close_error(error))
+    data = data |> cancel_close() |> close_socket()
+    {:stop, :normal, data}
+  end
+
+  defp force_close(from, data, error) do
+    telemetry_connection_disconnected(data, local_close_error(error))
+    data = data |> cancel_close() |> close_socket()
+    {:stop_and_reply, :normal, [{:reply, from, :ok}], data}
+  end
+
+  defp local_close_error(%Error{} = outcome) do
+    Error.new(:client, :close, :connection_closed,
+      details: %{
+        disconnect_outcome: outcome.reason,
+        disconnect_layer: outcome.layer,
+        disconnect_code: outcome.code
+      }
+    )
+  end
+
+  defp reply_close_caller(%{close: %Close{from: nil}}, _reply), do: :ok
+  defp reply_close_caller(data, reply), do: :gen_statem.reply(data.close.from, reply)
+
+  defp cancel_close(data) do
+    cancel_timer(data.close.timer)
+    %{data | close: %Close{}}
+  end
+
+  defp cotp_connected?(data) do
+    data.socket != nil and is_integer(data.local_reference) and is_integer(data.remote_reference)
+  end
+
+  defp rearm_disconnect(data) do
+    case :inet.setopts(data.socket, active: :once) do
+      :ok -> {:keep_state, data}
+      {:error, reason} -> complete_disconnect(data, tcp_error(:close, reason))
+    end
   end
 
   defp requests_idle?(data), do: map_size(data.pending) == 0 and data.queued_count == 0
@@ -996,7 +1112,14 @@ defmodule S7.Connection do
          {:ok, confirm} <- decode_cotp(packet.payload, :connect),
          :ok <- validate_confirm(confirm, request) do
       tpdu_size = min(data.requested_tpdu_size, confirm.tpdu_size || data.requested_tpdu_size)
-      {:ok, %{data | tpdu_size: tpdu_size, remote_reference: confirm.source_reference}}
+
+      {:ok,
+       %{
+         data
+         | tpdu_size: tpdu_size,
+           local_reference: request.source_reference,
+           remote_reference: confirm.source_reference
+       }}
     else
       {:error, %Error{} = error, data} -> {:error, error, data}
       {:error, %Error{} = error} -> {:error, error, data}
@@ -1298,6 +1421,58 @@ defmodule S7.Connection do
 
   defp handle_received_pdus([], data), do: {:ok, data}
 
+  defp handle_received_pdus([%DisconnectRequest{} = request | _events], data) do
+    with :ok <- validate_disconnect_request(request, data),
+         :ok <- confirm_remote_disconnect(request, data) do
+      error =
+        Error.new(:cotp, :request, :remote_disconnect,
+          code: request.reason,
+          details: %{
+            destination_reference: request.destination_reference,
+            source_reference: request.source_reference,
+            additional_information: request.additional_information
+          }
+        )
+
+      {:disconnect, error, data}
+    else
+      {:error, %Error{} = error} -> {:disconnect, error, data}
+    end
+  end
+
+  defp handle_received_pdus(
+         [%DisconnectConfirm{} = confirm | _events],
+         %{close: %Close{from: from}} = data
+       )
+       when not is_nil(from) do
+    case validate_disconnect_confirm(confirm, data) do
+      :ok -> {:close_confirmed, data}
+      {:error, %Error{} = error} -> {:disconnect, error, data}
+    end
+  end
+
+  defp handle_received_pdus([%DisconnectConfirm{} = confirm | _events], data) do
+    error =
+      Error.new(:cotp, :request, :unexpected_disconnect_confirm,
+        details: %{
+          destination_reference: confirm.destination_reference,
+          source_reference: confirm.source_reference
+        }
+      )
+
+    {:disconnect, error, data}
+  end
+
+  defp handle_received_pdus([%ErrorTPDU{} = tpdu | _events], data) do
+    error =
+      Error.new(:cotp, :request, :protocol_error,
+        code: tpdu.reject_cause,
+        details: %{invalid_tpdu: tpdu.invalid_tpdu}
+      )
+
+    {:disconnect, error, data}
+  end
+
   defp handle_received_pdus(
          [%PDU{header: %{rosctr: :userdata}} = pdu | pdus],
          data
@@ -1317,6 +1492,51 @@ defmodule S7.Connection do
 
   defp handle_received_pdus([pdu | pdus], data),
     do: handle_correlatable_pdu(pdu, pdus, data)
+
+  defp validate_disconnect_request(request, data) do
+    validate_disconnect_references(
+      request.destination_reference,
+      request.source_reference,
+      data,
+      :request
+    )
+  end
+
+  defp validate_disconnect_confirm(confirm, data) do
+    validate_disconnect_references(
+      confirm.destination_reference,
+      confirm.source_reference,
+      data,
+      :close
+    )
+  end
+
+  defp validate_disconnect_references(destination, source, data, operation) do
+    if destination == data.local_reference and source == data.remote_reference do
+      :ok
+    else
+      {:error,
+       Error.new(:cotp, operation, :invalid_connection_reference,
+         details: %{
+           expected_destination: data.local_reference,
+           received_destination: destination,
+           expected_source: data.remote_reference,
+           received_source: source
+         }
+       )}
+    end
+  end
+
+  defp confirm_remote_disconnect(%DisconnectRequest{source_reference: 0}, _data), do: :ok
+
+  defp confirm_remote_disconnect(request, data) do
+    confirm = %DisconnectConfirm{
+      destination_reference: request.source_reference,
+      source_reference: request.destination_reference
+    }
+
+    send_cotp(data, confirm, :request)
+  end
 
   defp handle_correlatable_pdu(pdu, pdus, data) do
     reference = pdu.header.pdu_reference
@@ -1563,6 +1783,9 @@ defmodule S7.Connection do
       data
       |> connection_metadata()
       |> Map.merge(%{error_layer: error.layer, error_reason: error.reason})
+      |> Map.merge(
+        Map.take(error.details, [:disconnect_outcome, :disconnect_layer, :disconnect_code])
+      )
 
     Telemetry.execute(
       [:s7, :connection, :disconnected],
@@ -1883,7 +2106,21 @@ defmodule S7.Connection do
       {:error,
        Error.new(:cotp, operation, :remote_disconnect,
          code: request.reason,
-         details: %{additional_information: request.additional_information}
+         details: %{
+           destination_reference: request.destination_reference,
+           source_reference: request.source_reference,
+           additional_information: request.additional_information
+         }
+       )}
+
+  defp cotp_data(%DisconnectConfirm{} = confirm, operation),
+    do:
+      {:error,
+       Error.new(:cotp, operation, :unexpected_disconnect_confirm,
+         details: %{
+           destination_reference: confirm.destination_reference,
+           source_reference: confirm.source_reference
+         }
        )}
 
   defp cotp_data(%ErrorTPDU{} = tpdu, operation),
@@ -2008,6 +2245,7 @@ defmodule S7.Connection do
     %{
       data
       | socket: nil,
+        local_reference: nil,
         remote_reference: nil,
         receive_buffer: <<>>,
         stream: Stream.new()

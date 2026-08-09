@@ -106,7 +106,10 @@ bounded and reset after a successful Setup Communication exchange. Session loss 
 calls before reconnecting; requests and writes are never replayed. `S7.Client.reconnect/1` starts a
 fresh explicit attempt after a configured attempt cap is reached.
 
-Immediate close remains the default. To finish accepted work while rejecting new calls:
+Immediate close remains the default. It fails accepted work, sends a COTP
+Disconnect Request when a COTP session exists, and waits boundedly for a
+Disconnect Confirm or TCP close before forcing socket closure. To finish
+accepted work before that exchange while rejecting new calls:
 
 ```elixir
 :ok = S7.Client.close(client, mode: :drain, timeout: 5_000)

@@ -5,7 +5,15 @@ defmodule S7.Test.MockPLC do
   alias S7.Protocol.{DataItem, Item, PDU, SetupCommunication, UserData}
   alias S7.Protocol.UserData.{Parameter, Payload}
   alias S7.Transport.{COTP, TPKT}
-  alias S7.Transport.COTP.{ConnectionConfirm, ConnectionRequest, Data}
+
+  alias S7.Transport.COTP.{
+    ConnectionConfirm,
+    ConnectionRequest,
+    Data,
+    DisconnectConfirm,
+    DisconnectRequest,
+    ErrorTPDU
+  }
 
   defstruct [:pid, :port]
 
@@ -49,6 +57,8 @@ defmodule S7.Test.MockPLC do
       szl_fault: Keyword.get(opts, :szl_fault),
       szl_pending: nil,
       deferred_reads: [],
+      client_reference: nil,
+      server_reference: 1,
       memory: initial_memory()
     }
 
@@ -65,7 +75,13 @@ defmodule S7.Test.MockPLC do
       {:ok, packet, state} ->
         {:ok, %ConnectionRequest{} = request} = COTP.decode(packet.payload)
         send_cotp_response(state, request)
-        {:ok, state}
+
+        {:ok,
+         %{
+           state
+           | client_reference: request.source_reference,
+             server_reference: 1
+         }}
 
       {:error, :closed} ->
         {:stop, state}
@@ -102,7 +118,7 @@ defmodule S7.Test.MockPLC do
         send_setup_response(state, request)
         {:ok, state}
 
-      {:error, :closed} ->
+      {:error, :closed, _state} ->
         {:stop, state}
     end
   end
@@ -148,42 +164,104 @@ defmodule S7.Test.MockPLC do
     end
   end
 
-  defp serve(state) do
-    case receive_pdu(state) do
-      {:ok, %PDU{header: %{rosctr: :userdata}} = request_pdu, state} ->
-        {:ok, request} = UserData.from_pdu(request_pdu)
-        state = handle_userdata(state, request_pdu, request)
-        serve(state)
+  defp serve(state), do: state |> receive_pdu() |> handle_received()
 
-      {:ok, %PDU{parameters: <<0x04, count, item_binary::binary>>} = request, state}
-      when count > 0 ->
-        {:ok, items, <<>>} = decode_request_items(item_binary, count, [])
-        state = notify_request(state, :read, request)
+  defp handle_received({:cotp, %DisconnectRequest{} = request, state}),
+    do: handle_disconnect_request(state, request)
 
-        next_state =
-          case items do
-            [item] -> handle_read(state, request, Item.encode(item))
-            items -> handle_read_many(state, request, items)
-          end
+  defp handle_received({:cotp, %DisconnectConfirm{} = confirm, state}) do
+    send(state.owner, {:mock_plc_disconnect_confirm, confirm})
+    close_server_socket(state)
+  end
 
-        serve(next_state)
+  defp handle_received({:cotp, %ErrorTPDU{} = error, state}) do
+    send(state.owner, {:mock_plc_error_tpdu, error})
+    close_server_socket(state)
+  end
 
-      {:ok, %PDU{parameters: <<0x05, count, item_binary::binary>>} = request, state}
-      when count > 0 ->
-        {:ok, items, <<>>} = decode_request_items(item_binary, count, [])
-        state = notify_request(state, :write, request)
+  defp handle_received({:ok, %PDU{header: %{rosctr: :userdata}} = request_pdu, state}) do
+    {:ok, request} = UserData.from_pdu(request_pdu)
+    state |> handle_userdata(request_pdu, request) |> serve()
+  end
 
-        next_state =
-          case items do
-            [item] -> handle_write(state, request, Item.encode(item))
-            items -> handle_write_many(state, request, items)
-          end
+  defp handle_received(
+         {:ok, %PDU{parameters: <<0x04, count, item_binary::binary>>} = request, state}
+       )
+       when count > 0 do
+    {:ok, items, <<>>} = decode_request_items(item_binary, count, [])
+    state = notify_request(state, :read, request)
+    state |> handle_read_items(request, items) |> serve()
+  end
 
-        serve(next_state)
+  defp handle_received(
+         {:ok, %PDU{parameters: <<0x05, count, item_binary::binary>>} = request, state}
+       )
+       when count > 0 do
+    {:ok, items, <<>>} = decode_request_items(item_binary, count, [])
+    state = notify_request(state, :write, request)
+    state |> handle_write_items(request, items) |> serve()
+  end
 
+  defp handle_received({:error, :closed, state}), do: close_server_socket(state, false)
+
+  defp handle_read_items(state, request, [item]),
+    do: handle_read(state, request, Item.encode(item))
+
+  defp handle_read_items(state, request, items), do: handle_read_many(state, request, items)
+
+  defp handle_write_items(state, request, [item]),
+    do: handle_write(state, request, Item.encode(item))
+
+  defp handle_write_items(state, request, items), do: handle_write_many(state, request, items)
+
+  defp close_server_socket(state, close? \\ true) do
+    if close?, do: :ok = :gen_tcp.close(state.socket)
+    send(state.owner, :mock_plc_closed)
+    :ok
+  end
+
+  defp handle_disconnect_request(state, request) do
+    send(state.owner, {:mock_plc_disconnect_request, request})
+
+    case Keyword.get(state.options, :disconnect_behavior, :confirm) do
+      :confirm ->
+        confirm = %DisconnectConfirm{
+          destination_reference: request.source_reference,
+          source_reference: request.destination_reference
+        }
+
+        :ok = send_tpdu(state, confirm)
+        close_server_socket(state)
+
+      :invalid_confirm ->
+        confirm = %DisconnectConfirm{
+          destination_reference: request.source_reference + 1,
+          source_reference: request.destination_reference
+        }
+
+        :ok = send_tpdu(state, confirm)
+        await_client_close(state)
+
+      :fin ->
+        close_server_socket(state)
+
+      :error ->
+        :ok = send_tpdu(state, %ErrorTPDU{destination_reference: request.source_reference})
+        await_client_close(state)
+
+      :silence ->
+        await_client_close(state)
+    end
+  end
+
+  defp await_client_close(state) do
+    case :gen_tcp.recv(state.socket, 0, 2_000) do
       {:error, :closed} ->
         send(state.owner, :mock_plc_closed)
         :ok
+
+      {:ok, _bytes} ->
+        await_client_close(state)
     end
   end
 
@@ -504,6 +582,39 @@ defmodule S7.Test.MockPLC do
     %{state | read_fault: nil}
   end
 
+  defp handle_read(%{read_fault: :remote_disconnect} = state, _request, _item_binary) do
+    disconnect = %DisconnectRequest{
+      destination_reference: state.client_reference,
+      source_reference: state.server_reference,
+      reason: 0x80,
+      additional_information: "maintenance"
+    }
+
+    :ok = send_tpdu(state, disconnect)
+    %{state | read_fault: nil}
+  end
+
+  defp handle_read(%{read_fault: :error_tpdu} = state, _request, _item_binary) do
+    error = %ErrorTPDU{
+      destination_reference: state.client_reference,
+      reject_cause: 2,
+      invalid_tpdu: <<2, 0xF0, 0x81>>
+    }
+
+    :ok = send_tpdu(state, error)
+    %{state | read_fault: nil}
+  end
+
+  defp handle_read(%{read_fault: :disconnect_confirm} = state, _request, _item_binary) do
+    confirm = %DisconnectConfirm{
+      destination_reference: state.client_reference,
+      source_reference: state.server_reference
+    }
+
+    :ok = send_tpdu(state, confirm)
+    %{state | read_fault: nil}
+  end
+
   defp handle_read(%{read_fault: :oversized_reassembly} = state, _request, _item_binary) do
     negotiated_pdu = Keyword.get(state.options, :negotiated_pdu, 240)
     :ok = send_tpdu(state, %Data{payload: :binary.copy(<<0>>, negotiated_pdu + 1)})
@@ -745,27 +856,46 @@ defmodule S7.Test.MockPLC do
         {:ok, pdu, <<>>} = PDU.decode(payload)
         {:ok, pdu, state}
 
-      {:error, :closed} = error ->
-        error
+      {:cotp, tpdu, state} ->
+        {:cotp, tpdu, state}
+
+      {:error, :closed} ->
+        {:error, :closed, state}
     end
   end
 
   defp receive_cotp_data(state, parts, count) when count < 64 do
     case receive_tpkt(state) do
       {:ok, packet, state} ->
-        {:ok, %Data{payload: payload, eot: eot, tpdu_number: 0}} = COTP.decode(packet.payload)
-        parts = [payload | parts]
-
-        if eot do
-          {:ok, parts |> Enum.reverse() |> IO.iodata_to_binary(), state}
-        else
-          receive_cotp_data(state, parts, count + 1)
-        end
+        packet.payload
+        |> COTP.decode()
+        |> handle_received_cotp(state, parts, count)
 
       {:error, :closed} ->
         {:error, :closed}
     end
   end
+
+  defp handle_received_cotp(
+         {:ok, %Data{payload: payload, eot: true, tpdu_number: 0}},
+         state,
+         parts,
+         _count
+       ) do
+    {:ok, IO.iodata_to_binary([Enum.reverse(parts), payload]), state}
+  end
+
+  defp handle_received_cotp(
+         {:ok, %Data{payload: payload, eot: false, tpdu_number: 0}},
+         state,
+         parts,
+         count
+       ) do
+    receive_cotp_data(state, [payload | parts], count + 1)
+  end
+
+  defp handle_received_cotp({:ok, tpdu}, state, _parts, _count),
+    do: {:cotp, tpdu, state}
 
   defp receive_tpkt(state) do
     case TPKT.decode(state.buffer) do

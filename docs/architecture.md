@@ -62,7 +62,9 @@ registration uses the standard local, global, or `:via` forms.
 
 Graceful close enters `:draining`, rejects new calls, and finishes work already
 accepted by the queue. A bounded drain timeout closes the socket and returns
-structured failures rather than leaving callers blocked.
+structured failures rather than leaving callers blocked. Immediate and
+completed drain closes enter `:disconnecting`, send COTP DR, and wait for DC or
+TCP FIN until the close timeout forces socket closure.
 
 ## Protocol Invariants
 
