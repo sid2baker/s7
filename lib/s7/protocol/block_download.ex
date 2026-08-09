@@ -7,7 +7,7 @@ defmodule S7.Protocol.BlockDownload do
   followed by a `Download Ended` Job.
   """
 
-  alias S7.{Block, BlockImage, Error}
+  alias S7.{Block, Error}
   alias S7.Protocol.BlockDownload.Transaction
   alias S7.Protocol.{Job, PDU}
 
@@ -27,9 +27,9 @@ defmodule S7.Protocol.BlockDownload do
   @type end_request :: %{block: Block.t(), error_code: 0..0xFFFF}
 
   @doc false
-  @spec start_request(BlockImage.t(), atom()) ::
+  @spec start_request(Block.Image.t(), atom()) ::
           {:ok, PDU.t(), Transaction.t()} | {:error, Error.t()}
-  def start_request(%BlockImage{} = image, operation) do
+  def start_request(%Block.Image{} = image, operation) do
     with {:ok, %Block{} = block} <- Block.validate(image.block, operation),
          :ok <- validate_image_size(image.raw, image.mc7_size, operation) do
       filename = Block.encode_filename(block, :passive)

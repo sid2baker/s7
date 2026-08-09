@@ -1,4 +1,4 @@
-defmodule S7.CyclicEvent do
+defmodule S7.Cyclic.Event do
   @moduledoc """
   One initial snapshot or unsolicited classic cyclic-service update.
 

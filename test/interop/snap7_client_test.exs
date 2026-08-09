@@ -5,18 +5,11 @@ defmodule S7.Snap7ClientInteropTest do
 
   alias S7.{
     Address,
-    AlarmAcknowledgement,
+    Alarm,
     Block,
-    BlockEntry,
-    BlockImage,
-    BlockInfo,
-    BlockInventory,
     Client,
-    CPInfo,
-    CPUInfo,
     Error,
-    OrderCode,
-    PLCStatus,
+    PLC,
     Result,
     SZL
   }
@@ -114,22 +107,22 @@ defmodule S7.Snap7ClientInteropTest do
     assert 0x0011 in ids
     assert 0x001C in ids
 
-    assert {:ok, %OrderCode{code: code}} = Client.order_code(client)
+    assert {:ok, %PLC.OrderCode{code: code}} = Client.order_code(client)
     assert code != ""
-    assert {:ok, %CPUInfo{module_type_name: module_type}} = Client.cpu_info(client)
+    assert {:ok, %PLC.CPUInfo{module_type_name: module_type}} = Client.cpu_info(client)
     assert is_binary(module_type)
-    assert {:ok, %CPInfo{max_pdu_length: max_pdu}} = Client.cp_info(client)
+    assert {:ok, %PLC.CPInfo{max_pdu_length: max_pdu}} = Client.cp_info(client)
     assert max_pdu > 0
-    assert {:ok, %PLCStatus{state: state}} = Client.plc_status(client)
+    assert {:ok, %PLC.Status{state: state}} = Client.plc_status(client)
     assert state in [:run, :stop, :unknown]
   end
 
   test "reads the classic block directory and DB metadata", %{client: client} do
-    assert {:ok, %BlockInventory{counts: %{db: 1}}} = Client.block_counts(client)
+    assert {:ok, %Block.Inventory{counts: %{db: 1}}} = Client.block_counts(client)
 
     assert {:ok,
             [
-              %BlockEntry{
+              %Block.Entry{
                 block: %Block{type: :db, number: 1},
                 language: :db,
                 flags: 0x22
@@ -137,7 +130,7 @@ defmodule S7.Snap7ClientInteropTest do
             ]} = Client.list_blocks(client, :db)
 
     assert {:ok,
-            %BlockInfo{
+            %Block.Info{
               block: %Block{type: :db, number: 1},
               language: :db,
               linked?: true,
@@ -199,7 +192,7 @@ defmodule S7.Snap7ClientInteropTest do
   end
 
   test "decodes the pinned server's alarm acknowledgment rejection", %{client: client} do
-    acknowledgement = %AlarmAcknowledgement{
+    acknowledgement = %Alarm.Acknowledgement{
       event_id: 0xAF,
       ack_state_going: 0xFE,
       ack_state_coming: 0xFE
@@ -239,14 +232,14 @@ defmodule S7.Snap7ClientInteropTest do
     client: client
   } do
     assert Client.stop_cpu(client, confirm: :stop_cpu) == :ok
-    assert {:ok, %PLCStatus{state: :stop}} = Client.plc_status(client)
+    assert {:ok, %PLC.Status{state: :stop}} = Client.plc_status(client)
 
     assert Client.warm_start_cpu(client, confirm: :warm_start_cpu) == :ok
-    assert {:ok, %PLCStatus{state: :run}} = Client.plc_status(client)
+    assert {:ok, %PLC.Status{state: :run}} = Client.plc_status(client)
 
     assert Client.stop_cpu(client, confirm: :stop_cpu) == :ok
     assert Client.cold_start_cpu(client, confirm: :cold_start_cpu) == :ok
-    assert {:ok, %PLCStatus{state: :run}} = Client.plc_status(client)
+    assert {:ok, %PLC.Status{state: :run}} = Client.plc_status(client)
 
     assert Client.stop_cpu(client, confirm: :stop_cpu) == :ok
     assert Client.copy_ram_to_rom(client, confirm: :copy_ram_to_rom) == :ok
@@ -259,7 +252,7 @@ defmodule S7.Snap7ClientInteropTest do
   defp captured_download_image do
     assert {:ok, pdu, <<>>} = Fixture.read!("download/block_response.bin") |> PDU.decode()
     assert {:ok, %{data: raw}} = BlockDownload.decode_download_response(pdu, :interop)
-    assert {:ok, image} = BlockImage.decode(raw, %Block{type: :db, number: 1})
+    assert {:ok, image} = Block.Image.decode(raw, %Block{type: :db, number: 1})
     image
   end
 end

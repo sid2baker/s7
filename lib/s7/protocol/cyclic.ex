@@ -8,16 +8,9 @@ defmodule S7.Protocol.Cyclic do
   collapsed into an inaccurate high-level model.
   """
 
-  alias S7.{
-    Address,
-    CyclicEvent,
-    CyclicInterval,
-    CyclicSubscription,
-    Data,
-    Error
-  }
-
-  alias S7.CyclicEvent.Item, as: EventItem
+  alias S7.{Address, Data, Error}
+  alias S7.Cyclic, as: CyclicModel
+  alias S7.Cyclic.Event.Item, as: EventItem
   alias S7.Protocol
   alias S7.Protocol.{DataItem, Item, PDU, UserData}
   alias S7.Protocol.UserData.{Parameter, Payload}
@@ -40,11 +33,11 @@ defmodule S7.Protocol.Cyclic do
   Converts an exact millisecond interval into the coarsest wire base that can
   represent it without rounding.
   """
-  @spec interval(pos_integer() | CyclicInterval.t(), atom()) ::
-          {:ok, CyclicInterval.t()} | {:error, Error.t()}
+  @spec interval(pos_integer() | CyclicModel.Interval.t(), atom()) ::
+          {:ok, CyclicModel.Interval.t()} | {:error, Error.t()}
   def interval(value, operation \\ :subscribe_cyclic)
 
-  def interval(%CyclicInterval{} = interval, operation) do
+  def interval(%CyclicModel.Interval{} = interval, operation) do
     with {:ok, _code} <- Map.fetch(@base_codes, interval.base),
          true <- interval.factor in 1..0xFF,
          true <- interval.milliseconds == base_milliseconds(interval.base) * interval.factor do
@@ -130,14 +123,14 @@ defmodule S7.Protocol.Cyclic do
   Builds one cyclic or change-driven setup request.
   """
   @spec subscribe_request(
-          CyclicSubscription.mode(),
+          CyclicModel.Subscription.mode(),
           [binary()],
-          CyclicInterval.t(),
+          CyclicModel.Interval.t(),
           atom()
         ) :: {:ok, UserData.t()} | {:error, Error.t()}
   def subscribe_request(mode, item_specs, interval, operation \\ :subscribe_cyclic)
 
-  def subscribe_request(mode, item_specs, %CyclicInterval{} = interval, operation) do
+  def subscribe_request(mode, item_specs, %CyclicModel.Interval{} = interval, operation) do
     with {:ok, subfunction} <- setup_subfunction(mode, operation),
          {:ok, item_specs} <- raw_item_specs(item_specs, operation),
          {:ok, interval} <- interval(interval, operation),
@@ -155,14 +148,14 @@ defmodule S7.Protocol.Cyclic do
   @doc """
   Builds a change-driven job modification using the existing remote job ID.
   """
-  @spec modify_request(byte(), [binary()], CyclicInterval.t(), atom()) ::
+  @spec modify_request(byte(), [binary()], CyclicModel.Interval.t(), atom()) ::
           {:ok, UserData.t()} | {:error, Error.t()}
   def modify_request(job_id, item_specs, interval, operation \\ :modify_cyclic)
 
   def modify_request(
         job_id,
         item_specs,
-        %CyclicInterval{} = interval,
+        %CyclicModel.Interval{} = interval,
         operation
       )
       when job_id in 1..0xFF do
@@ -201,11 +194,11 @@ defmodule S7.Protocol.Cyclic do
           PDU.t(),
           UserData.t(),
           0..0xFFFF,
-          CyclicSubscription.mode(),
+          CyclicModel.Subscription.mode(),
           [Address.t()] | nil,
           non_neg_integer(),
           atom()
-        ) :: {:ok, byte(), CyclicEvent.t() | nil} | {:error, Error.t()}
+        ) :: {:ok, byte(), CyclicModel.Event.t() | nil} | {:error, Error.t()}
   def decode_subscribe_response(
         pdu,
         request,
@@ -238,7 +231,7 @@ defmodule S7.Protocol.Cyclic do
           byte(),
           non_neg_integer(),
           atom()
-        ) :: {:ok, CyclicEvent.t() | nil} | {:error, Error.t()}
+        ) :: {:ok, CyclicModel.Event.t() | nil} | {:error, Error.t()}
   def decode_modify_response(
         pdu,
         request,
@@ -288,13 +281,13 @@ defmodule S7.Protocol.Cyclic do
   @doc """
   Decodes one unsolicited update for a known subscription.
   """
-  @spec decode_indication(UserData.t(), CyclicSubscription.t(), atom()) ::
-          {:ok, CyclicEvent.t()} | {:error, Error.t()}
+  @spec decode_indication(UserData.t(), CyclicModel.Subscription.t(), atom()) ::
+          {:ok, CyclicModel.Event.t()} | {:error, Error.t()}
   def decode_indication(message, subscription, operation \\ :next_cyclic)
 
   def decode_indication(
         %UserData{parameter: %Parameter{} = parameter, payload: %Payload{} = payload},
-        %CyclicSubscription{} = subscription,
+        %CyclicModel.Subscription{} = subscription,
         operation
       ) do
     with :ok <- validate_indication(parameter, subscription, operation),
@@ -314,7 +307,7 @@ defmodule S7.Protocol.Cyclic do
   def decode_indication(_message, _subscription, operation), do: Protocol.malformed(operation)
 
   @doc false
-  @spec mode_subfunctions(CyclicSubscription.mode()) :: [byte()]
+  @spec mode_subfunctions(CyclicModel.Subscription.mode()) :: [byte()]
   def mode_subfunctions(:cyclic), do: [@cyclic_transfer]
   def mode_subfunctions(:change_driven), do: [@change_driven, @change_modify]
   def mode_subfunctions(_mode), do: []
@@ -399,7 +392,7 @@ defmodule S7.Protocol.Cyclic do
     with {:ok, base} <- decode_base(base_code, operation),
          {:ok, item_specs, <<>>} <- decode_item_specs(item_data, count, operation, []) do
       {:ok,
-       %CyclicInterval{
+       %CyclicModel.Interval{
          base: base,
          factor: factor,
          milliseconds: base_milliseconds(base) * factor
@@ -521,7 +514,7 @@ defmodule S7.Protocol.Cyclic do
     with true <- expected_count in [:any, count],
          {:ok, items, <<>>} <- decode_items(data, mode, addresses, count, operation, []) do
       {:ok,
-       %CyclicEvent{
+       %CyclicModel.Event{
          job_id: job_id,
          subfunction: subfunction,
          items: items,
@@ -694,11 +687,11 @@ defmodule S7.Protocol.Cyclic do
 
   defp expected_length(transport, size) when transport in [:byte, :integer], do: size * 8
 
-  defp expected_indication_count(%CyclicSubscription{typed?: true, item_specs: item_specs})
+  defp expected_indication_count(%CyclicModel.Subscription{typed?: true, item_specs: item_specs})
        when is_list(item_specs),
        do: length(item_specs)
 
-  defp expected_indication_count(%CyclicSubscription{}), do: :any
+  defp expected_indication_count(%CyclicModel.Subscription{}), do: :any
 
   defp validate_response_method(
          %UserData{parameter: %Parameter{method: @method_response} = parameter},
@@ -779,7 +772,7 @@ defmodule S7.Protocol.Cyclic do
 
   defp build_interval(base, factor) do
     {:ok,
-     %CyclicInterval{
+     %CyclicModel.Interval{
        base: base,
        factor: factor,
        milliseconds: base_milliseconds(base) * factor

@@ -40,13 +40,13 @@ classic alarms. Alarm success paths remain subject to named physical-device qual
 {:ok, current} = S7.Client.read(client, "DB1.DBW0")
 :ok = S7.Client.write(client, "DB1.DBW0", current + 1)
 {:ok, raw} = S7.Client.read_raw(client, "DB1.DBW0")
-{:ok, %S7.OrderCode{code: order_code}} = S7.Client.order_code(client)
+{:ok, %S7.PLC.OrderCode{code: order_code}} = S7.Client.order_code(client)
 {:ok, dbs} = S7.Client.list_blocks(client, :db)
-{:ok, %S7.PLCClock{datetime: plc_time}} = S7.Client.read_clock(client)
-{:ok, %S7.VariableStatus{items: status_items}} =
+{:ok, %S7.PLC.Clock{datetime: plc_time}} = S7.Client.read_clock(client)
+{:ok, %S7.Programmer.VariableStatus{items: status_items}} =
   S7.Client.variable_status(client, ["MB0", "DB1.DBW0"])
 {:ok, cyclic} = S7.Client.subscribe_cyclic(client, ["DB1.DBW0"], interval: 1_000)
-{:ok, %S7.CyclicEvent{items: [%S7.CyclicEvent.Item{value: next_value}]}} =
+{:ok, %S7.Cyclic.Event{items: [%S7.Cyclic.Event.Item{value: next_value}]}} =
   S7.Client.next_cyclic(client, cyclic)
 :ok = S7.Client.unsubscribe_cyclic(client, cyclic)
 :ok = S7.Client.close(client)
@@ -209,9 +209,9 @@ Raw SZL reads preserve record boundaries and bytes while validating the PLC's de
   )
 
 {:ok, ids} = S7.Client.list_szl(client)
-{:ok, %S7.CPUInfo{} = cpu} = S7.Client.cpu_info(client)
-{:ok, %S7.CPInfo{} = communication} = S7.Client.cp_info(client)
-{:ok, %S7.PLCStatus{state: :run}} = S7.Client.plc_status(client)
+{:ok, %S7.PLC.CPUInfo{} = cpu} = S7.Client.cpu_info(client)
+{:ok, %S7.PLC.CPInfo{} = communication} = S7.Client.cp_info(client)
+{:ok, %S7.PLC.Status{state: :run}} = S7.Client.plc_status(client)
 ```
 
 The order-code, component-identification, communication-limit, and status helpers decode known
@@ -224,16 +224,16 @@ Classic userdata block services expose inventory and metadata without transferri
 block images:
 
 ```elixir
-{:ok, %S7.BlockInventory{counts: %{db: db_count}}} =
+{:ok, %S7.Block.Inventory{counts: %{db: db_count}}} =
   S7.Client.block_counts(client)
 
-{:ok, [%S7.BlockEntry{} | _] = dbs} =
+{:ok, [%S7.Block.Entry{} | _] = dbs} =
   S7.Client.list_blocks(client, :db,
     max_bytes: 1_048_576,
     max_fragments: 64
   )
 
-{:ok, %S7.BlockInfo{name: name, mc7_size: size}} =
+{:ok, %S7.Block.Info{name: name, mc7_size: size}} =
   S7.Client.block_info(client, :db, 1)
 ```
 
@@ -248,7 +248,7 @@ Classic block upload retrieves one complete load-memory image through an exclusi
 `Start Upload` / `Upload` / `End Upload` transaction:
 
 ```elixir
-{:ok, %S7.BlockImage{} = image} =
+{:ok, %S7.Block.Image{} = image} =
   S7.Client.upload_block(client, :db, 1,
     max_bytes: 1_048_576,
     max_fragments: 64,
@@ -260,7 +260,7 @@ Classic block upload retrieves one complete load-memory image through an exclusi
 
 The parsed image retains every original byte, validates the requested block identity and declared
 sizes, and exposes known header, timestamp, MC7, and footer fields. Classic MC7 and footer ranges
-can overlap, so `S7.BlockImage` also exposes non-overlapping `payload`, `raw_header`, and
+can overlap, so `S7.Block.Image` also exposes non-overlapping `payload`, `raw_header`, and
 `raw_footer` fields. The raw API is available for CPU-specific image variants.
 
 An initial PLC rejection leaves the connection usable. Local byte or fragment limits close the
@@ -335,7 +335,7 @@ session. The client never replays CPU control after reconnect.
 Classic PLC clock values are timezone-free local civil time:
 
 ```elixir
-{:ok, %S7.PLCClock{datetime: current}} = S7.Client.read_clock(client)
+{:ok, %S7.PLC.Clock{datetime: current}} = S7.Client.read_clock(client)
 :ok = S7.Client.set_clock(client, ~N[2030-02-03 04:05:06.789])
 ```
 
@@ -369,7 +369,7 @@ Read Var:
   )
 
 initial_snapshot = subscription.initial
-{:ok, %S7.CyclicEvent{items: items}} = S7.Client.next_cyclic(client, subscription)
+{:ok, %S7.Cyclic.Event{items: items}} = S7.Client.next_cyclic(client, subscription)
 :ok = S7.Client.unsubscribe_cyclic(client, subscription)
 ```
 
@@ -394,10 +394,10 @@ wire record and CPU-specific associated value:
     queue_limit: 64
   )
 
-{:ok, %S7.AlarmEvent{objects: [object | _]} = event} =
+{:ok, %S7.Alarm.Event{objects: [object | _]} = event} =
   S7.Client.next_alarm(client, alarms)
 
-{:ok, %S7.AlarmQuery{records: records}} =
+{:ok, %S7.Alarm.Query{records: records}} =
   S7.Client.query_alarms(client, :alarm_8)
 
 :ok = S7.Client.acknowledge_alarm(client, object)

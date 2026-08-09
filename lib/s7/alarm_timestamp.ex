@@ -1,4 +1,4 @@
-defmodule S7.AlarmTimestamp do
+defmodule S7.Alarm.Timestamp do
   @moduledoc """
   Validated classic S7 alarm timestamp.
 

@@ -1,4 +1,4 @@
-defmodule S7.CyclicInterval do
+defmodule S7.Cyclic.Interval do
   @moduledoc """
   The exact interval negotiated for one classic cyclic subscription.
 

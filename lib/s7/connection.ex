@@ -187,26 +187,26 @@ defmodule S7.Connection do
   end
 
   @doc false
-  @spec block_counts(pid()) :: {:ok, S7.BlockInventory.t()} | {:error, Error.t()}
+  @spec block_counts(pid()) :: {:ok, S7.Block.Inventory.t()} | {:error, Error.t()}
   def block_counts(connection) do
     :gen_statem.call(connection, {:blocks, :counts}, :infinity)
   end
 
   @doc false
   @spec list_blocks(pid(), S7.Block.known_type(), S7.Block.limits()) ::
-          {:ok, [S7.BlockEntry.t()]} | {:error, Error.t()}
+          {:ok, [S7.Block.Entry.t()]} | {:error, Error.t()}
   def list_blocks(connection, type, limits) do
     :gen_statem.call(connection, {:blocks, :list, type, limits}, :infinity)
   end
 
   @doc false
-  @spec block_info(pid(), S7.Block.t()) :: {:ok, S7.BlockInfo.t()} | {:error, Error.t()}
+  @spec block_info(pid(), S7.Block.t()) :: {:ok, S7.Block.Info.t()} | {:error, Error.t()}
   def block_info(connection, block) do
     :gen_statem.call(connection, {:blocks, :info, block}, :infinity)
   end
 
   @doc false
-  @spec read_clock(pid()) :: {:ok, S7.PLCClock.t()} | {:error, Error.t()}
+  @spec read_clock(pid()) :: {:ok, S7.PLC.Clock.t()} | {:error, Error.t()}
   def read_clock(connection), do: :gen_statem.call(connection, {:clock, :read}, :infinity)
 
   @doc false

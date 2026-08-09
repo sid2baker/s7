@@ -1,4 +1,4 @@
-defmodule S7.PLCClock do
+defmodule S7.PLC.Clock do
   @moduledoc """
   A timezone-free value read from a classic PLC clock.
 

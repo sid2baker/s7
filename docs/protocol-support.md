@@ -131,7 +131,7 @@ every call. Raw images are fully parsed before transmission. Download covers
 Request Download, bounded PLC-driven data pulls, Download Ended, and `_INSE`;
 delete uses `_DELE`. No destructive request is automatically replayed.
 
-Clock reads return a timezone-free `S7.PLCClock` with the complete ten-byte
+Clock reads return a timezone-free `S7.PLC.Clock` with the complete ten-byte
 timestamp. Clock writes accept millisecond-precision `NaiveDateTime` values.
 The century hint is preserved but does not override the validated Siemens
 two-digit-year pivot because observed devices encode the hint inconsistently.

@@ -1,4 +1,4 @@
-defmodule S7.AlarmAcknowledgement do
+defmodule S7.Alarm.Acknowledgement do
   @moduledoc """
   Explicit classic alarm acknowledgment request item.
 
@@ -28,7 +28,7 @@ defmodule S7.AlarmAcknowledgement do
     defstruct [:acknowledgement, :return_code, :status, :error]
 
     @type t :: %__MODULE__{
-            acknowledgement: S7.AlarmAcknowledgement.t(),
+            acknowledgement: S7.Alarm.Acknowledgement.t(),
             return_code: byte(),
             status: :ok | :error,
             error: Error.t() | nil

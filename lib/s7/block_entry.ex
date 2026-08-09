@@ -1,4 +1,4 @@
-defmodule S7.BlockEntry do
+defmodule S7.Block.Entry do
   @moduledoc "One entry from a classic list-blocks-of-type response."
 
   alias S7.Block

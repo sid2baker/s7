@@ -1,4 +1,4 @@
-defmodule S7.AlarmSubscription do
+defmodule S7.Alarm.Subscription do
   @moduledoc """
   Handle for one remote classic alarm-message subscription.
 

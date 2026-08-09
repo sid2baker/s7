@@ -1,8 +1,9 @@
 defmodule S7.Protocol.CyclicTest do
   use ExUnit.Case, async: true
 
-  alias S7.{CyclicEvent, CyclicInterval, CyclicSubscription, Error}
-  alias S7.CyclicEvent.Item, as: EventItem
+  alias S7.Cyclic, as: CyclicModel
+  alias S7.Cyclic.Event.Item, as: EventItem
+  alias S7.Error
   alias S7.Protocol.{Cyclic, PDU, UserData}
   alias S7.Test.Fixture
 
@@ -17,7 +18,7 @@ defmodule S7.Protocol.CyclicTest do
     response = decoded_pdu("cyclic/fixed_subscribe_response.bin")
 
     assert {:ok, 1,
-            %CyclicEvent{
+            %CyclicModel.Event{
               job_id: 1,
               subfunction: 1,
               items: [
@@ -42,7 +43,7 @@ defmodule S7.Protocol.CyclicTest do
     indication = decoded_userdata("cyclic/fixed_indication.bin")
 
     assert {:ok,
-            %CyclicEvent{
+            %CyclicModel.Event{
               job_id: 1,
               items: [%EventItem{value: 1234, raw: <<0xFF, 0x04, 0, 16, 4, 210>>}]
             }} = Cyclic.decode_indication(indication, subscription)
@@ -64,7 +65,7 @@ defmodule S7.Protocol.CyclicTest do
     response = decoded_pdu("cyclic/change_subscribe_response.bin")
 
     assert {:ok, 1,
-            %CyclicEvent{
+            %CyclicModel.Event{
               items: [
                 %EventItem{
                   transport_size: 0x09,
@@ -85,7 +86,7 @@ defmodule S7.Protocol.CyclicTest do
     assert {:ok, modify} = Cyclic.modify_request(1, [modified_item], interval)
     assert encoded(modify, 0x24) == Fixture.read!("cyclic/change_modify_request.bin")
 
-    assert {:ok, %CyclicEvent{items: [%EventItem{encoded_length: 59}]}} =
+    assert {:ok, %CyclicModel.Event{items: [%EventItem{encoded_length: 59}]}} =
              Cyclic.decode_modify_response(
                decoded_pdu("cyclic/change_modify_response.bin"),
                modify,
@@ -97,7 +98,7 @@ defmodule S7.Protocol.CyclicTest do
     subscription = subscription(:change_driven, 3, [first_item], nil, interval, false)
 
     assert {:ok,
-            %CyclicEvent{
+            %CyclicModel.Event{
               subfunction: 5,
               items: [%EventItem{encoded_length: 11, value: nil, error: nil}]
             }} =
@@ -120,21 +121,21 @@ defmodule S7.Protocol.CyclicTest do
   test "selects only exact representable intervals and prefers coarser bases" do
     assert Cyclic.interval(100) ==
              {:ok,
-              %CyclicInterval{
+              %CyclicModel.Interval{
                 base: :hundred_milliseconds,
                 factor: 1,
                 milliseconds: 100
               }}
 
-    assert {:ok, %CyclicInterval{base: :second, factor: 2}} = Cyclic.interval(2_000)
-    assert {:ok, %CyclicInterval{base: :ten_seconds, factor: 6}} = Cyclic.interval(60_000)
+    assert {:ok, %CyclicModel.Interval{base: :second, factor: 2}} = Cyclic.interval(2_000)
+    assert {:ok, %CyclicModel.Interval{base: :ten_seconds, factor: 6}} = Cyclic.interval(60_000)
 
     for invalid <- [0, 99, 1_050, 255_100, 2_550_001, :invalid] do
       assert {:error, %Error{reason: :invalid_cyclic_interval}} = Cyclic.interval(invalid)
     end
 
     assert {:error, %Error{reason: :invalid_cyclic_interval}} =
-             Cyclic.interval(%CyclicInterval{
+             Cyclic.interval(%CyclicModel.Interval{
                base: :second,
                factor: 2,
                milliseconds: 1_000
@@ -167,7 +168,7 @@ defmodule S7.Protocol.CyclicTest do
     rejected = put_in(indication.payload.data, <<0, 1, 5, 4, 0, 16, 4, 210>>)
 
     assert {:ok,
-            %CyclicEvent{
+            %CyclicModel.Event{
               items: [%EventItem{value: nil, error: %Error{reason: :address_out_of_range}}]
             }} = Cyclic.decode_indication(rejected, subscription)
 
@@ -195,7 +196,7 @@ defmodule S7.Protocol.CyclicTest do
         error_code: nil
     }
 
-    assert {:ok, %CyclicEvent{}} =
+    assert {:ok, %CyclicModel.Event{}} =
              Cyclic.decode_indication(
                %{indication | parameter: short_parameter},
                subscription
@@ -225,7 +226,7 @@ defmodule S7.Protocol.CyclicTest do
 
     assert {:ok, short_pdu} = UserData.to_pdu(%{response | parameter: short_parameter}, 0x20)
 
-    assert {:ok, 1, %CyclicEvent{}} =
+    assert {:ok, 1, %CyclicModel.Event{}} =
              Cyclic.decode_subscribe_response(
                short_pdu,
                request,
@@ -278,7 +279,7 @@ defmodule S7.Protocol.CyclicTest do
             %{
               action: :subscribe,
               mode: :cyclic,
-              interval: %CyclicInterval{base: :ten_seconds, factor: 6},
+              interval: %CyclicModel.Interval{base: :ten_seconds, factor: 6},
               item_specs: [^item_spec]
             }} = Cyclic.decode_request(request, :test_decode_request)
 
@@ -392,7 +393,7 @@ defmodule S7.Protocol.CyclicTest do
     indication = decoded_userdata("cyclic/fixed_indication.bin")
     raw_subscription = subscription(:cyclic, 1, specs, nil, interval, false)
 
-    assert {:ok, %CyclicEvent{items: [%EventItem{address: nil, value: nil}]}} =
+    assert {:ok, %CyclicModel.Event{items: [%EventItem{address: nil, value: nil}]}} =
              Cyclic.decode_indication(indication, raw_subscription)
 
     assert {:error, %Error{reason: :malformed_response}} =
@@ -407,7 +408,7 @@ defmodule S7.Protocol.CyclicTest do
     <<count::binary-size(2), return_code, _transport, rest::binary>> = indication.payload.data
     malformed_data = count <> <<return_code, 0x03>> <> rest
 
-    assert {:ok, %CyclicEvent{items: [%EventItem{transport_size: :bit, value: nil}]}} =
+    assert {:ok, %CyclicModel.Event{items: [%EventItem{transport_size: :bit, value: nil}]}} =
              Cyclic.decode_indication(
                put_in(indication.payload.data, malformed_data),
                raw_subscription
@@ -424,7 +425,7 @@ defmodule S7.Protocol.CyclicTest do
   end
 
   defp subscription(mode, job_id, specs, addresses, interval, typed?) do
-    %CyclicSubscription{
+    %CyclicModel.Subscription{
       connection: self(),
       reference: make_ref(),
       job_id: job_id,

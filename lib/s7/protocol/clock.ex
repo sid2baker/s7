@@ -5,7 +5,7 @@ defmodule S7.Protocol.Clock do
   Values are local PLC civil time. No timezone conversion is performed.
   """
 
-  alias S7.{Data, Error, PLCClock}
+  alias S7.{Data, Error, PLC}
   alias S7.Protocol.{PDU, UserData}
   alias S7.Protocol.UserData.{Parameter, Payload}
 
@@ -36,7 +36,7 @@ defmodule S7.Protocol.Clock do
 
   @doc false
   @spec decode_response(PDU.t(), UserData.t(), 0..0xFFFF, :read | :set) ::
-          {:ok, PLCClock.t() | :ok} | {:error, Error.t()}
+          {:ok, PLC.Clock.t() | :ok} | {:error, Error.t()}
   def decode_response(pdu, request, reference, action) when action in [:read, :set] do
     with {:ok, response} <-
            UserData.decode_response(pdu, request, reference, allow_null_success: action == :set),
@@ -55,12 +55,12 @@ defmodule S7.Protocol.Clock do
   end
 
   @doc false
-  @spec decode_timestamp(binary()) :: {:ok, PLCClock.t()} | {:error, Error.t()}
+  @spec decode_timestamp(binary()) :: {:ok, PLC.Clock.t()} | {:error, Error.t()}
   def decode_timestamp(<<reserved, century_hint, encoded::binary-size(8)>> = raw) do
     case Data.decode(:date_and_time, encoded) do
       {:ok, datetime} ->
         {:ok,
-         %PLCClock{
+         %PLC.Clock{
            datetime: datetime,
            reserved: reserved,
            century_hint: century_hint,

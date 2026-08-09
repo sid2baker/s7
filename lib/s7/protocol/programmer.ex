@@ -7,11 +7,12 @@ defmodule S7.Protocol.Programmer do
   exposed through this module.
   """
 
-  alias S7.{Address, Data, Error, ProgrammerEvent, VariableStatus}
+  alias S7.{Address, Data, Error}
+  alias S7.Programmer, as: ProgrammerModel
+  alias S7.Programmer.VariableStatus.Item
   alias S7.Protocol
   alias S7.Protocol.{PDU, UserData}
   alias S7.Protocol.UserData.{Parameter, Payload}
-  alias S7.VariableStatus.Item
 
   @setup_method 0x12
   @enable_job 0x0E
@@ -70,7 +71,7 @@ defmodule S7.Protocol.Programmer do
     defstruct [:service, :subfunction, :setup_parameters, :setup_data, :sequence]
 
     @type t :: %__MODULE__{
-            service: ProgrammerEvent.service(),
+            service: ProgrammerModel.Event.service(),
             subfunction: byte(),
             setup_parameters: binary(),
             setup_data: binary(),
@@ -107,7 +108,7 @@ defmodule S7.Protocol.Programmer do
   @doc """
   Builds a read-only programmer job setup request around opaque service bytes.
   """
-  @spec start_request(ProgrammerEvent.service() | byte(), binary(), binary(), atom()) ::
+  @spec start_request(ProgrammerModel.Event.service() | byte(), binary(), binary(), atom()) ::
           {:ok, UserData.t(), Job.t()} | {:error, Error.t()}
   def start_request(subfunction, parameters, data, operation \\ :programmer_diagnostic)
 
@@ -210,7 +211,7 @@ defmodule S7.Protocol.Programmer do
   Decodes one indication for a known programmer job without interpreting its records.
   """
   @spec decode_indication(UserData.t(), Job.t(), atom()) ::
-          {:ok, ProgrammerEvent.t()} | {:error, Error.t()}
+          {:ok, ProgrammerModel.Event.t()} | {:error, Error.t()}
   def decode_indication(
         %UserData{
           parameter: %Parameter{} = parameter,
@@ -223,7 +224,7 @@ defmodule S7.Protocol.Programmer do
          :ok <- validate_indication_payload(payload, operation),
          {:ok, parameters, data} <- decode_service_data(payload.data, operation) do
       {:ok,
-       %ProgrammerEvent{
+       %ProgrammerModel.Event{
          service: job.service,
          subfunction: job.subfunction,
          sequence: job.sequence,
@@ -239,12 +240,12 @@ defmodule S7.Protocol.Programmer do
   @doc """
   Decodes variable-status item records and preserves every item byte.
   """
-  @spec decode_variable_status(ProgrammerEvent.t(), [Address.t()], atom()) ::
-          {:ok, VariableStatus.t()} | {:error, Error.t()}
+  @spec decode_variable_status(ProgrammerModel.Event.t(), [Address.t()], atom()) ::
+          {:ok, ProgrammerModel.VariableStatus.t()} | {:error, Error.t()}
   def decode_variable_status(event, addresses, operation \\ :variable_status)
 
   def decode_variable_status(
-        %ProgrammerEvent{
+        %ProgrammerModel.Event{
           service: :variable_status,
           data: <<count::unsigned-big-16, rest::binary>>
         } =
@@ -256,7 +257,7 @@ defmodule S7.Protocol.Programmer do
     with true <- count == length(addresses),
          {:ok, items, <<>>} <- decode_variable_items(rest, addresses, operation, []) do
       {:ok,
-       %VariableStatus{
+       %ProgrammerModel.VariableStatus{
          sequence: event.sequence,
          parameters: event.parameters,
          items: items,

@@ -10,20 +10,12 @@ defmodule S7.Protocol.Alarm do
 
   import Bitwise
 
-  alias S7.{
-    AlarmAcknowledgement,
-    AlarmEvent,
-    AlarmQuery,
-    AlarmSubscription,
-    AlarmTimestamp,
-    Data,
-    Error
-  }
-
-  alias S7.AlarmAcknowledgement.Result, as: AcknowledgementResult
-  alias S7.AlarmEvent.Object, as: AlarmObject
-  alias S7.AlarmEvent.Object.AssociatedValue
-  alias S7.AlarmQuery.Record, as: QueryRecord
+  alias S7.Alarm, as: AlarmModel
+  alias S7.Alarm.Acknowledgement.Result, as: AcknowledgementResult
+  alias S7.Alarm.Event.Object, as: AlarmObject
+  alias S7.Alarm.Event.Object.AssociatedValue
+  alias S7.Alarm.Query.Record, as: QueryRecord
+  alias S7.{Data, Error}
   alias S7.Protocol
   alias S7.Protocol.{PDU, UserData}
   alias S7.Protocol.UserData.{Parameter, Payload}
@@ -79,7 +71,7 @@ defmodule S7.Protocol.Alarm do
   `event_mask` is retained for capture verification. Runtime callers use zero,
   causing only the alarm class bit to be set.
   """
-  @spec subscription_request(AlarmSubscription.alarm_type(), binary(), byte()) ::
+  @spec subscription_request(AlarmModel.Subscription.alarm_type(), binary(), byte()) ::
           {:ok, UserData.t()} | {:error, Error.t()}
   def subscription_request(
         alarm_type,
@@ -98,7 +90,7 @@ defmodule S7.Protocol.Alarm do
   @doc """
   Builds the family-specific alarm abort request.
   """
-  @spec unsubscribe_request(AlarmSubscription.alarm_type(), binary()) ::
+  @spec unsubscribe_request(AlarmModel.Subscription.alarm_type(), binary()) ::
           {:ok, UserData.t()} | {:error, Error.t()}
   def unsubscribe_request(alarm_type, subscription_key \\ @default_subscription_key) do
     build_subscription_request(
@@ -117,7 +109,7 @@ defmodule S7.Protocol.Alarm do
           PDU.t(),
           UserData.t(),
           0..0xFFFF,
-          AlarmSubscription.alarm_type(),
+          AlarmModel.Subscription.alarm_type(),
           :subscribe | :unsubscribe,
           atom()
         ) :: :ok | {:error, Error.t()}
@@ -142,7 +134,7 @@ defmodule S7.Protocol.Alarm do
   @doc """
   Builds a query by alarm family or exact event ID.
   """
-  @spec query_request(AlarmQuery.selector()) :: {:ok, UserData.t()} | {:error, Error.t()}
+  @spec query_request(AlarmModel.Query.selector()) :: {:ok, UserData.t()} | {:error, Error.t()}
   def query_request(selector) do
     with {:ok, query_type, value} <- encode_query_selector(selector, :query_alarms) do
       data = <<0, 1, 0x12, 0x08, 0x1A, 0, query_type, 0x34, value::unsigned-big-32>>
@@ -161,9 +153,9 @@ defmodule S7.Protocol.Alarm do
           PDU.t(),
           UserData.t(),
           0..0xFFFF,
-          AlarmQuery.selector(),
+          AlarmModel.Query.selector(),
           atom()
-        ) :: {:ok, AlarmQuery.t()} | {:error, Error.t()}
+        ) :: {:ok, AlarmModel.Query.t()} | {:error, Error.t()}
   def decode_query_response(pdu, request, reference, selector, operation \\ :query_alarms) do
     case UserData.decode_response(pdu, request, reference) do
       {:ok, response} ->
@@ -177,8 +169,8 @@ defmodule S7.Protocol.Alarm do
   @doc """
   Decodes an already-correlated query userdata response.
   """
-  @spec decode_query_response(UserData.t(), AlarmQuery.selector(), atom()) ::
-          {:ok, AlarmQuery.t()} | {:error, Error.t()}
+  @spec decode_query_response(UserData.t(), AlarmModel.Query.selector(), atom()) ::
+          {:ok, AlarmModel.Query.t()} | {:error, Error.t()}
   def decode_query_response(
         %UserData{parameter: parameter, payload: payload},
         selector,
@@ -197,7 +189,7 @@ defmodule S7.Protocol.Alarm do
   Decodes one unsolicited alarm indication.
   """
   @spec decode_indication(UserData.t(), atom()) ::
-          {:ok, AlarmEvent.t()} | {:error, Error.t()}
+          {:ok, AlarmModel.Event.t()} | {:error, Error.t()}
   def decode_indication(message, operation \\ :next_alarm)
 
   def decode_indication(
@@ -210,7 +202,7 @@ defmodule S7.Protocol.Alarm do
            decode_event_header(payload.data, operation),
          {:ok, objects, <<>>} <- decode_objects(rest, count, operation, []) do
       {:ok,
-       %AlarmEvent{
+       %AlarmModel.Event{
          subfunction: parameter.subfunction,
          kind: kind,
          timestamp: timestamp,
@@ -236,15 +228,15 @@ defmodule S7.Protocol.Alarm do
   Normalizes acknowledgment structs, event objects, or one complete event.
   """
   @spec acknowledgements(
-          AlarmAcknowledgement.t()
+          AlarmModel.Acknowledgement.t()
           | AlarmObject.t()
-          | AlarmEvent.t()
-          | [AlarmAcknowledgement.t() | AlarmObject.t()],
+          | AlarmModel.Event.t()
+          | [AlarmModel.Acknowledgement.t() | AlarmObject.t()],
           atom()
-        ) :: {:ok, [AlarmAcknowledgement.t()]} | {:error, Error.t()}
+        ) :: {:ok, [AlarmModel.Acknowledgement.t()]} | {:error, Error.t()}
   def acknowledgements(value, operation \\ :acknowledge_alarms)
 
-  def acknowledgements(%AlarmEvent{objects: objects}, operation),
+  def acknowledgements(%AlarmModel.Event{objects: objects}, operation),
     do: acknowledgements(objects, operation)
 
   def acknowledgements(value, operation) when not is_list(value),
@@ -272,7 +264,7 @@ defmodule S7.Protocol.Alarm do
   @doc """
   Builds one explicit alarm acknowledgment request.
   """
-  @spec acknowledgement_request([AlarmAcknowledgement.t()]) ::
+  @spec acknowledgement_request([AlarmModel.Acknowledgement.t()]) ::
           {:ok, UserData.t()} | {:error, Error.t()}
   def acknowledgement_request(acknowledgements) do
     with {:ok, acknowledgements} <- acknowledgements(acknowledgements),
@@ -291,7 +283,7 @@ defmodule S7.Protocol.Alarm do
           PDU.t(),
           UserData.t(),
           0..0xFFFF,
-          [AlarmAcknowledgement.t()],
+          [AlarmModel.Acknowledgement.t()],
           atom()
         ) :: {:ok, [AcknowledgementResult.t()]} | {:error, Error.t()}
   def decode_acknowledgement_response(
@@ -524,7 +516,7 @@ defmodule S7.Protocol.Alarm do
          {:ok, decoded_records} <-
            decode_query_records(records, complete_length, operation) do
       {:ok,
-       %AlarmQuery{
+       %AlarmModel.Query{
          selector: selector,
          function_id: function_id,
          reported_count: reported_count,
@@ -641,7 +633,8 @@ defmodule S7.Protocol.Alarm do
         # The final byte is milliseconds-low in the high nibble and weekday in the low nibble.
         <<_prefix::binary-size(7), final>> = timestamp_raw
 
-        {:ok, %AlarmTimestamp{datetime: datetime, weekday: final &&& 0x0F, raw: timestamp_raw},
+        {:ok,
+         %AlarmModel.Timestamp{datetime: datetime, weekday: final &&& 0x0F, raw: timestamp_raw},
          function_id, count, rest}
 
       {:error, %Error{}} ->
@@ -886,7 +879,7 @@ defmodule S7.Protocol.Alarm do
   defp validate_octet_payload(%Payload{return_code: return_code}, operation),
     do: Protocol.item_result(operation, return_code)
 
-  defp normalize_acknowledgement(%AlarmAcknowledgement{} = acknowledgement, operation) do
+  defp normalize_acknowledgement(%AlarmModel.Acknowledgement{} = acknowledgement, operation) do
     if acknowledgement.event_id in 0..0xFFFFFFFF and
          acknowledgement.ack_state_going in 0..0xFF and
          acknowledgement.ack_state_coming in 0..0xFF do
@@ -898,7 +891,7 @@ defmodule S7.Protocol.Alarm do
 
   defp normalize_acknowledgement(%AlarmObject{} = object, operation) do
     normalize_acknowledgement(
-      %AlarmAcknowledgement{
+      %AlarmModel.Acknowledgement{
         event_id: object.event_id,
         ack_state_going: object.ack_state_going,
         ack_state_coming: object.ack_state_coming
@@ -959,7 +952,7 @@ defmodule S7.Protocol.Alarm do
          acknowledgements
        )
        when count > 0 do
-    acknowledgement = %AlarmAcknowledgement{
+    acknowledgement = %AlarmModel.Acknowledgement{
       event_id: event_id,
       ack_state_going: ack_state_going,
       ack_state_coming: ack_state_coming
@@ -1019,7 +1012,7 @@ defmodule S7.Protocol.Alarm do
 
   defp translate_error(error, operation), do: %{error | operation: operation}
 
-  defp translate_query_result({:ok, %AlarmQuery{} = query}, _operation), do: {:ok, query}
+  defp translate_query_result({:ok, %AlarmModel.Query{} = query}, _operation), do: {:ok, query}
 
   defp translate_query_result({:error, %Error{} = error}, operation),
     do: {:error, translate_error(error, operation)}

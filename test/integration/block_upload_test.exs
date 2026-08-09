@@ -1,7 +1,7 @@
 defmodule S7.BlockUploadIntegrationTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Block, BlockImage, Client, Error}
+  alias S7.{Block, Client, Error}
   alias S7.Protocol.PDU
   alias S7.Test.{Fixture, MockPLC}
 
@@ -10,7 +10,7 @@ defmodule S7.BlockUploadIntegrationTest do
     server = start_server(upload_image: raw, upload_block: block(), upload_chunk_size: 37)
     assert {:ok, client} = connect(server)
 
-    assert {:ok, %BlockImage{block: %Block{type: :sdb, number: 0}, raw: ^raw}} =
+    assert {:ok, %Block.Image{block: %Block{type: :sdb, number: 0}, raw: ^raw}} =
              Client.upload_block(client, block(), max_fragments: 8)
 
     assert Client.upload_block_raw(client, :sdb, 0, max_fragments: 8) == {:ok, raw}
@@ -41,7 +41,7 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:error, %Error{reason: :queue_full, details: %{limit: 1}}} =
              Client.read(client, "DB1.DBW0")
 
-    assert {:ok, %BlockImage{}} = Task.await(upload)
+    assert {:ok, %Block.Image{}} = Task.await(upload)
     assert Task.await(read) == {:ok, 1234}
     assert_receive {:mock_plc_request, :upload_end, _reference}, 500
     assert_receive {:mock_plc_request, :read, _reference}, 500

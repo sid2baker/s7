@@ -1,4 +1,4 @@
-defmodule S7.AlarmEvent do
+defmodule S7.Alarm.Event do
   @moduledoc """
   One unsolicited classic S7comm alarm or notification indication.
 
@@ -7,7 +7,7 @@ defmodule S7.AlarmEvent do
   repeated event IDs or state transitions.
   """
 
-  alias S7.AlarmTimestamp
+  alias S7.Alarm.Timestamp
 
   @enforce_keys [:subfunction, :kind, :timestamp, :function_id, :objects, :raw]
   defstruct [:subfunction, :kind, :timestamp, :function_id, :objects, :raw]
@@ -24,7 +24,7 @@ defmodule S7.AlarmEvent do
   @type t :: %__MODULE__{
           subfunction: byte(),
           kind: kind(),
-          timestamp: AlarmTimestamp.t(),
+          timestamp: Timestamp.t(),
           function_id: byte(),
           objects: [__MODULE__.Object.t()],
           raw: binary()

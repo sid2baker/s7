@@ -1,4 +1,4 @@
-defmodule S7.CyclicSubscription do
+defmodule S7.Cyclic.Subscription do
   @moduledoc """
   Handle for one remote classic cyclic-service job.
 
@@ -7,7 +7,8 @@ defmodule S7.CyclicSubscription do
   most recent change-driven modification response.
   """
 
-  alias S7.{Address, CyclicEvent, CyclicInterval}
+  alias S7.Address
+  alias S7.Cyclic.{Event, Interval}
 
   @enforce_keys [
     :connection,
@@ -36,10 +37,10 @@ defmodule S7.CyclicSubscription do
           reference: reference(),
           job_id: byte(),
           mode: mode(),
-          interval: CyclicInterval.t(),
+          interval: Interval.t(),
           item_specs: [binary()],
           typed?: boolean(),
           addresses: [Address.t()] | nil,
-          initial: CyclicEvent.t() | nil
+          initial: Event.t() | nil
         }
 end

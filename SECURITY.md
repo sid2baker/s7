@@ -40,7 +40,7 @@ captures. PCAP files contain process traffic and must be handled as sensitive
 operational data.
 
 Uploaded block images can contain proprietary control logic, symbols, comments,
-and operational details. Treat both `%S7.BlockImage{}` values and raw upload
+and operational details. Treat both `%S7.Block.Image{}` values and raw upload
 binaries as sensitive program material; do not emit them through telemetry,
 logs, exceptions, fixtures, or public packet captures.
 

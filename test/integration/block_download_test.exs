@@ -1,7 +1,7 @@
 defmodule S7.BlockDownloadIntegrationTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Block, BlockImage, Client, Error}
+  alias S7.{Block, Client, Error}
   alias S7.Protocol.{BlockDownload, PDU}
   alias S7.Test.{Fixture, MockPLC}
 
@@ -237,7 +237,7 @@ defmodule S7.BlockDownloadIntegrationTest do
   defp captured_image do
     assert {:ok, pdu, <<>>} = Fixture.read!("download/block_response.bin") |> PDU.decode()
     assert {:ok, %{data: raw}} = BlockDownload.decode_download_response(pdu, :test)
-    assert {:ok, image} = BlockImage.decode(raw, %Block{type: :db, number: 1})
+    assert {:ok, image} = Block.Image.decode(raw, %Block{type: :db, number: 1})
     image
   end
 

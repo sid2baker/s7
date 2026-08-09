@@ -8,7 +8,7 @@ defmodule S7.Protocol.Blocks do
 
   import Bitwise
 
-  alias S7.{Block, BlockEntry, BlockInfo, BlockInventory, Error}
+  alias S7.{Block, Error}
   alias S7.Protocol.Blocks.Transaction
   alias S7.Protocol.UserData
   alias S7.Protocol.UserData.{Parameter, Payload}
@@ -22,7 +22,7 @@ defmodule S7.Protocol.Blocks do
 
   @type limits :: Block.limits()
   @typep consume_result ::
-           {:ok, BlockInventory.t() | [BlockEntry.t()] | BlockInfo.t()}
+           {:ok, Block.Inventory.t() | [Block.Entry.t()] | Block.Info.t()}
            | {:continue, UserData.t(), Transaction.t()}
            | {:error, Error.t()}
 
@@ -113,14 +113,14 @@ defmodule S7.Protocol.Blocks do
   def consume(_response, _transaction, operation), do: malformed(operation, %{})
 
   @doc false
-  @spec decode_inventory(binary(), atom()) :: {:ok, BlockInventory.t()} | {:error, Error.t()}
+  @spec decode_inventory(binary(), atom()) :: {:ok, Block.Inventory.t()} | {:error, Error.t()}
   def decode_inventory(raw, operation \\ :block_counts)
 
   def decode_inventory(raw, operation) when is_binary(raw) and byte_size(raw) == 28 do
     raw
     |> decode_count_records(%{}, operation)
     |> case do
-      {:ok, counts} -> {:ok, %BlockInventory{counts: counts, raw: raw}}
+      {:ok, counts} -> {:ok, %Block.Inventory{counts: counts, raw: raw}}
       {:error, %Error{} = error} -> {:error, error}
     end
   end
@@ -132,7 +132,7 @@ defmodule S7.Protocol.Blocks do
 
   @doc false
   @spec decode_entries(Block.known_type(), binary(), atom()) ::
-          {:ok, [BlockEntry.t()]} | {:error, Error.t()}
+          {:ok, [Block.Entry.t()]} | {:error, Error.t()}
   def decode_entries(type, raw, operation \\ :list_blocks)
 
   def decode_entries(type, raw, operation)
@@ -148,7 +148,7 @@ defmodule S7.Protocol.Blocks do
   def decode_entries(_type, _raw, operation), do: malformed(operation, %{})
 
   @doc false
-  @spec decode_info(Block.t(), binary(), atom()) :: {:ok, BlockInfo.t()} | {:error, Error.t()}
+  @spec decode_info(Block.t(), binary(), atom()) :: {:ok, Block.Info.t()} | {:error, Error.t()}
   def decode_info(block, raw, operation \\ :block_info)
 
   def decode_info(%Block{} = requested, raw, operation)
@@ -183,7 +183,7 @@ defmodule S7.Protocol.Blocks do
              :malformed_response
            ) do
       {:ok,
-       %BlockInfo{
+       %Block.Info{
          block: %Block{type: subtype, number: number},
          language: Block.decode_language(language_code),
          language_code: language_code,
@@ -336,7 +336,7 @@ defmodule S7.Protocol.Blocks do
        ) do
     record = <<number::unsigned-big-16, flags, language_code>>
 
-    entry = %BlockEntry{
+    entry = %Block.Entry{
       block: %Block{type: type, number: number},
       flags: flags,
       language: Block.decode_language(language_code),

@@ -1,8 +1,8 @@
 defmodule S7.CyclicServicesIntegrationTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Client, CyclicEvent, CyclicSubscription, Error}
-  alias S7.CyclicEvent.Item
+  alias S7.{Client, Cyclic, Error}
+  alias S7.Cyclic.Event.Item
   alias S7.Test.MockPLC
 
   @dbread <<0x12, 0x07, 0xB0, 1, 5, 0, 0x51, 1, 0x72>>
@@ -39,11 +39,11 @@ defmodule S7.CyclicServicesIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:ok,
-            %CyclicSubscription{
+            %Cyclic.Subscription{
               job_id: 1,
               mode: :cyclic,
               typed?: true,
-              initial: %CyclicEvent{items: [%Item{value: 1234}]}
+              initial: %Cyclic.Event{items: [%Item{value: 1234}]}
             } = subscription} = Client.subscribe_cyclic(client, ["MW10"], queue_limit: 4)
 
     assert_receive {:mock_plc_request, :cyclic_subscribe, _reference}, 500
@@ -53,10 +53,10 @@ defmodule S7.CyclicServicesIntegrationTest do
 
     assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
 
-    assert {:ok, %CyclicEvent{items: [%Item{value: 1234, error: nil}]}} =
+    assert {:ok, %Cyclic.Event{items: [%Item{value: 1234, error: nil}]}} =
              Client.next_cyclic(client, subscription, 500)
 
-    assert {:ok, %CyclicEvent{items: [%Item{value: 1234}]}} =
+    assert {:ok, %Cyclic.Event{items: [%Item{value: 1234}]}} =
              Client.next_cyclic(client, subscription, 500)
 
     assert Client.unsubscribe_cyclic(client, subscription) == :ok
@@ -82,27 +82,27 @@ defmodule S7.CyclicServicesIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:ok,
-            %CyclicSubscription{
+            %Cyclic.Subscription{
               mode: :change_driven,
               typed?: false,
-              initial: %CyclicEvent{items: [%Item{transport_size: 9, value: nil}]}
+              initial: %Cyclic.Event{items: [%Item{transport_size: 9, value: nil}]}
             } = subscription} =
              Client.subscribe_cyclic_raw(client, :change_driven, [@dbread])
 
-    assert {:ok, %CyclicEvent{items: [%Item{data: <<0xFF, 0x43, _rest::binary>>}]}} =
+    assert {:ok, %Cyclic.Event{items: [%Item{data: <<0xFF, 0x43, _rest::binary>>}]}} =
              Client.next_cyclic(client, subscription, 500)
 
     assert {:ok,
-            %CyclicSubscription{
+            %Cyclic.Subscription{
               job_id: 1,
               item_specs: [@dbread_modified],
-              initial: %CyclicEvent{items: [%Item{value: nil}]}
+              initial: %Cyclic.Event{items: [%Item{value: nil}]}
             } = modified} =
              Client.modify_cyclic_raw(client, subscription, [@dbread_modified])
 
     assert_receive {:mock_plc_request, :cyclic_modify, _reference}, 500
 
-    assert {:ok, %CyclicEvent{subfunction: 7, items: [%Item{value: nil}]}} =
+    assert {:ok, %Cyclic.Event{subfunction: 7, items: [%Item{value: nil}]}} =
              Client.next_cyclic(client, modified, 500)
 
     assert Client.unsubscribe_cyclic(client, modified) == :ok
@@ -256,7 +256,7 @@ defmodule S7.CyclicServicesIntegrationTest do
         Process.sleep(:infinity)
       end)
 
-    assert_receive {:cyclic_owner, ^owner, {:ok, %CyclicSubscription{}}}, 500
+    assert_receive {:cyclic_owner, ^owner, {:ok, %Cyclic.Subscription{}}}, 500
     assert %{subscriptions: 1} = Client.info(client)
     Process.exit(owner, :kill)
 

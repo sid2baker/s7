@@ -1,7 +1,7 @@
 defmodule S7.Protocol.ClockTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Error, PLCClock}
+  alias S7.{Error, PLC}
   alias S7.Protocol.{Clock, PDU, UserData}
   alias S7.Protocol.UserData.{Parameter, Payload}
   alias S7.Test.Fixture
@@ -14,7 +14,7 @@ defmodule S7.Protocol.ClockTest do
     assert {:ok, pdu, <<>>} = PDU.decode(response)
 
     assert {:ok,
-            %PLCClock{
+            %PLC.Clock{
               datetime: ~N[2016-02-08 14:51:37.916],
               reserved: 0,
               century_hint: 0x19,
@@ -34,13 +34,13 @@ defmodule S7.Protocol.ClockTest do
   end
 
   test "validates BCD, calendar, weekday, precision, and year pivot" do
-    assert {:ok, %PLCClock{datetime: ~N[2089-12-31 23:59:59.999]}} =
+    assert {:ok, %PLC.Clock{datetime: ~N[2089-12-31 23:59:59.999]}} =
              Clock.decode_timestamp(<<0, 0x19, 0x89, 0x12, 0x31, 0x23, 0x59, 0x59, 0x99, 0x97>>)
 
-    assert {:ok, %PLCClock{datetime: ~N[1990-01-01 00:00:00.000]}} =
+    assert {:ok, %PLC.Clock{datetime: ~N[1990-01-01 00:00:00.000]}} =
              Clock.decode_timestamp(<<0, 0x19, 0x90, 1, 1, 0, 0, 0, 0, 0x02>>)
 
-    assert {:ok, %PLCClock{datetime: ~N[2000-02-29 00:00:00.000]}} =
+    assert {:ok, %PLC.Clock{datetime: ~N[2000-02-29 00:00:00.000]}} =
              Clock.decode_timestamp(<<0, 0x19, 0x00, 0x02, 0x29, 0, 0, 0, 0, 0x03>>)
 
     for invalid <- [

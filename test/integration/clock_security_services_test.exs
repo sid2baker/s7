@@ -1,7 +1,7 @@
 defmodule S7.ClockSecurityServicesIntegrationTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Client, Error, PLCClock}
+  alias S7.{Client, Error, PLC}
   alias S7.Test.MockPLC
 
   test "reads, sets, and reads back timezone-free PLC time" do
@@ -9,7 +9,7 @@ defmodule S7.ClockSecurityServicesIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:ok,
-            %PLCClock{
+            %PLC.Clock{
               datetime: ~N[2024-08-09 12:34:56.123],
               reserved: 0,
               century_hint: 0x19
@@ -17,7 +17,7 @@ defmodule S7.ClockSecurityServicesIntegrationTest do
 
     new_time = ~N[2030-02-03 04:05:06.789]
     assert Client.set_clock(client, new_time) == :ok
-    assert {:ok, %PLCClock{datetime: ^new_time}} = Client.read_clock(client)
+    assert {:ok, %PLC.Clock{datetime: ^new_time}} = Client.read_clock(client)
 
     assert {:error, %Error{layer: :client, reason: :invalid_clock_value}} =
              Client.set_clock(client, ~N[2030-02-03 04:05:06.000001])

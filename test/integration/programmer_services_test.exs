@@ -1,9 +1,9 @@
 defmodule S7.ProgrammerServicesIntegrationTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Address, Client, Error, ProgrammerEvent, VariableStatus}
+  alias S7.{Address, Client, Error, Programmer}
+  alias S7.Programmer.VariableStatus.Item
   alias S7.Test.MockPLC
-  alias S7.VariableStatus.Item
 
   test "samples typed variable status and deletes the temporary remote job" do
     server = start_server(notify_requests: true)
@@ -17,7 +17,7 @@ defmodule S7.ProgrammerServicesIntegrationTest do
     }
 
     assert {:ok,
-            %VariableStatus{
+            %Programmer.VariableStatus{
               sequence: 2,
               parameters: <<1, 0, 0, 2>>,
               items: [
@@ -54,7 +54,7 @@ defmodule S7.ProgrammerServicesIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:ok,
-            %ProgrammerEvent{
+            %Programmer.Event{
               service: :block_status_v2,
               subfunction: 0x13,
               sequence: 2,
@@ -140,7 +140,7 @@ defmodule S7.ProgrammerServicesIntegrationTest do
     read = Task.async(fn -> Client.read(client, "DB1.DBW0") end)
     assert %{exclusive_transaction: true, queued_requests: 1} = await_queue(client)
 
-    assert {:ok, %VariableStatus{}} = Task.await(status)
+    assert {:ok, %Programmer.VariableStatus{}} = Task.await(status)
     assert Task.await(read) == {:ok, 1234}
     assert Client.close(client) == :ok
   end

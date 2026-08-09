@@ -1,7 +1,7 @@
 defmodule S7.BlockServicesIntegrationTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Block, BlockEntry, BlockInfo, BlockInventory, Client, Error}
+  alias S7.{Block, Client, Error}
   alias S7.Test.MockPLC
 
   test "counts, lists, and inspects blocks through the public API" do
@@ -9,14 +9,14 @@ defmodule S7.BlockServicesIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:ok,
-            %BlockInventory{
+            %Block.Inventory{
               counts: %{ob: 1, fb: 1, fc: 0, db: 2, sdb: 8, sfc: 77, sfb: 15}
             }} = Client.block_counts(client)
 
     assert {:ok,
             [
-              %BlockEntry{block: %Block{type: :db, number: 1}, language: :db},
-              %BlockEntry{block: %Block{type: :db, number: 2}, language: :db}
+              %Block.Entry{block: %Block{type: :db, number: 1}, language: :db},
+              %Block.Entry{block: %Block{type: :db, number: 2}, language: :db}
             ]} = Client.list_blocks(client, :db)
 
     assert {:ok, sfc_entries} =
@@ -25,13 +25,13 @@ defmodule S7.BlockServicesIntegrationTest do
     assert Enum.count(sfc_entries) == 10
 
     assert {:ok,
-            %BlockInfo{
+            %Block.Info{
               block: %Block{type: :db, number: 1},
               author: "SIMATIC",
               name: "CTU"
             }} = Client.block_info(client, :db, 1)
 
-    assert {:ok, %BlockInfo{block: %Block{type: :db, number: 1}}} =
+    assert {:ok, %Block.Info{block: %Block{type: :db, number: 1}}} =
              Client.block_info(client, %Block{type: :db, number: 1})
 
     assert %{state: :ready, in_flight_requests: 0} = Client.info(client)

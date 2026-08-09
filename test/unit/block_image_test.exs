@@ -1,7 +1,7 @@
-defmodule S7.BlockImageTest do
+defmodule S7.Block.ImageTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Block, BlockImage, Error}
+  alias S7.{Block, Error}
   alias S7.Protocol.PDU
   alias S7.Test.Fixture
 
@@ -9,7 +9,7 @@ defmodule S7.BlockImageTest do
     raw = captured_image()
 
     assert {:ok,
-            %BlockImage{
+            %Block.Image{
               block: %Block{type: :sdb, number: 0},
               header_marker: 0x7070,
               header_byte: 3,
@@ -39,7 +39,7 @@ defmodule S7.BlockImageTest do
               raw_header: raw_header,
               raw_footer: raw_footer,
               raw: ^raw
-            } = image} = BlockImage.decode(raw, %Block{type: :sdb, number: 0})
+            } = image} = Block.Image.decode(raw, %Block{type: :sdb, number: 0})
 
     assert byte_size(raw_header) == 36
     assert byte_size(mc7) == 144
@@ -66,17 +66,17 @@ defmodule S7.BlockImageTest do
 
     for image <- malformed do
       assert {:error, %Error{reason: :malformed_block_image}} =
-               BlockImage.decode(image, %Block{type: :sdb, number: 0})
+               Block.Image.decode(image, %Block{type: :sdb, number: 0})
     end
 
     assert {:error,
             %Error{
               reason: :malformed_block_image,
               details: %{expected: {:db, 0}, received: {:sdb, 0}}
-            }} = BlockImage.decode(raw, %Block{type: :db, number: 0})
+            }} = Block.Image.decode(raw, %Block{type: :db, number: 0})
 
     assert {:error, %Error{reason: :malformed_block_image}} =
-             BlockImage.decode(:invalid, %Block{type: :sdb, number: 0})
+             Block.Image.decode(:invalid, %Block{type: :sdb, number: 0})
   end
 
   defp captured_image do

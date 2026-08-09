@@ -1,7 +1,7 @@
 defmodule S7.Protocol.BlocksTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Block, BlockEntry, BlockInfo, BlockInventory, Error}
+  alias S7.{Block, Error}
   alias S7.Protocol.{Blocks, PDU, UserData}
   alias S7.Protocol.UserData.{Parameter, Payload}
   alias S7.Test.Fixture
@@ -27,7 +27,7 @@ defmodule S7.Protocol.BlocksTest do
              Fixture.read!("blocks/counts_response.bin")
 
     assert {:ok,
-            %BlockInventory{
+            %Block.Inventory{
               counts: %{
                 ob: 1,
                 fb: 1,
@@ -49,13 +49,13 @@ defmodule S7.Protocol.BlocksTest do
 
     assert {:ok,
             [
-              %BlockEntry{
+              %Block.Entry{
                 block: %Block{type: :db, number: 1},
                 flags: 0x22,
                 language: :db,
                 raw: <<0, 1, 0x22, 5>>
               },
-              %BlockEntry{block: %Block{type: :db, number: 2}}
+              %Block.Entry{block: %Block{type: :db, number: 2}}
             ]} = Blocks.consume(response, transaction, :list_blocks)
   end
 
@@ -96,7 +96,7 @@ defmodule S7.Protocol.BlocksTest do
     {_pdu, response} = decoded_fixture("blocks/info_db1_response.bin")
 
     assert {:ok,
-            %BlockInfo{
+            %Block.Info{
               block: ^block,
               language: :db,
               language_code: 5,
@@ -131,10 +131,10 @@ defmodule S7.Protocol.BlocksTest do
       <<0x7A7B::16, 9::16, 0x3045::16, 1::16, 0x3043::16, 0::16, 0x3041::16, 2::16, 0x3042::16,
         8::16, 0x3044::16, 77::16, 0x3046::16, 15::16>>
 
-    assert {:ok, %BlockInventory{counts: %{{:unknown, 0x7A7B} => 9}}} =
+    assert {:ok, %Block.Inventory{counts: %{{:unknown, 0x7A7B} => 9}}} =
              Blocks.decode_inventory(inventory)
 
-    assert {:ok, [%BlockEntry{language: {:unknown, 0x7A}, language_code: 0x7A}]} =
+    assert {:ok, [%Block.Entry{language: {:unknown, 0x7A}, language_code: 0x7A}]} =
              Blocks.decode_entries(:db, <<1::16, 0, 0x7A>>)
   end
 

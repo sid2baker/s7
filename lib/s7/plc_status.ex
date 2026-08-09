@@ -1,4 +1,4 @@
-defmodule S7.PLCStatus do
+defmodule S7.PLC.Status do
   @moduledoc """
   Raw and normalized PLC operating status decoded from SZL `0x0424`.
   """

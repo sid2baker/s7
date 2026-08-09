@@ -1,4 +1,4 @@
-defmodule S7.OrderCode do
+defmodule S7.PLC.OrderCode do
   @moduledoc """
   Module order code and three-part firmware/hardware version from SZL `0x0011`.
   """

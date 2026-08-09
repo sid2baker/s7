@@ -1,11 +1,12 @@
 defmodule S7.Protocol.ProgrammerTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Address, Error, ProgrammerEvent, VariableStatus}
+  alias S7.{Address, Error}
+  alias S7.Programmer, as: ProgrammerModel
+  alias S7.Programmer.VariableStatus.Item
   alias S7.Protocol.{PDU, Programmer, UserData}
   alias S7.Protocol.Programmer.Job
   alias S7.Test.Fixture
-  alias S7.VariableStatus.Item
 
   test "round-trips the captured variable-status job" do
     addresses = variable_addresses()
@@ -40,7 +41,7 @@ defmodule S7.Protocol.ProgrammerTest do
     indication = decoded_userdata("programmer/variable_status_indication.bin")
 
     assert {:ok,
-            %ProgrammerEvent{
+            %ProgrammerModel.Event{
               service: :variable_status,
               subfunction: 2,
               sequence: 2,
@@ -55,7 +56,7 @@ defmodule S7.Protocol.ProgrammerTest do
     assert raw == <<4::16, 18::16, 1, 0, 0, 2, data::binary>>
 
     assert {:ok,
-            %VariableStatus{
+            %ProgrammerModel.VariableStatus{
               sequence: 2,
               parameters: <<1, 0, 0, 2>>,
               items: [
@@ -123,7 +124,7 @@ defmodule S7.Protocol.ProgrammerTest do
     indication = decoded_userdata("programmer/block_status_v2_indication.bin")
 
     assert {:ok,
-            %ProgrammerEvent{
+            %ProgrammerModel.Event{
               service: :block_status_v2,
               sequence: 3,
               parameters: <<1, 0, 0, 1>>,
@@ -219,7 +220,7 @@ defmodule S7.Protocol.ProgrammerTest do
     assert {:error, %Error{reason: :malformed_response}} =
              Programmer.decode_indication(wrong_transport, job, :variable_status)
 
-    event = %ProgrammerEvent{
+    event = %ProgrammerModel.Event{
       service: :variable_status,
       subfunction: 2,
       sequence: 2,
@@ -243,7 +244,7 @@ defmodule S7.Protocol.ProgrammerTest do
   test "retains PLC item errors without failing the complete sample" do
     address = address(:markers, :word, byte_offset: 0)
 
-    event = %ProgrammerEvent{
+    event = %ProgrammerModel.Event{
       service: :variable_status,
       subfunction: 2,
       sequence: 2,
@@ -253,7 +254,7 @@ defmodule S7.Protocol.ProgrammerTest do
     }
 
     assert {:ok,
-            %VariableStatus{
+            %ProgrammerModel.VariableStatus{
               items: [
                 %Item{
                   return_code: 0x05,

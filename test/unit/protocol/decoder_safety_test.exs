@@ -2,8 +2,6 @@ defmodule S7.Protocol.DecoderSafetyTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias S7.CyclicSubscription
-
   alias S7.Protocol.{
     Alarm,
     Cyclic,
@@ -66,7 +64,7 @@ defmodule S7.Protocol.DecoderSafetyTest do
         payload: %Payload{return_code: 0xFF, transport_size: 0x09, data: binary}
       }
 
-      subscription = %CyclicSubscription{
+      subscription = %S7.Cyclic.Subscription{
         connection: self(),
         reference: make_ref(),
         job_id: 1,

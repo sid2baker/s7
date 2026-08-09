@@ -1,14 +1,14 @@
 defmodule S7.Connection.BlockDownloader do
   @moduledoc false
 
-  alias S7.{Block, BlockImage, Connection, Destructive, Error}
+  alias S7.{Block, Connection, Destructive, Error}
   alias S7.Connection.{DestructiveRequest, TransactionCleanup}
   alias S7.Protocol.{BlockDownload, PIService}
 
   @maximum_fragments 4096
   @download_response_overhead 18
 
-  @spec download(pid(), BlockImage.t(), Destructive.limits(), atom()) ::
+  @spec download(pid(), Block.Image.t(), Destructive.limits(), atom()) ::
           :ok | {:error, Error.t()}
   def download(connection, image, limits, operation) do
     with info when is_map(info) <- Connection.info(connection),

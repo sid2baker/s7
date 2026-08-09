@@ -1,4 +1,4 @@
-defmodule S7.BlockImage do
+defmodule S7.Block.Image do
   @moduledoc """
   A parsed classic load-memory block image with all original bytes retained.
 

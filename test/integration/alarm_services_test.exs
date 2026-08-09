@@ -1,18 +1,11 @@
 defmodule S7.AlarmServicesIntegrationTest do
   use ExUnit.Case, async: true
 
-  alias S7.{
-    AlarmAcknowledgement,
-    AlarmEvent,
-    AlarmQuery,
-    AlarmSubscription,
-    Client,
-    Error
-  }
+  alias S7.{Alarm, Client, Error}
 
-  alias S7.AlarmAcknowledgement.Result, as: AcknowledgementResult
-  alias S7.AlarmEvent.Object, as: AlarmObject
-  alias S7.AlarmQuery.Record, as: QueryRecord
+  alias S7.Alarm.Acknowledgement.Result, as: AcknowledgementResult
+  alias S7.Alarm.Event.Object, as: AlarmObject
+  alias S7.Alarm.Query.Record, as: QueryRecord
   alias S7.Test.MockPLC
 
   test "subscribes, preserves ordered duplicates, queries, acknowledges, and tears down" do
@@ -26,7 +19,7 @@ defmodule S7.AlarmServicesIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:ok,
-            %AlarmSubscription{
+            %Alarm.Subscription{
               connection: ^client,
               alarm_type: :alarm_8,
               subscription_key: "HmiRtm  "
@@ -41,7 +34,7 @@ defmodule S7.AlarmServicesIntegrationTest do
     assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
 
     assert {:ok,
-            %AlarmEvent{
+            %Alarm.Event{
               kind: :alarm_8,
               objects: [
                 %AlarmObject{
@@ -51,14 +44,14 @@ defmodule S7.AlarmServicesIntegrationTest do
               ]
             }} = Client.next_alarm(client, subscription, 500)
 
-    assert {:ok, %AlarmEvent{objects: [%AlarmObject{event_id: 0xAF}]}} =
+    assert {:ok, %Alarm.Event{objects: [%AlarmObject{event_id: 0xAF}]}} =
              Client.next_alarm(client, subscription, 500)
 
-    assert {:ok, %AlarmEvent{objects: [%AlarmObject{event_id: 0x2F}]}} =
+    assert {:ok, %Alarm.Event{objects: [%AlarmObject{event_id: 0x2F}]}} =
              Client.next_alarm(client, subscription, 500)
 
     assert {:ok,
-            %AlarmQuery{
+            %Alarm.Query{
               selector: {:alarm_type, :alarm_8},
               records: [
                 %QueryRecord{event_id: 0xAF, alarm_type: :alarm_8},
@@ -67,7 +60,7 @@ defmodule S7.AlarmServicesIntegrationTest do
             }} = Client.query_alarms(client, :alarm_8)
 
     assert {:ok,
-            %AlarmQuery{
+            %Alarm.Query{
               selector: {:event_id, 0xAF},
               records: [%QueryRecord{event_id: 0xAF} | _]
             }} = Client.query_alarm(client, 0xAF)
@@ -91,18 +84,18 @@ defmodule S7.AlarmServicesIntegrationTest do
     server = start_server(alarm_event_ids: [0x0102_0304], alarm_query_empty: true)
     assert {:ok, client} = connect(server)
 
-    assert {:ok, %AlarmSubscription{alarm_type: :alarm_s} = subscription} =
+    assert {:ok, %Alarm.Subscription{alarm_type: :alarm_s} = subscription} =
              Client.subscribe_alarms(client, :alarm_s)
 
     assert {:ok,
-            %AlarmEvent{
+            %Alarm.Event{
               kind: :alarm_s,
               subfunction: 0x12,
               objects: [%AlarmObject{event_id: 0x0102_0304}]
             }} = Client.next_alarm(client, subscription, 500)
 
     assert {:ok,
-            %AlarmQuery{
+            %Alarm.Query{
               selector: {:alarm_type, :alarm_s},
               return_code: 0x0A,
               records: []
@@ -224,12 +217,12 @@ defmodule S7.AlarmServicesIntegrationTest do
     assert {:ok,
             [
               %AcknowledgementResult{
-                acknowledgement: %AlarmAcknowledgement{event_id: 0xAF},
+                acknowledgement: %Alarm.Acknowledgement{event_id: 0xAF},
                 status: :error,
                 error: %Error{reason: :access_denied}
               },
               %AcknowledgementResult{
-                acknowledgement: %AlarmAcknowledgement{event_id: 0x2F},
+                acknowledgement: %Alarm.Acknowledgement{event_id: 0x2F},
                 status: :ok
               }
             ]} = Client.acknowledge_alarms(client, acknowledgements)
@@ -292,7 +285,7 @@ defmodule S7.AlarmServicesIntegrationTest do
         Process.sleep(:infinity)
       end)
 
-    assert_receive {:alarm_owner, ^owner, {:ok, %AlarmSubscription{}}}, 500
+    assert_receive {:alarm_owner, ^owner, {:ok, %Alarm.Subscription{}}}, 500
     assert %{subscriptions: 1} = Client.info(client)
     Process.exit(owner, :kill)
 
@@ -343,7 +336,7 @@ defmodule S7.AlarmServicesIntegrationTest do
   end
 
   defp acknowledgement(event_id) do
-    %AlarmAcknowledgement{
+    %Alarm.Acknowledgement{
       event_id: event_id,
       ack_state_going: 1,
       ack_state_coming: 1

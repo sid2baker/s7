@@ -1,7 +1,7 @@
 defmodule S7.Connection.BlockUploader do
   @moduledoc false
 
-  alias S7.{Block, BlockImage, Connection, Error}
+  alias S7.{Block, Connection, Error}
   alias S7.Connection.TransactionCleanup
   alias S7.Protocol.BlockUpload
 
@@ -10,7 +10,7 @@ defmodule S7.Connection.BlockUploader do
   def validate_options(opts, operation), do: BlockUpload.validate_options(opts, operation)
 
   @spec upload(pid(), Block.t(), BlockUpload.limits(), boolean(), atom()) ::
-          {:ok, BlockImage.t() | binary()} | {:error, Error.t()}
+          {:ok, Block.Image.t() | binary()} | {:error, Error.t()}
   def upload(connection, block, limits, raw?, operation) do
     with {:ok, start_request, transaction} <-
            BlockUpload.start_request(block, limits, operation),
@@ -77,7 +77,7 @@ defmodule S7.Connection.BlockUploader do
   defp finish_success(connection, token, transaction, raw, raw?) do
     case finish_remote(connection, token, transaction) do
       :ok when raw? -> {:ok, raw}
-      :ok -> BlockImage.decode(raw, transaction.block, transaction.operation)
+      :ok -> Block.Image.decode(raw, transaction.block, transaction.operation)
       {:error, %Error{} = error} -> {:error, error}
     end
   end

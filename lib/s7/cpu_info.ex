@@ -1,4 +1,4 @@
-defmodule S7.CPUInfo do
+defmodule S7.PLC.CPUInfo do
   @moduledoc """
   Component-identification strings decoded from SZL `0x001C`.
 

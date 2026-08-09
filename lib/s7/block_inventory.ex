@@ -1,4 +1,4 @@
-defmodule S7.BlockInventory do
+defmodule S7.Block.Inventory do
   @moduledoc """
   Counts reported by the classic block directory, keyed by block type.
 

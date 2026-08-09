@@ -9,31 +9,16 @@ defmodule S7.Client do
 
   alias S7.{
     Address,
-    AlarmAcknowledgement,
-    AlarmEvent,
-    AlarmQuery,
-    AlarmSubscription,
     Block,
-    BlockEntry,
-    BlockImage,
-    BlockInfo,
-    BlockInventory,
     Connection,
-    CPInfo,
-    CPUInfo,
-    CyclicEvent,
-    CyclicSubscription,
     Data,
     Destructive,
     Error,
-    OrderCode,
-    PLCClock,
-    PLCStatus,
-    ProgrammerEvent,
+    PLC,
+    Programmer,
     Result,
     SessionPassword,
-    SZL,
-    VariableStatus
+    SZL
   }
 
   alias S7.Connection.{Alarm, BlockDownloader, BlockUploader, Controller, Cyclic}
@@ -213,7 +198,7 @@ defmodule S7.Client do
   @doc """
   Reads and decodes the module order code and three-part version.
   """
-  @spec order_code(t(), keyword()) :: {:ok, OrderCode.t()} | {:error, Error.t()}
+  @spec order_code(t(), keyword()) :: {:ok, PLC.OrderCode.t()} | {:error, Error.t()}
   def order_code(client, opts \\ []) do
     with {:ok, szl} <- read_szl_operation(client, 0x0011, 0, opts, :order_code) do
       Metadata.order_code(szl)
@@ -223,7 +208,7 @@ defmodule S7.Client do
   @doc """
   Reads documented CPU component-identification strings.
   """
-  @spec cpu_info(t(), keyword()) :: {:ok, CPUInfo.t()} | {:error, Error.t()}
+  @spec cpu_info(t(), keyword()) :: {:ok, PLC.CPUInfo.t()} | {:error, Error.t()}
   def cpu_info(client, opts \\ []) do
     with {:ok, szl} <- read_szl_operation(client, 0x001C, 0, opts, :cpu_info) do
       Metadata.cpu_info(szl)
@@ -233,7 +218,7 @@ defmodule S7.Client do
   @doc """
   Reads communication-processor limits from SZL `0x0131`, index `1`.
   """
-  @spec cp_info(t(), keyword()) :: {:ok, CPInfo.t()} | {:error, Error.t()}
+  @spec cp_info(t(), keyword()) :: {:ok, PLC.CPInfo.t()} | {:error, Error.t()}
   def cp_info(client, opts \\ []) do
     with {:ok, szl} <- read_szl_operation(client, 0x0131, 1, opts, :cp_info) do
       Metadata.cp_info(szl)
@@ -243,7 +228,7 @@ defmodule S7.Client do
   @doc """
   Reads the PLC operating status without collapsing unknown raw status codes.
   """
-  @spec plc_status(t(), keyword()) :: {:ok, PLCStatus.t()} | {:error, Error.t()}
+  @spec plc_status(t(), keyword()) :: {:ok, PLC.Status.t()} | {:error, Error.t()}
   def plc_status(client, opts \\ []) do
     with {:ok, szl} <- read_szl_operation(client, 0x0424, 0, opts, :plc_status) do
       Metadata.plc_status(szl)
@@ -253,10 +238,10 @@ defmodule S7.Client do
   @doc """
   Reads the PLC's timezone-free local civil time.
 
-  Classic clock values contain no UTC offset. The returned `S7.PLCClock`
+  Classic clock values contain no UTC offset. The returned `S7.PLC.Clock`
   retains the complete ten-byte timestamp and the unreliable century hint.
   """
-  @spec read_clock(t()) :: {:ok, PLCClock.t()} | {:error, Error.t()}
+  @spec read_clock(t()) :: {:ok, PLC.Clock.t()} | {:error, Error.t()}
   def read_clock(client), do: call(fn -> Connection.read_clock(client) end, :read_clock)
 
   @doc """
@@ -301,16 +286,16 @@ defmodule S7.Client do
   accepted. Options are `:timeout` and `:step_timeout`.
 
   The job is set up, enabled once, deleted, and released before this function
-  returns. The indication remains raw in `S7.ProgrammerEvent` because record
+  returns. The indication remains raw in `S7.Programmer.Event` because record
   layouts vary across CPU families.
   """
   @spec programmer_diagnostic_raw(
           t(),
-          ProgrammerEvent.service() | byte(),
+          Programmer.Event.service() | byte(),
           binary(),
           binary(),
           keyword()
-        ) :: {:ok, ProgrammerEvent.t()} | {:error, Error.t()}
+        ) :: {:ok, Programmer.Event.t()} | {:error, Error.t()}
   def programmer_diagnostic_raw(client, service, setup_parameters, setup_data, opts \\ []) do
     operation = :programmer_diagnostic
 
@@ -340,7 +325,7 @@ defmodule S7.Client do
   code is successful. Options are `:timeout` and `:step_timeout`.
   """
   @spec variable_status(t(), [address()], keyword()) ::
-          {:ok, VariableStatus.t()} | {:error, Error.t()}
+          {:ok, Programmer.VariableStatus.t()} | {:error, Error.t()}
   def variable_status(client, addresses, opts \\ []) do
     with {:ok, addresses} <- normalize_addresses(addresses, :variable_status),
          {:ok, limits} <- ProgrammerRuntime.validate_options(opts, :variable_status) do
@@ -360,7 +345,7 @@ defmodule S7.Client do
   the optional snapshot returned by the PLC.
   """
   @spec subscribe_cyclic(t(), [address()], keyword()) ::
-          {:ok, CyclicSubscription.t()} | {:error, Error.t()}
+          {:ok, S7.Cyclic.Subscription.t()} | {:error, Error.t()}
   def subscribe_cyclic(client, addresses, opts \\ []) do
     with {:ok, addresses} <- normalize_addresses(addresses, :subscribe_cyclic),
          {:ok, options} <- Cyclic.validate_subscribe_options(opts, :subscribe_cyclic) do
@@ -373,15 +358,15 @@ defmodule S7.Client do
 
   `mode` is `:cyclic` or `:change_driven`. Each item must be one complete
   S7ANY (`0x10`) or DBREAD (`0xB0`) variable specification beginning with
-  `0x12`. Incoming records are preserved in `S7.CyclicEvent.Item` without
+  `0x12`. Incoming records are preserved in `S7.Cyclic.Event.Item` without
   CPU-specific interpretation.
   """
   @spec subscribe_cyclic_raw(
           t(),
-          CyclicSubscription.mode(),
+          S7.Cyclic.Subscription.mode(),
           [binary()],
           keyword()
-        ) :: {:ok, CyclicSubscription.t()} | {:error, Error.t()}
+        ) :: {:ok, S7.Cyclic.Subscription.t()} | {:error, Error.t()}
   def subscribe_cyclic_raw(client, mode, item_specs, opts \\ []) do
     with {:ok, options} <- Cyclic.validate_subscribe_options(opts, :subscribe_cyclic_raw) do
       call(
@@ -397,8 +382,8 @@ defmodule S7.Client do
   The caller must be the process that created the handle. A timeout does not
   cancel the remote subscription and the handle remains usable.
   """
-  @spec next_cyclic(t(), CyclicSubscription.t(), pos_integer()) ::
-          {:ok, CyclicEvent.t()} | {:error, Error.t()}
+  @spec next_cyclic(t(), S7.Cyclic.Subscription.t(), pos_integer()) ::
+          {:ok, S7.Cyclic.Event.t()} | {:error, Error.t()}
   def next_cyclic(client, subscription, timeout \\ 5_000) do
     call(fn -> Cyclic.next(client, subscription, timeout) end, :next_cyclic)
   end
@@ -409,11 +394,11 @@ defmodule S7.Client do
   A successful response returns an updated handle with the same remote job ID
   and optional new initial snapshot.
   """
-  @spec modify_cyclic_raw(t(), CyclicSubscription.t(), [binary()], keyword()) ::
-          {:ok, CyclicSubscription.t()} | {:error, Error.t()}
+  @spec modify_cyclic_raw(t(), S7.Cyclic.Subscription.t(), [binary()], keyword()) ::
+          {:ok, S7.Cyclic.Subscription.t()} | {:error, Error.t()}
   def modify_cyclic_raw(client, subscription, item_specs, opts \\ [])
 
-  def modify_cyclic_raw(client, %CyclicSubscription{} = subscription, item_specs, opts) do
+  def modify_cyclic_raw(client, %S7.Cyclic.Subscription{} = subscription, item_specs, opts) do
     with {:ok, options} <-
            Cyclic.validate_modify_options(opts, subscription.interval, :modify_cyclic) do
       call(
@@ -432,7 +417,7 @@ defmodule S7.Client do
   If the remote outcome is ambiguous, the connection is invalidated so a
   stale job ID cannot be reused in a later session.
   """
-  @spec unsubscribe_cyclic(t(), CyclicSubscription.t(), keyword()) ::
+  @spec unsubscribe_cyclic(t(), S7.Cyclic.Subscription.t(), keyword()) ::
           :ok | {:error, Error.t()}
   def unsubscribe_cyclic(client, subscription, opts \\ []) do
     with {:ok, options} <- Cyclic.validate_unsubscribe_options(opts, :unsubscribe_cyclic) do
@@ -453,8 +438,8 @@ defmodule S7.Client do
   The returned handle belongs to the calling process and current S7 session.
   Events are delivered in wire order without deduplication.
   """
-  @spec subscribe_alarms(t(), AlarmSubscription.alarm_type(), keyword()) ::
-          {:ok, AlarmSubscription.t()} | {:error, Error.t()}
+  @spec subscribe_alarms(t(), S7.Alarm.Subscription.alarm_type(), keyword()) ::
+          {:ok, S7.Alarm.Subscription.t()} | {:error, Error.t()}
   def subscribe_alarms(client, alarm_type, opts \\ []) do
     with {:ok, options} <-
            Alarm.validate_subscription_options(opts, :subscribe_alarms) do
@@ -468,8 +453,8 @@ defmodule S7.Client do
   A timeout leaves the remote subscription active. The caller must be the
   process that created the subscription handle.
   """
-  @spec next_alarm(t(), AlarmSubscription.t(), pos_integer()) ::
-          {:ok, AlarmEvent.t()} | {:error, Error.t()}
+  @spec next_alarm(t(), S7.Alarm.Subscription.t(), pos_integer()) ::
+          {:ok, S7.Alarm.Event.t()} | {:error, Error.t()}
   def next_alarm(client, subscription, timeout \\ 5_000) do
     call(fn -> Alarm.next(client, subscription, timeout) end, :next_alarm)
   end
@@ -480,7 +465,7 @@ defmodule S7.Client do
   A missing or malformed remote response invalidates the session because the
   remote subscription state would otherwise be ambiguous.
   """
-  @spec unsubscribe_alarms(t(), AlarmSubscription.t(), keyword()) ::
+  @spec unsubscribe_alarms(t(), S7.Alarm.Subscription.t(), keyword()) ::
           :ok | {:error, Error.t()}
   def unsubscribe_alarms(client, subscription, opts \\ []) do
     with {:ok, options} <- Alarm.validate_request_options(opts, :unsubscribe_alarms) do
@@ -495,10 +480,10 @@ defmodule S7.Client do
   Queries the PLC's currently buffered alarms for one classic alarm family.
 
   Query record headers are decoded while CPU-specific tails and complete wire
-  records remain available in `S7.AlarmQuery`.
+  records remain available in `S7.Alarm.Query`.
   """
-  @spec query_alarms(t(), AlarmSubscription.alarm_type()) ::
-          {:ok, AlarmQuery.t()} | {:error, Error.t()}
+  @spec query_alarms(t(), S7.Alarm.Subscription.alarm_type()) ::
+          {:ok, S7.Alarm.Query.t()} | {:error, Error.t()}
   def query_alarms(client, alarm_type) do
     call(
       fn -> Alarm.query(client, {:alarm_type, alarm_type}) end,
@@ -509,7 +494,7 @@ defmodule S7.Client do
   @doc """
   Queries one classic alarm event ID.
   """
-  @spec query_alarm(t(), 0..0xFFFFFFFF) :: {:ok, AlarmQuery.t()} | {:error, Error.t()}
+  @spec query_alarm(t(), 0..0xFFFFFFFF) :: {:ok, S7.Alarm.Query.t()} | {:error, Error.t()}
   def query_alarm(client, event_id) do
     call(fn -> Alarm.query(client, {:event_id, event_id}, :query_alarm) end, :query_alarm)
   end
@@ -523,7 +508,7 @@ defmodule S7.Client do
   """
   @spec acknowledge_alarm(
           t(),
-          AlarmAcknowledgement.t() | AlarmEvent.Object.t(),
+          S7.Alarm.Acknowledgement.t() | S7.Alarm.Event.Object.t(),
           keyword()
         ) :: :ok | {:error, Error.t()}
   def acknowledge_alarm(client, acknowledgement, opts \\ []) do
@@ -546,9 +531,9 @@ defmodule S7.Client do
   """
   @spec acknowledge_alarms(
           t(),
-          AlarmEvent.t() | [AlarmAcknowledgement.t() | AlarmEvent.Object.t()],
+          S7.Alarm.Event.t() | [S7.Alarm.Acknowledgement.t() | S7.Alarm.Event.Object.t()],
           keyword()
-        ) :: {:ok, [AlarmAcknowledgement.Result.t()]} | {:error, Error.t()}
+        ) :: {:ok, [S7.Alarm.Acknowledgement.Result.t()]} | {:error, Error.t()}
   def acknowledge_alarms(client, acknowledgements, opts \\ []) do
     with {:ok, options} <- Alarm.validate_request_options(opts, :acknowledge_alarms) do
       call(
@@ -563,9 +548,9 @@ defmodule S7.Client do
   @doc """
   Returns the number of blocks in each directory type advertised by the PLC.
 
-  Unknown block type codes are retained in `S7.BlockInventory.counts`.
+  Unknown block type codes are retained in `S7.Block.Inventory.counts`.
   """
-  @spec block_counts(t()) :: {:ok, BlockInventory.t()} | {:error, Error.t()}
+  @spec block_counts(t()) :: {:ok, Block.Inventory.t()} | {:error, Error.t()}
   def block_counts(client), do: call(fn -> Connection.block_counts(client) end, :block_counts)
 
   @doc """
@@ -575,7 +560,7 @@ defmodule S7.Client do
   `:max_bytes` and `:max_fragments`.
   """
   @spec list_blocks(t(), Block.known_type(), keyword()) ::
-          {:ok, [BlockEntry.t()]} | {:error, Error.t()}
+          {:ok, [Block.Entry.t()]} | {:error, Error.t()}
   def list_blocks(client, type, opts \\ []) do
     with {:ok, type} <- Block.validate_request_type(type, :list_blocks),
          {:ok, limits} <- Block.validate_list_options(opts, :list_blocks) do
@@ -588,7 +573,7 @@ defmodule S7.Client do
 
   Accepts either a `%S7.Block{}` or a block type and number.
   """
-  @spec block_info(t(), Block.t()) :: {:ok, BlockInfo.t()} | {:error, Error.t()}
+  @spec block_info(t(), Block.t()) :: {:ok, Block.Info.t()} | {:error, Error.t()}
   def block_info(client, %Block{} = block) do
     with {:ok, block} <- Block.validate(block, :block_info) do
       call(fn -> Connection.block_info(client, block) end, :block_info)
@@ -596,7 +581,7 @@ defmodule S7.Client do
   end
 
   @spec block_info(t(), Block.known_type(), 0..0xFFFF) ::
-          {:ok, BlockInfo.t()} | {:error, Error.t()}
+          {:ok, Block.Info.t()} | {:error, Error.t()}
   def block_info(client, type, number) do
     with {:ok, block} <- Block.normalize(type, number, :block_info) do
       call(fn -> Connection.block_info(client, block) end, :block_info)
@@ -610,7 +595,7 @@ defmodule S7.Client do
   Options are `:max_bytes`, `:max_fragments`, `:timeout`, and `:step_timeout`.
   """
   @spec upload_block(t(), Block.t(), keyword()) ::
-          {:ok, BlockImage.t()} | {:error, Error.t()}
+          {:ok, Block.Image.t()} | {:error, Error.t()}
   def upload_block(client, block, opts \\ [])
 
   def upload_block(client, %Block{} = block, opts) do
@@ -618,11 +603,11 @@ defmodule S7.Client do
   end
 
   @spec upload_block(t(), Block.known_type(), 0..0xFFFF) ::
-          {:ok, BlockImage.t()} | {:error, Error.t()}
+          {:ok, Block.Image.t()} | {:error, Error.t()}
   def upload_block(client, type, number), do: upload_block(client, type, number, [])
 
   @spec upload_block(t(), Block.known_type(), 0..0xFFFF, keyword()) ::
-          {:ok, BlockImage.t()} | {:error, Error.t()}
+          {:ok, Block.Image.t()} | {:error, Error.t()}
   def upload_block(client, type, number, opts) do
     with {:ok, block} <- Block.normalize(type, number, :upload_block) do
       upload_block_operation(client, block, opts, false)
@@ -659,10 +644,10 @@ defmodule S7.Client do
   requires `confirm: :download_block`. The PLC may replace an existing block;
   use `replace_block/3` when replacement is the caller's explicit intent.
   """
-  @spec download_block(t(), BlockImage.t(), keyword()) :: :ok | {:error, Error.t()}
+  @spec download_block(t(), Block.Image.t(), keyword()) :: :ok | {:error, Error.t()}
   def download_block(client, image, opts \\ [])
 
-  def download_block(client, %BlockImage{} = image, opts) do
+  def download_block(client, %Block.Image{} = image, opts) do
     download_block_operation(client, image, opts, :download_block, :download_block)
   end
 
@@ -698,10 +683,10 @@ defmodule S7.Client do
   Requires `allow_destructive: true` on the connection and
   `confirm: :replace_block` on this call.
   """
-  @spec replace_block(t(), BlockImage.t(), keyword()) :: :ok | {:error, Error.t()}
+  @spec replace_block(t(), Block.Image.t(), keyword()) :: :ok | {:error, Error.t()}
   def replace_block(client, image, opts \\ [])
 
-  def replace_block(client, %BlockImage{} = image, opts) do
+  def replace_block(client, %Block.Image{} = image, opts) do
     download_block_operation(client, image, opts, :replace_block, :replace_block)
   end
 
@@ -901,14 +886,14 @@ defmodule S7.Client do
   end
 
   defp download_raw_operation(client, block, raw, opts, confirmation, operation) do
-    with {:ok, image} <- BlockImage.decode(raw, block, operation) do
+    with {:ok, image} <- Block.Image.decode(raw, block, operation) do
       download_block_operation(client, image, opts, confirmation, operation)
     end
   end
 
   defp download_block_operation(client, image, opts, confirmation, operation) do
     with {:ok, limits} <- Destructive.validate_options(opts, confirmation, operation),
-         {:ok, image} <- BlockImage.decode(image.raw, image.block, operation) do
+         {:ok, image} <- Block.Image.decode(image.raw, image.block, operation) do
       call(fn -> BlockDownloader.download(client, image, limits, operation) end, operation)
     end
   end
@@ -973,12 +958,12 @@ defmodule S7.Client do
     do: %{error | details: Map.put(error.details, :index, index)}
 
   defp single_acknowledgement_result([
-         %AlarmAcknowledgement.Result{status: :ok}
+         %S7.Alarm.Acknowledgement.Result{status: :ok}
        ]),
        do: :ok
 
   defp single_acknowledgement_result([
-         %AlarmAcknowledgement.Result{status: :error, error: %Error{} = error}
+         %S7.Alarm.Acknowledgement.Result{status: :error, error: %Error{} = error}
        ]),
        do: {:error, %{error | operation: :acknowledge_alarm}}
 

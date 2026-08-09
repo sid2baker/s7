@@ -1,15 +1,8 @@
 defmodule S7.Connection.Alarm do
   @moduledoc false
 
-  alias S7.{
-    AlarmAcknowledgement,
-    AlarmEvent,
-    AlarmQuery,
-    AlarmSubscription,
-    Connection,
-    Error
-  }
-
+  alias S7.Alarm, as: AlarmModel
+  alias S7.{Connection, Error}
   alias S7.Connection.{Service, TransactionCleanup}
   alias S7.Protocol.{Alarm, UserData}
 
@@ -62,8 +55,8 @@ defmodule S7.Connection.Alarm do
     end
   end
 
-  @spec subscribe(pid(), AlarmSubscription.alarm_type(), subscription_options()) ::
-          {:ok, AlarmSubscription.t()} | {:error, Error.t()}
+  @spec subscribe(pid(), AlarmModel.Subscription.alarm_type(), subscription_options()) ::
+          {:ok, AlarmModel.Subscription.t()} | {:error, Error.t()}
   def subscribe(connection, alarm_type, options) do
     operation = :subscribe_alarms
 
@@ -79,9 +72,9 @@ defmodule S7.Connection.Alarm do
     end
   end
 
-  @spec next(pid(), AlarmSubscription.t(), pos_integer()) ::
-          {:ok, AlarmEvent.t()} | {:error, Error.t()}
-  def next(connection, %AlarmSubscription{} = subscription, timeout)
+  @spec next(pid(), AlarmModel.Subscription.t(), pos_integer()) ::
+          {:ok, AlarmModel.Event.t()} | {:error, Error.t()}
+  def next(connection, %AlarmModel.Subscription{} = subscription, timeout)
       when is_pid(connection) and is_integer(timeout) and timeout > 0 do
     with :ok <- validate_connection(subscription, connection, :next_alarm),
          {:ok, message} <-
@@ -96,9 +89,9 @@ defmodule S7.Connection.Alarm do
   def next(_connection, _subscription, _timeout),
     do: Service.client_error(:next_alarm, :invalid_alarm_subscription)
 
-  @spec unsubscribe(pid(), AlarmSubscription.t(), request_options()) ::
+  @spec unsubscribe(pid(), AlarmModel.Subscription.t(), request_options()) ::
           :ok | {:error, Error.t()}
-  def unsubscribe(connection, %AlarmSubscription{} = subscription, options) do
+  def unsubscribe(connection, %AlarmModel.Subscription{} = subscription, options) do
     operation = :unsubscribe_alarms
 
     with :ok <- validate_connection(subscription, connection, operation),
@@ -118,8 +111,8 @@ defmodule S7.Connection.Alarm do
   def unsubscribe(_connection, _subscription, _options),
     do: Service.client_error(:unsubscribe_alarms, :invalid_alarm_subscription)
 
-  @spec query(pid(), AlarmQuery.selector(), atom()) ::
-          {:ok, AlarmQuery.t()} | {:error, Error.t()}
+  @spec query(pid(), AlarmModel.Query.selector(), atom()) ::
+          {:ok, AlarmModel.Query.t()} | {:error, Error.t()}
   def query(connection, selector, operation \\ :query_alarms) do
     with {:ok, request} <- Alarm.query_request(selector),
          {:ok, response} <- Connection.userdata(connection, request, operation),
@@ -132,13 +125,13 @@ defmodule S7.Connection.Alarm do
 
   @spec acknowledge(
           pid(),
-          AlarmAcknowledgement.t()
-          | S7.AlarmEvent.Object.t()
-          | AlarmEvent.t()
-          | [AlarmAcknowledgement.t() | S7.AlarmEvent.Object.t()],
+          AlarmModel.Acknowledgement.t()
+          | S7.Alarm.Event.Object.t()
+          | AlarmModel.Event.t()
+          | [AlarmModel.Acknowledgement.t() | S7.Alarm.Event.Object.t()],
           request_options(),
           atom()
-        ) :: {:ok, [AlarmAcknowledgement.Result.t()]} | {:error, Error.t()}
+        ) :: {:ok, [AlarmModel.Acknowledgement.Result.t()]} | {:error, Error.t()}
   def acknowledge(connection, input, options, operation \\ :acknowledge_alarms) do
     with {:ok, acknowledgements} <- Alarm.acknowledgements(input, operation),
          {:ok, request} <- Alarm.acknowledgement_request(acknowledgements) do
@@ -221,7 +214,7 @@ defmodule S7.Connection.Alarm do
              ),
            :ok <- Connection.end_transaction(connection, token) do
         {:ok,
-         %AlarmSubscription{
+         %AlarmModel.Subscription{
            connection: connection,
            reference: local_reference,
            alarm_type: alarm_type,
@@ -230,7 +223,7 @@ defmodule S7.Connection.Alarm do
       end
 
     case result do
-      {:ok, %AlarmSubscription{} = subscription} ->
+      {:ok, %AlarmModel.Subscription{} = subscription} ->
         {:ok, subscription}
 
       {:error, %Error{} = error} ->
@@ -346,8 +339,12 @@ defmodule S7.Connection.Alarm do
     end
   end
 
-  defp validate_connection(%AlarmSubscription{connection: connection}, connection, _operation),
-    do: :ok
+  defp validate_connection(
+         %AlarmModel.Subscription{connection: connection},
+         connection,
+         _operation
+       ),
+       do: :ok
 
   defp validate_connection(_subscription, _connection, operation),
     do: Service.client_error(operation, :invalid_alarm_subscription)

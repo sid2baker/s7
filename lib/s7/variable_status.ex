@@ -1,4 +1,4 @@
-defmodule S7.VariableStatus do
+defmodule S7.Programmer.VariableStatus do
   @moduledoc """
   One completed classic programmer variable-status sample.
 

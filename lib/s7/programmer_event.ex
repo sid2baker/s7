@@ -1,4 +1,4 @@
-defmodule S7.ProgrammerEvent do
+defmodule S7.Programmer.Event do
   @moduledoc """
   One raw indication emitted by a classic programmer job.
 

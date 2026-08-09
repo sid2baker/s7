@@ -1,18 +1,12 @@
 defmodule S7.Protocol.AlarmTest do
   use ExUnit.Case, async: true
 
-  alias S7.{
-    AlarmAcknowledgement,
-    AlarmEvent,
-    AlarmQuery,
-    AlarmTimestamp,
-    Error
-  }
-
-  alias S7.AlarmAcknowledgement.Result, as: AcknowledgementResult
-  alias S7.AlarmEvent.Object, as: AlarmObject
-  alias S7.AlarmEvent.Object.AssociatedValue
-  alias S7.AlarmQuery.Record, as: QueryRecord
+  alias S7.Alarm, as: AlarmModel
+  alias S7.Alarm.Acknowledgement.Result, as: AcknowledgementResult
+  alias S7.Alarm.Event.Object, as: AlarmObject
+  alias S7.Alarm.Event.Object.AssociatedValue
+  alias S7.Alarm.Query.Record, as: QueryRecord
+  alias S7.Error
   alias S7.Protocol.{Alarm, PDU, UserData}
   alias S7.Test.Fixture
 
@@ -35,7 +29,7 @@ defmodule S7.Protocol.AlarmTest do
     assert encoded(query, 1) == Fixture.read!("alarm/s300_query_request.bin")
 
     assert {:ok,
-            %AlarmQuery{
+            %AlarmModel.Query{
               selector: ^selector,
               return_code: 0x0A,
               complete_length: 0,
@@ -80,7 +74,7 @@ defmodule S7.Protocol.AlarmTest do
     assert {:ok, query} = Alarm.query_request(selector)
 
     assert {:ok,
-            %AlarmQuery{
+            %AlarmModel.Query{
               reported_count: 1,
               return_code: 0xFF,
               transport_size: 0x09,
@@ -110,10 +104,10 @@ defmodule S7.Protocol.AlarmTest do
     indication = decoded_userdata("alarm/alarm8_indication.bin")
 
     assert {:ok,
-            %AlarmEvent{
+            %AlarmModel.Event{
               kind: :alarm_8,
               subfunction: 0x05,
-              timestamp: %AlarmTimestamp{
+              timestamp: %AlarmModel.Timestamp{
                 datetime: ~N[1994-01-06 00:27:20.397],
                 weekday: 5
               },
@@ -152,7 +146,7 @@ defmodule S7.Protocol.AlarmTest do
 
   test "decodes captured NOTIFY records with bounded bit-length values" do
     assert {:ok,
-            %AlarmEvent{
+            %AlarmModel.Event{
               kind: :notify,
               objects: [
                 %AlarmObject{
@@ -173,7 +167,7 @@ defmodule S7.Protocol.AlarmTest do
   end
 
   test "matches modeled acknowledgment packets and decodes acknowledgment indications" do
-    acknowledgement = %AlarmAcknowledgement{
+    acknowledgement = %AlarmModel.Acknowledgement{
       event_id: 0xAF,
       ack_state_going: 0xFE,
       ack_state_coming: 0xFE
@@ -199,7 +193,7 @@ defmodule S7.Protocol.AlarmTest do
              )
 
     assert {:ok,
-            %AlarmEvent{
+            %AlarmModel.Event{
               kind: :acknowledgement,
               function_id: 9,
               objects: [
@@ -272,7 +266,7 @@ defmodule S7.Protocol.AlarmTest do
           fn -> Alarm.query_request({:event_id, -1}) end,
           fn -> Alarm.acknowledgements([]) end,
           fn ->
-            Alarm.acknowledgements(%AlarmAcknowledgement{
+            Alarm.acknowledgements(%AlarmModel.Acknowledgement{
               event_id: -1,
               ack_state_going: 0,
               ack_state_coming: 0

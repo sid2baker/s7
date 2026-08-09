@@ -1,7 +1,7 @@
 defmodule S7.SZLTest do
   use ExUnit.Case, async: true
 
-  alias S7.{CPInfo, CPUInfo, Error, OrderCode, PLCStatus, SZL}
+  alias S7.{Error, PLC, SZL}
   alias S7.SZL.Metadata
 
   test "decodes exact record geometry and rejects malformed declarations" do
@@ -47,7 +47,7 @@ defmodule S7.SZLTest do
     assert {:ok, order_szl} = encoded_szl(0x0011, 28, [order_record])
 
     assert {:ok,
-            %OrderCode{code: "6ES7 315-2EH14-0AB0", version: {3, 2, 1}, record: ^order_record}} =
+            %PLC.OrderCode{code: "6ES7 315-2EH14-0AB0", version: {3, 2, 1}, record: ^order_record}} =
              Metadata.order_code(order_szl)
 
     components = [
@@ -61,7 +61,7 @@ defmodule S7.SZLTest do
     assert {:ok, cpu_szl} = encoded_szl(0x001C, 34, components)
 
     assert {:ok,
-            %CPUInfo{
+            %PLC.CPUInfo{
               automation_system_name: "Plant A",
               module_name: "CPU module",
               copyright: "Original Siemens Equipment",
@@ -73,7 +73,7 @@ defmodule S7.SZLTest do
     assert {:ok, cp_szl} = encoded_szl(0x0131, 14, [cp_record], 1)
 
     assert {:ok,
-            %CPInfo{
+            %PLC.CPInfo{
               max_pdu_length: 480,
               max_connections: 8,
               max_mpi_rate: 187_500,
@@ -83,7 +83,7 @@ defmodule S7.SZLTest do
     status_record = <<0::16, 0, 8>>
     assert {:ok, status_szl} = encoded_szl(0x0424, 4, [status_record])
 
-    assert {:ok, %PLCStatus{state: :run, code: 8, record: ^status_record}} =
+    assert {:ok, %PLC.Status{state: :run, code: 8, record: ^status_record}} =
              Metadata.plc_status(status_szl)
   end
 
@@ -100,7 +100,7 @@ defmodule S7.SZLTest do
     assert {:ok, cpu_szl} = encoded_szl(0x021C, 34, components)
 
     assert {:ok,
-            %CPUInfo{
+            %PLC.CPUInfo{
               automation_system_name: "Master PLC",
               module_name: "Master CPU",
               copyright: "Master Copyright",
@@ -135,7 +135,7 @@ defmodule S7.SZLTest do
     for {code, expected} <- [{0x03, :stop}, {0x04, :stop}, {0xFF, :unknown}] do
       record = <<0::16, 0, code>>
       assert {:ok, status} = encoded_szl(0x0424, 4, [record])
-      assert {:ok, %PLCStatus{state: ^expected, code: ^code}} = Metadata.plc_status(status)
+      assert {:ok, %PLC.Status{state: ^expected, code: ^code}} = Metadata.plc_status(status)
     end
   end
 

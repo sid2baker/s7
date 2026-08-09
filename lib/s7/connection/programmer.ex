@@ -1,8 +1,9 @@
 defmodule S7.Connection.Programmer do
   @moduledoc false
 
-  alias S7.{Connection, Error, ProgrammerEvent, VariableStatus}
+  alias S7.{Connection, Error}
   alias S7.Connection.TransactionCleanup
+  alias S7.Programmer, as: ProgrammerModel
   alias S7.Protocol.{Programmer, UserData}
 
   @spec validate_options(term(), atom()) ::
@@ -11,13 +12,13 @@ defmodule S7.Connection.Programmer do
 
   @spec diagnostic(
           pid(),
-          ProgrammerEvent.service() | byte(),
+          ProgrammerModel.Event.service() | byte(),
           binary(),
           binary(),
           Programmer.limits(),
           atom()
         ) ::
-          {:ok, ProgrammerEvent.t()} | {:error, Error.t()}
+          {:ok, ProgrammerModel.Event.t()} | {:error, Error.t()}
   def diagnostic(connection, service, parameters, data, limits, operation) do
     with {:ok, request, job} <-
            Programmer.start_request(service, parameters, data, operation) do
@@ -26,7 +27,7 @@ defmodule S7.Connection.Programmer do
   end
 
   @spec variable_status(pid(), [S7.Address.t()], Programmer.limits()) ::
-          {:ok, VariableStatus.t()} | {:error, Error.t()}
+          {:ok, ProgrammerModel.VariableStatus.t()} | {:error, Error.t()}
   def variable_status(connection, addresses, limits) do
     with {:ok, request, job} <- Programmer.variable_status_request(addresses, :variable_status) do
       execute(connection, request, job, limits, :variable_status, fn event ->

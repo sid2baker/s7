@@ -300,23 +300,14 @@ defmodule S7.ClassicDeviceQualificationTest do
   use ExUnit.Case, async: false
 
   alias S7.{
-    AlarmAcknowledgement,
-    AlarmEvent,
-    AlarmQuery,
+    Alarm,
     Block,
-    BlockImage,
-    BlockInfo,
-    BlockInventory,
     Client,
-    CPInfo,
-    CPUInfo,
-    CyclicEvent,
-    OrderCode,
-    PLCClock,
-    PLCStatus,
+    Cyclic,
+    PLC,
+    Programmer,
     Result,
-    SZL,
-    VariableStatus
+    SZL
   }
 
   alias S7.Test.DeviceQualification, as: Qualification
@@ -387,7 +378,7 @@ defmodule S7.ClassicDeviceQualificationTest do
   end
 
   test "verifies the configured CPU identity", %{client: client, config: config} do
-    assert {:ok, %OrderCode{code: order_number, version: version}} = Client.order_code(client)
+    assert {:ok, %PLC.OrderCode{code: order_number, version: version}} = Client.order_code(client)
     observed_firmware = version |> Tuple.to_list() |> Enum.join(".")
 
     Qualification.write_observed_identity!(config, order_number, observed_firmware)
@@ -406,35 +397,35 @@ defmodule S7.ClassicDeviceQualificationTest do
   @tag skip: if("szl" in @capabilities, do: false, else: "szl capability not declared")
   test "reads raw and typed CPU metadata", %{client: client} do
     assert {:ok, %SZL{records: [_ | _]}} = Client.read_szl(client, 0x0011)
-    assert {:ok, %CPUInfo{}} = Client.cpu_info(client)
-    assert {:ok, %PLCStatus{state: state}} = Client.plc_status(client)
+    assert {:ok, %PLC.CPUInfo{}} = Client.cpu_info(client)
+    assert {:ok, %PLC.Status{state: state}} = Client.plc_status(client)
     assert state in [:run, :stop, :unknown]
   end
 
   @tag skip: if("cp_info" in @capabilities, do: false, else: "cp_info capability not declared")
   test "reads communication processor limits", %{client: client} do
-    assert {:ok, %CPInfo{max_pdu_length: maximum}} = Client.cp_info(client)
+    assert {:ok, %PLC.CPInfo{max_pdu_length: maximum}} = Client.cp_info(client)
     assert maximum > 0
   end
 
   @tag skip: if("blocks" in @capabilities, do: false, else: "blocks capability not declared")
   test "reads block inventory and configured block metadata", %{client: client, config: config} do
-    assert {:ok, %BlockInventory{}} = Client.block_counts(client)
+    assert {:ok, %Block.Inventory{}} = Client.block_counts(client)
     assert {:ok, entries} = Client.list_blocks(client, config.block_type)
     expected = %Block{type: config.block_type, number: config.block_number}
     assert Enum.any?(entries, &(&1.block == expected))
-    assert {:ok, %BlockInfo{block: ^expected}} = Client.block_info(client, expected)
+    assert {:ok, %Block.Info{block: ^expected}} = Client.block_info(client, expected)
   end
 
   @tag skip: if("upload" in @capabilities, do: false, else: "upload capability not declared")
   test "uploads and parses the configured block", %{client: client, config: config} do
     block = %Block{type: config.block_type, number: config.block_number}
-    assert {:ok, %BlockImage{block: ^block}} = Client.upload_block(client, block)
+    assert {:ok, %Block.Image{block: ^block}} = Client.upload_block(client, block)
   end
 
   @tag skip: if("clock" in @capabilities, do: false, else: "clock capability not declared")
   test "reads the PLC clock", %{client: client} do
-    assert {:ok, %PLCClock{datetime: %NaiveDateTime{}}} = Client.read_clock(client)
+    assert {:ok, %PLC.Clock{datetime: %NaiveDateTime{}}} = Client.read_clock(client)
   end
 
   @tag skip:
@@ -443,10 +434,10 @@ defmodule S7.ClassicDeviceQualificationTest do
            else: "clock_write capability not declared"
          )
   test "writes and restores the PLC clock", %{client: client} do
-    assert {:ok, %PLCClock{datetime: original}} = Client.read_clock(client)
+    assert {:ok, %PLC.Clock{datetime: original}} = Client.read_clock(client)
     on_exit(fn -> Client.set_clock(client, original) end)
     assert Client.set_clock(client, original) == :ok
-    assert {:ok, %PLCClock{datetime: observed}} = Client.read_clock(client)
+    assert {:ok, %PLC.Clock{datetime: observed}} = Client.read_clock(client)
     assert NaiveDateTime.diff(observed, original, :second) in -1..1
   end
 
@@ -464,7 +455,7 @@ defmodule S7.ClassicDeviceQualificationTest do
   test "samples one programmer variable-status item", %{client: client, config: config} do
     address = Qualification.scratch(config, :word, 2)
 
-    assert {:ok, %VariableStatus{items: [%VariableStatus.Item{error: nil}]}} =
+    assert {:ok, %Programmer.VariableStatus{items: [%Programmer.VariableStatus.Item{error: nil}]}} =
              Client.variable_status(client, [address], timeout: 10_000, step_timeout: 5_000)
   end
 
@@ -480,7 +471,7 @@ defmodule S7.ClassicDeviceQualificationTest do
              )
 
     try do
-      assert {:ok, %CyclicEvent{items: [%CyclicEvent.Item{error: nil}]}} =
+      assert {:ok, %Cyclic.Event{items: [%Cyclic.Event.Item{error: nil}]}} =
                Client.next_cyclic(client, subscription, 10_000)
     after
       assert Client.unsubscribe_cyclic(client, subscription) == :ok
@@ -496,7 +487,7 @@ defmodule S7.ClassicDeviceQualificationTest do
     assert {:ok, subscription} = Client.subscribe_alarms(client, config.alarm_type)
 
     try do
-      assert {:ok, %AlarmQuery{}} = Client.query_alarms(client, config.alarm_type)
+      assert {:ok, %Alarm.Query{}} = Client.query_alarms(client, config.alarm_type)
     after
       assert Client.unsubscribe_alarms(client, subscription) == :ok
     end
@@ -512,9 +503,9 @@ defmodule S7.ClassicDeviceQualificationTest do
     assert {:ok, subscription} = Client.subscribe_alarms(client, config.alarm_type)
 
     try do
-      assert {:ok, %AlarmEvent{} = event} = Client.next_alarm(client, subscription, 30_000)
+      assert {:ok, %Alarm.Event{} = event} = Client.next_alarm(client, subscription, 30_000)
       assert {:ok, results} = Client.acknowledge_alarms(client, event)
-      assert Enum.all?(results, &match?(%AlarmAcknowledgement.Result{status: :ok}, &1))
+      assert Enum.all?(results, &match?(%Alarm.Acknowledgement.Result{status: :ok}, &1))
     after
       assert Client.unsubscribe_alarms(client, subscription) == :ok
     end

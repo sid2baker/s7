@@ -1,4 +1,4 @@
-defmodule S7.CPInfo do
+defmodule S7.PLC.CPInfo do
   @moduledoc """
   Communication-processor limits decoded from SZL `0x0131`, index `1`.
   """

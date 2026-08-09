@@ -1,29 +1,25 @@
 defmodule S7.Connection.Cyclic do
   @moduledoc false
 
-  alias S7.{
-    Address,
-    Connection,
-    CyclicInterval,
-    CyclicSubscription,
-    Error
-  }
-
+  alias S7.Address
+  alias S7.Connection
   alias S7.Connection.{Service, TransactionCleanup}
+  alias S7.Cyclic, as: CyclicModel
+  alias S7.Error
   alias S7.Protocol.{Cyclic, UserData}
 
   @default_timeout 5_000
   @default_queue_limit 64
 
   @type subscribe_options :: %{
-          interval: CyclicInterval.t(),
+          interval: CyclicModel.Interval.t(),
           queue_limit: pos_integer(),
           timeout: pos_integer(),
           step_timeout: pos_integer()
         }
 
   @type request_options :: %{
-          interval: CyclicInterval.t() | nil,
+          interval: CyclicModel.Interval.t() | nil,
           timeout: pos_integer(),
           step_timeout: pos_integer()
         }
@@ -52,7 +48,7 @@ defmodule S7.Connection.Cyclic do
     end
   end
 
-  @spec validate_modify_options(term(), CyclicInterval.t(), atom()) ::
+  @spec validate_modify_options(term(), CyclicModel.Interval.t(), atom()) ::
           {:ok, request_options()} | {:error, Error.t()}
   def validate_modify_options(opts, default_interval, operation) do
     with :ok <- Service.validate_options(opts, [:interval, :timeout, :step_timeout], operation),
@@ -75,7 +71,7 @@ defmodule S7.Connection.Cyclic do
   end
 
   @spec subscribe(pid(), [Address.t()], subscribe_options()) ::
-          {:ok, CyclicSubscription.t()} | {:error, Error.t()}
+          {:ok, CyclicModel.Subscription.t()} | {:error, Error.t()}
   def subscribe(connection, addresses, options) do
     with {:ok, item_specs} <- Cyclic.typed_item_specs(addresses, :subscribe_cyclic),
          {:ok, request} <-
@@ -98,10 +94,10 @@ defmodule S7.Connection.Cyclic do
 
   @spec subscribe_raw(
           pid(),
-          CyclicSubscription.mode(),
+          CyclicModel.Subscription.mode(),
           [binary()],
           subscribe_options()
-        ) :: {:ok, CyclicSubscription.t()} | {:error, Error.t()}
+        ) :: {:ok, CyclicModel.Subscription.t()} | {:error, Error.t()}
   def subscribe_raw(connection, mode, items, options) do
     with {:ok, item_specs} <- Cyclic.raw_item_specs(items, :subscribe_cyclic_raw),
          {:ok, request} <-
@@ -122,9 +118,9 @@ defmodule S7.Connection.Cyclic do
     end
   end
 
-  @spec next(pid(), CyclicSubscription.t(), pos_integer()) ::
-          {:ok, S7.CyclicEvent.t()} | {:error, Error.t()}
-  def next(connection, %CyclicSubscription{} = subscription, timeout)
+  @spec next(pid(), CyclicModel.Subscription.t(), pos_integer()) ::
+          {:ok, S7.Cyclic.Event.t()} | {:error, Error.t()}
+  def next(connection, %CyclicModel.Subscription{} = subscription, timeout)
       when is_pid(connection) and is_integer(timeout) and timeout > 0 do
     with :ok <- validate_connection(subscription, connection, :next_cyclic),
          {:ok, message} <-
@@ -139,11 +135,11 @@ defmodule S7.Connection.Cyclic do
   def next(_connection, _subscription, _timeout),
     do: Service.client_error(:next_cyclic, :invalid_cyclic_subscription)
 
-  @spec modify(pid(), CyclicSubscription.t(), [binary()], request_options()) ::
-          {:ok, CyclicSubscription.t()} | {:error, Error.t()}
+  @spec modify(pid(), CyclicModel.Subscription.t(), [binary()], request_options()) ::
+          {:ok, CyclicModel.Subscription.t()} | {:error, Error.t()}
   def modify(
         connection,
-        %CyclicSubscription{mode: :change_driven} = subscription,
+        %CyclicModel.Subscription{mode: :change_driven} = subscription,
         items,
         options
       ) do
@@ -167,9 +163,9 @@ defmodule S7.Connection.Cyclic do
   def modify(_connection, _subscription, _items, _options),
     do: Service.client_error(:modify_cyclic, :invalid_cyclic_subscription)
 
-  @spec unsubscribe(pid(), CyclicSubscription.t(), request_options()) ::
+  @spec unsubscribe(pid(), CyclicModel.Subscription.t(), request_options()) ::
           :ok | {:error, Error.t()}
-  def unsubscribe(connection, %CyclicSubscription{} = subscription, options) do
+  def unsubscribe(connection, %CyclicModel.Subscription{} = subscription, options) do
     operation = :unsubscribe_cyclic
 
     with :ok <- validate_connection(subscription, connection, operation),
@@ -245,7 +241,7 @@ defmodule S7.Connection.Cyclic do
              ),
            :ok <- Connection.end_transaction(connection, token) do
         {:ok,
-         %CyclicSubscription{
+         %CyclicModel.Subscription{
            connection: connection,
            reference: local_reference,
            job_id: job_id,
@@ -259,7 +255,7 @@ defmodule S7.Connection.Cyclic do
       end
 
     case result do
-      {:ok, %CyclicSubscription{} = subscription} ->
+      {:ok, %CyclicModel.Subscription{} = subscription} ->
         {:ok, subscription}
 
       {:error, %Error{} = error} ->
@@ -304,7 +300,7 @@ defmodule S7.Connection.Cyclic do
       end
 
     case result do
-      {:ok, %CyclicSubscription{} = updated} -> {:ok, updated}
+      {:ok, %CyclicModel.Subscription{} = updated} -> {:ok, updated}
       {:error, %Error{} = error} -> finish_modify_failure(connection, token, error)
     end
   end
@@ -402,8 +398,12 @@ defmodule S7.Connection.Cyclic do
   defp subscription_subfunction(:cyclic), do: 0x01
   defp subscription_subfunction(:change_driven), do: :any
 
-  defp validate_connection(%CyclicSubscription{connection: connection}, connection, _operation),
-    do: :ok
+  defp validate_connection(
+         %CyclicModel.Subscription{connection: connection},
+         connection,
+         _operation
+       ),
+       do: :ok
 
   defp validate_connection(_subscription, _connection, operation),
     do: Service.client_error(operation, :invalid_cyclic_subscription)

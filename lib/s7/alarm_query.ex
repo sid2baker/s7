@@ -1,4 +1,4 @@
-defmodule S7.AlarmQuery do
+defmodule S7.Alarm.Query do
   @moduledoc """
   Raw-first result of one classic alarm query.
 

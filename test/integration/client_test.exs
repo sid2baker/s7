@@ -1,7 +1,15 @@
 defmodule S7.ClientIntegrationTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Address, Client, CPInfo, CPUInfo, Error, OrderCode, PLCStatus, Result, SZL}
+  alias S7.{
+    Address,
+    Client,
+    Error,
+    PLC,
+    Result,
+    SZL
+  }
+
   alias S7.Connection
   alias S7.Protocol.UserData
   alias S7.Test.MockPLC
@@ -201,19 +209,19 @@ defmodule S7.ClientIntegrationTest do
 
     assert Client.list_szl(client) == {:ok, [0x0011, 0x001C, 0x0131, 0x0424]}
 
-    assert {:ok, %OrderCode{code: "6ES7 315-2EH14-0AB0", version: {3, 2, 1}}} =
+    assert {:ok, %PLC.OrderCode{code: "6ES7 315-2EH14-0AB0", version: {3, 2, 1}}} =
              Client.order_code(client)
 
     assert {:ok,
-            %CPUInfo{
+            %PLC.CPUInfo{
               automation_system_name: "Test PLC",
               module_name: "CPU 315-2 PN/DP",
               serial_number: "S C-C2UR28922012",
               module_type_name: "CPU 315-2 PN/DP"
             }} = Client.cpu_info(client)
 
-    assert {:ok, %CPInfo{max_pdu_length: 480, max_connections: 8}} = Client.cp_info(client)
-    assert {:ok, %PLCStatus{state: :run, code: 8}} = Client.plc_status(client)
+    assert {:ok, %PLC.CPInfo{max_pdu_length: 480, max_connections: 8}} = Client.cp_info(client)
+    assert {:ok, %PLC.Status{state: :run, code: 8}} = Client.plc_status(client)
     assert %{state: :ready, in_flight_requests: 0} = Client.info(client)
     assert Client.close(client) == :ok
   end

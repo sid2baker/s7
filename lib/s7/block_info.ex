@@ -1,4 +1,4 @@
-defmodule S7.BlockInfo do
+defmodule S7.Block.Info do
   @moduledoc "Decoded classic block metadata with its complete raw response retained."
 
   alias S7.Block
