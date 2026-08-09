@@ -52,6 +52,10 @@ accidental invocation; they are not authorization, authentication, rollback,
 or a safety system. The library never retries a destructive operation after an
 ambiguous outcome.
 
+CPU stop/start, RAM-to-ROM copy, and memory compression use the same policy.
+Run them only through a dedicated maintenance connection and verify CPU mode
+and process state independently before and after each operation.
+
 ## Session Passwords
 
 `S7.Client.authenticate/2` implements the classic protected-session exchange,

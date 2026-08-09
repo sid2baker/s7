@@ -28,7 +28,7 @@ defmodule S7.Client do
     SZL
   }
 
-  alias S7.Connection.{BlockDownloader, BlockUploader}
+  alias S7.Connection.{BlockDownloader, BlockUploader, Controller}
   alias S7.SZL.Metadata
 
   @opaque t :: GenServer.server()
@@ -483,6 +483,51 @@ defmodule S7.Client do
   end
 
   @doc """
+  Stops CPU program execution.
+
+  Requires `allow_destructive: true` on the connection and
+  `confirm: :stop_cpu` on this call.
+  """
+  @spec stop_cpu(t(), keyword()) :: :ok | {:error, Error.t()}
+  def stop_cpu(client, opts \\ []), do: control(client, :stop_cpu, opts)
+
+  @doc """
+  Performs a warm CPU start (`P_PROGRAM` without a cold-start argument).
+
+  Requires `allow_destructive: true` on the connection and
+  `confirm: :warm_start_cpu` on this call.
+  """
+  @spec warm_start_cpu(t(), keyword()) :: :ok | {:error, Error.t()}
+  def warm_start_cpu(client, opts \\ []), do: control(client, :warm_start_cpu, opts)
+
+  @doc """
+  Performs a cold CPU start (`P_PROGRAM` with the `C ` argument).
+
+  Requires `allow_destructive: true` on the connection and
+  `confirm: :cold_start_cpu` on this call.
+  """
+  @spec cold_start_cpu(t(), keyword()) :: :ok | {:error, Error.t()}
+  def cold_start_cpu(client, opts \\ []), do: control(client, :cold_start_cpu, opts)
+
+  @doc """
+  Copies PLC work memory from RAM to load memory.
+
+  The PLC commonly requires STOP mode. This call requires
+  `allow_destructive: true` and `confirm: :copy_ram_to_rom`.
+  """
+  @spec copy_ram_to_rom(t(), keyword()) :: :ok | {:error, Error.t()}
+  def copy_ram_to_rom(client, opts \\ []), do: control(client, :copy_ram_to_rom, opts)
+
+  @doc """
+  Requests PLC memory compression.
+
+  The PLC commonly requires STOP mode. This call requires
+  `allow_destructive: true` and `confirm: :compress_memory`.
+  """
+  @spec compress_memory(t(), keyword()) :: :ok | {:error, Error.t()}
+  def compress_memory(client, opts \\ []), do: control(client, :compress_memory, opts)
+
+  @doc """
   Returns negotiated connection information.
   """
   @spec info(t()) :: map() | {:error, Error.t()}
@@ -588,6 +633,12 @@ defmodule S7.Client do
     with {:ok, limits} <- Destructive.validate_options(opts, confirmation, operation),
          {:ok, image} <- BlockImage.decode(image.raw, image.block, operation) do
       call(fn -> BlockDownloader.download(client, image, limits, operation) end, operation)
+    end
+  end
+
+  defp control(client, action, opts) do
+    with {:ok, limits} <- Destructive.validate_options(opts, action, action) do
+      call(fn -> Controller.execute(client, action, limits, action) end, action)
     end
   end
 

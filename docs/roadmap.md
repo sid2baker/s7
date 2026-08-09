@@ -37,7 +37,7 @@ The exact scope and evidence rules are defined in
 | 17 | Clock and protected-session services | Complete |
 | 18 | Bounded block upload and block-image parsing | Complete |
 | 19 | Opt-in block download, replacement, and deletion | Complete |
-| 20 | Opt-in PLC control | Planned |
+| 20 | Opt-in PLC control | Complete |
 | 21 | Raw-first programmer diagnostics and variable status | Planned |
 | 22 | Cyclic subscriptions | Planned |
 | 23 | Alarm subscription, query, and acknowledgment | Planned |

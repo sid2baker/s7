@@ -37,11 +37,12 @@ The complete scope and risk policy are defined in
 | Block upload and load-memory image parsing | Implemented with exclusive bounded transactions | Supported after successful device qualification |
 | Block download and replacement | Implemented with PLC-driven PDU splitting and explicit destructive authorization | Supported after successful device qualification |
 | Block deletion | Implemented through PI-Service with explicit destructive authorization | Supported after successful device qualification |
+| PLC stop and warm/cold start | Implemented with explicit destructive authorization | Supported after successful device qualification |
+| Copy RAM to ROM and memory compression | Implemented through PI-Service with explicit destructive authorization | Supported after successful device qualification |
 | Common userdata envelope and request routing | Implemented | Supported |
 | Exclusive bidirectional service transactions | Implemented, internal typed-service boundary | Supported |
 | Bounded unsolicited userdata routing | Implemented, internal typed-service boundary | Supported |
 | Userdata diagnostics/services | Not implemented | Post-1.0 |
-| PLC control | Not implemented | Separate opt-in surface |
 | Alarms | Not implemented | Post-1.0 |
 
 S7comm-plus, secure PG/HMI sessions, and symbolic access to optimized data

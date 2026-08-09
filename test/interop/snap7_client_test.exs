@@ -180,6 +180,27 @@ defmodule S7.Snap7ClientInteropTest do
     assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 
+  test "controls the disposable server CPU and runs bounded maintenance services", %{
+    client: client
+  } do
+    assert Client.stop_cpu(client, confirm: :stop_cpu) == :ok
+    assert {:ok, %PLCStatus{state: :stop}} = Client.plc_status(client)
+
+    assert Client.warm_start_cpu(client, confirm: :warm_start_cpu) == :ok
+    assert {:ok, %PLCStatus{state: :run}} = Client.plc_status(client)
+
+    assert Client.stop_cpu(client, confirm: :stop_cpu) == :ok
+    assert Client.cold_start_cpu(client, confirm: :cold_start_cpu) == :ok
+    assert {:ok, %PLCStatus{state: :run}} = Client.plc_status(client)
+
+    assert Client.stop_cpu(client, confirm: :stop_cpu) == :ok
+    assert Client.copy_ram_to_rom(client, confirm: :copy_ram_to_rom) == :ok
+    assert Client.compress_memory(client, confirm: :compress_memory) == :ok
+
+    assert %{state: :ready, exclusive_transaction: false} = Client.info(client)
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+  end
+
   defp captured_download_image do
     assert {:ok, pdu, <<>>} = Fixture.read!("download/block_response.bin") |> PDU.decode()
     assert {:ok, %{data: raw}} = BlockDownload.decode_download_response(pdu, :interop)

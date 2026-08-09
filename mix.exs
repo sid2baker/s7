@@ -144,6 +144,7 @@ defmodule S7.MixProject do
           S7.Protocol.PDU,
           S7.Protocol.PDUPlanner,
           S7.Protocol.PIService,
+          S7.Protocol.PLCControl,
           S7.Protocol.ReadVar,
           S7.Protocol.Security,
           S7.Protocol.SetupCommunication,

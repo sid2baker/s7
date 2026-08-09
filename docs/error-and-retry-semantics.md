@@ -115,6 +115,13 @@ reported as `:rejected` without disconnecting; a missing or malformed response
 after transmission is indeterminate. Applications must inspect PLC state or
 restore a known project before deciding on any follow-up action.
 
+CPU stop, warm/cold start, RAM-to-ROM copy, and memory compression follow the
+same destructive contract. A PLC AckData success is complete; a PLC header
+rejection returns `details.outcome: :rejected` without disconnecting. A
+malformed response, timeout, or disconnect after transmission returns
+`details.outcome: :indeterminate` and invalidates the session. Applications
+must read status or otherwise verify PLC state before any follow-up action.
+
 Exclusive transactions are never replayed. A transaction has an overall
 deadline, a per-request timeout, aggregate message and byte limits, and a
 bounded inbox for PLC-initiated Jobs. An invalid owner/token or local option

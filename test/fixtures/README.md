@@ -35,6 +35,13 @@ PLC-driven Download Block and Download Ended jobs and replies, and `_INSE`
 activation for a complete 216-byte DB1 image. The `_DELE` DB1 fixture uses the
 same independently documented PI-Service layout with the delete command.
 
+PLC-control fixtures are S7 PDU bytes from `step7_s300_stop.pcapng`,
+`step7_s300_copyRamToRom.pcapng`, and frames 57-64 of
+`snap7_s300_everything.pcapng`. They cover stop, cold start, RAM-to-ROM copy,
+and compression. The warm-start request is normalized from the independently
+matching pinned Snap7 request structure because that capture set has no warm
+start exchange.
+
 ```text
 fixture -> decode -> expected struct
 expected struct -> encode -> fixture

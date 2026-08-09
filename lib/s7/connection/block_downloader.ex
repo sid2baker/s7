@@ -2,7 +2,7 @@ defmodule S7.Connection.BlockDownloader do
   @moduledoc false
 
   alias S7.{Block, BlockImage, Connection, Destructive, Error}
-  alias S7.Connection.TransactionCleanup
+  alias S7.Connection.{DestructiveRequest, TransactionCleanup}
   alias S7.Protocol.{BlockDownload, PIService}
 
   @maximum_fragments 4096
@@ -27,12 +27,15 @@ defmodule S7.Connection.BlockDownloader do
 
   @spec delete(pid(), Block.t(), Destructive.limits(), atom()) :: :ok | {:error, Error.t()}
   def delete(connection, block, limits, operation) do
-    with info when is_map(info) <- Connection.info(connection),
-         :ok <- Destructive.authorize(info, operation),
-         {:ok, request} <- PIService.block_request(block, :delete, operation),
-         {:ok, token} <-
-           Connection.begin_transaction(connection, operation, simple_transaction_options(limits)) do
-      execute_pi_service(connection, token, request, operation, :delete)
+    with {:ok, request} <- PIService.block_request(block, :delete, operation) do
+      DestructiveRequest.execute(
+        connection,
+        request,
+        limits,
+        operation,
+        :delete,
+        &PIService.decode_response(&1, operation)
+      )
     end
   end
 
@@ -146,33 +149,6 @@ defmodule S7.Connection.BlockDownloader do
     end
   end
 
-  defp execute_pi_service(connection, token, request, operation, stage) do
-    case Connection.transaction_request(connection, token, request) do
-      {:ok, response} ->
-        finish_pi_service(connection, token, response, operation, stage)
-
-      {:error, %Error{} = error} ->
-        TransactionCleanup.abort(connection, token, indeterminate(error, stage))
-    end
-  end
-
-  defp finish_pi_service(connection, token, response, operation, stage) do
-    case PIService.decode_response(response, operation) do
-      :ok ->
-        finish_success(connection, token)
-
-      {:error, %Error{} = error} ->
-        if PIService.complete_rejection?(error),
-          do:
-            TransactionCleanup.release(
-              connection,
-              token,
-              add_outcome(error, :rejected, stage)
-            ),
-          else: TransactionCleanup.abort(connection, token, indeterminate(error, stage))
-    end
-  end
-
   defp finish_success(connection, token) do
     case Connection.end_transaction(connection, token) do
       :ok -> :ok
@@ -204,16 +180,6 @@ defmodule S7.Connection.BlockDownloader do
       step_timeout: limits.step_timeout,
       maximum_messages: fragment_count * 2 + 6,
       maximum_bytes: byte_size(image) + fragment_count * 64 + 1024,
-      inbox_limit: 1
-    ]
-  end
-
-  defp simple_transaction_options(limits) do
-    [
-      timeout: limits.timeout,
-      step_timeout: limits.step_timeout,
-      maximum_messages: 2,
-      maximum_bytes: 1024,
       inbox_limit: 1
     ]
   end

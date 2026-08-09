@@ -73,7 +73,22 @@ fixtures = %{
     "320100008400001A000028000000000000FD000A01003041303030303150055F494E5345",
   "test/fixtures/download/pi_response.bin" => "32030000840000010000000028",
   "test/fixtures/download/delete_db1_request.bin" =>
-    "320100008400001A000028000000000000FD000A01003041303030303142055F44454C45"
+    "320100008400001A000028000000000000FD000A01003041303030303142055F44454C45",
+  "test/fixtures/control/stop_request.bin" =>
+    "3201000035000010000029000000000009505F50524F4752414D",
+  "test/fixtures/control/stop_response.bin" => "32030000350000010000000029",
+  "test/fixtures/control/copy_ram_to_rom_request.bin" =>
+    "320100000A000012000028000000000000FD00024550055F4D4F4455",
+  "test/fixtures/control/copy_ram_to_rom_response.bin" => "320300000A0000010000000028",
+  "test/fixtures/control/compress_memory_request.bin" =>
+    "320100001E000010000028000000000000FD0000055F47415242",
+  "test/fixtures/control/compress_memory_response.bin" => "320300001E0000010000000028",
+  "test/fixtures/control/cold_start_request.bin" =>
+    "320100001F000016000028000000000000FD0002432009505F50524F4752414D",
+  "test/fixtures/control/cold_start_response.bin" => "320300001F0000010000000028",
+  "test/fixtures/control/warm_start_request.bin" =>
+    "3201000020000014000028000000000000FD000009505F50524F4752414D",
+  "test/fixtures/control/warm_start_response.bin" => "32030000200000010000000028"
 }
 
 Enum.each(fixtures, fn {path, hex} ->

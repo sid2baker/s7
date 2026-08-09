@@ -899,7 +899,7 @@ defmodule S7.ClientIntegrationTest do
         {:too_many_fragments, :cotp, :too_many_fragments}
       ] do
     test "read transport fault #{fault} disconnects the session" do
-      server = start_server(read_fault: unquote(fault))
+      server = start_server(read_fault: unquote(fault), fragment_tcp: false)
       assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port, timeout: 500)
 
       assert {:error, %Error{layer: unquote(layer), reason: unquote(reason)}} =

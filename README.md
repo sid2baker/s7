@@ -5,8 +5,8 @@ setup, S7 Setup Communication, single- or multi-item Read Var and Write Var jobs
 userdata-backed System Status List (SZL/SSL) reads, and classic block directory and metadata
 queries. Bounded classic block upload, PLC clock access, and classic session-password
 authorization are also supported. Destructive block download, replacement, and deletion are
-available only through an explicit two-level opt-in. One S7ANY item may represent either a scalar
-or a fixed-count range.
+available only through an explicit two-level opt-in, as are CPU stop/start, RAM-to-ROM copy, and
+memory compression. One S7ANY item may represent either a scalar or a fixed-count range.
 
 The implementation keeps protocol codecs pure and gives the TCP socket to one `:gen_statem`
 process. Its `active: :once` request engine correlates responses by PDU reference, bounds queued
@@ -19,10 +19,9 @@ reads and writes. CI also builds a server from a pinned Snap7 revision and verif
 splitting and read-after-write for every supported area and value type. PLCSIM Advanced and
 physical Siemens hardware remain external release gates, so `0.1.0` remains a release candidate.
 
-S7comm-plus, symbolic addressing, optimized DB access, PLC control, alarms, and programmer
-diagnostics are not supported. The common classic userdata envelope is implemented for SZL,
-block-directory, clock, and protected-session requests plus safe handling of unsolicited
-indications.
+S7comm-plus, symbolic addressing, optimized DB access, alarms, and programmer diagnostics are not
+supported. The common classic userdata envelope is implemented for SZL, block-directory, clock,
+and protected-session requests plus safe handling of unsolicited indications.
 
 ## Usage
 
@@ -300,6 +299,26 @@ deliberately rejects Request Download, so successful PLCSIM and physical-PLC qua
 a release gate. Whether `_INSE` creates or replaces an existing block is PLC-dependent;
 `replace_block/3` records explicit caller intent but uses the same classic wire service.
 
+## Destructive CPU Control
+
+CPU control uses a short exclusive transaction and the same two-level policy as block download.
+Each action has a distinct confirmation atom:
+
+```elixir
+:ok = S7.Client.stop_cpu(maintenance_client, confirm: :stop_cpu)
+:ok = S7.Client.warm_start_cpu(maintenance_client, confirm: :warm_start_cpu)
+:ok = S7.Client.cold_start_cpu(maintenance_client, confirm: :cold_start_cpu)
+
+# These operations commonly require the CPU to be in STOP.
+:ok = S7.Client.copy_ram_to_rom(maintenance_client, confirm: :copy_ram_to_rom)
+:ok = S7.Client.compress_memory(maintenance_client, confirm: :compress_memory)
+```
+
+All calls accept bounded `:timeout` and `:step_timeout` options. A complete PLC rejection returns
+`details.outcome: :rejected` and leaves the session usable. Once a request has been transmitted,
+a timeout, disconnect, or malformed response is reported as `:indeterminate` and invalidates the
+session. The client never replays CPU control after reconnect.
+
 ## PLC Clock And Session Authorization
 
 Classic PLC clock values are timezone-free local civil time:
@@ -379,7 +398,7 @@ The script uses the ignored local Snap7 reference when present and otherwise che
 revision into a temporary directory.
 
 With Docker available, capture the same exchange and require tshark to identify Setup, Read Var,
-Write Var, SZL, block-directory, block transfer, PI block control, set-clock, and session-password
+Write Var, SZL, block-directory, block transfer, CPU control, set-clock, and session-password
 services without malformed packets:
 
 ```bash

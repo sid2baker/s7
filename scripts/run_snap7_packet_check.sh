@@ -63,6 +63,11 @@ grep -Fq "[Security] -> [PLC password]" <<<"${DECODED}"
 grep -q "Function:\[Start upload\]" <<<"${DECODED}"
 grep -q "Function:\[Request download\]" <<<"${DECODED}"
 grep -Fq "PI-Service] -> _DELE(DB65000)" <<<"${DECODED}"
+grep -q "Function:\[PLC Stop\]" <<<"${DECODED}"
+grep -Fq 'PI-Service] -> P_PROGRAM()' <<<"${DECODED}"
+grep -Fq 'PI-Service] -> P_PROGRAM("C ")' <<<"${DECODED}"
+grep -Fq 'PI-Service] -> _MODU("EP")' <<<"${DECODED}"
+grep -Fq 'PI-Service] -> _GARB()' <<<"${DECODED}"
 test -z "${MALFORMED}"
 
 if [[ -n "${S7_CAPTURE_FILE:-}" ]]; then

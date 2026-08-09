@@ -87,6 +87,11 @@ inside the reservation, so ordinary requests cannot observe a half-finished
 local transaction. Deletion is also serialized through a short exclusive
 PI-Service transaction.
 
+CPU stop/start and maintenance controls use the same short exclusive-request
+runner as deletion. This prevents ordinary work from overtaking a state change,
+adds operation and step deadlines, and centralizes complete-rejection versus
+indeterminate-outcome handling.
+
 Destructive authority is immutable connection configuration and defaults off.
 The public facade additionally requires an exact confirmation atom for every
 download, replacement, deletion, and control call. Reconnect preserves only

@@ -12,6 +12,7 @@ defmodule S7.Test.MockPLC do
     Item,
     PDU,
     PIService,
+    PLCControl,
     Security,
     SetupCommunication,
     UserData
@@ -76,6 +77,7 @@ defmodule S7.Test.MockPLC do
       clock_fault: Keyword.get(opts, :clock_fault),
       upload_fault: Keyword.get(opts, :upload_fault),
       download_fault: Keyword.get(opts, :download_fault),
+      control_fault: Keyword.get(opts, :control_fault),
       clock: Keyword.get(opts, :clock, ~N[2024-08-09 12:34:56.123]),
       security_password: Security.encode_password(security_password),
       authenticated: false,
@@ -236,6 +238,13 @@ defmodule S7.Test.MockPLC do
           state}
        ) do
     state |> handle_pi_service(request) |> serve()
+  end
+
+  defp handle_received(
+         {:ok, %PDU{header: %{rosctr: :job}, parameters: <<0x29, _rest::binary>>} = request,
+          state}
+       ) do
+    state |> handle_control(request) |> serve()
   end
 
   defp handle_received(
@@ -507,10 +516,51 @@ defmodule S7.Test.MockPLC do
   end
 
   defp handle_pi_service(state, request) do
-    case PIService.decode_block_request(request, :mock_pi_service) do
-      {:ok, %{action: :insert, block: block}} -> handle_block_insert(state, request, block)
-      {:ok, %{action: :delete, block: block}} -> handle_block_delete(state, request, block)
+    case PLCControl.decode_request(request, :mock_control) do
+      {:ok, _action} ->
+        handle_control(state, request)
+
+      {:error, _error} ->
+        case PIService.decode_block_request(request, :mock_pi_service) do
+          {:ok, %{action: :insert, block: block}} -> handle_block_insert(state, request, block)
+          {:ok, %{action: :delete, block: block}} -> handle_block_delete(state, request, block)
+          {:error, _error} -> send_upload_header_error(state, request, 0xD20C)
+        end
+    end
+  end
+
+  defp handle_control(state, request) do
+    case PLCControl.decode_request(request, :mock_control) do
+      {:ok, action} -> send_control_response(state, request, action)
       {:error, _error} -> send_upload_header_error(state, request, 0xD20C)
+    end
+  end
+
+  defp send_control_response(state, request, action) do
+    state = notify_request(state, action, request)
+    Process.sleep(Keyword.get(state.options, :control_response_delay, 0))
+
+    case state.control_fault do
+      :rejected ->
+        send_upload_header_error(%{state | control_fault: nil}, request, 0xD241)
+
+      :malformed_response ->
+        function = if action == :stop_cpu, do: 0x28, else: 0x29
+        :ok = send_pdu(state, PDU.new(:ack_data, request.header.pdu_reference, <<function>>))
+        %{state | control_fault: nil}
+
+      :disconnect ->
+        :ok = :gen_tcp.close(state.socket)
+        %{state | control_fault: nil}
+
+      :silence ->
+        %{state | control_fault: nil}
+
+      _other ->
+        function = if action == :stop_cpu, do: 0x29, else: 0x28
+        :ok = send_pdu(state, PDU.new(:ack_data, request.header.pdu_reference, <<function>>))
+        send(state.owner, {:mock_plc_controlled, action})
+        state
     end
   end
 

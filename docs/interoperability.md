@@ -31,7 +31,12 @@ Download, PLC-driven data response, Download Ended, and `_INSE` sequence. The
 fault server repeats it with negotiated multi-PDU splitting and malformed-path
 coverage. The pinned Snap7 server deliberately returns `0xD241` to Request
 Download but accepts the generated `_DELE` envelope on its disposable target;
-the gate verifies the session remains usable after both outcomes.
+the gate verifies the session remains usable after both outcomes. The same
+disposable server gate performs stop, warm start, cold start, RAM-to-ROM copy,
+and memory compression, checks observable RUN/STOP transitions, and requires
+tshark to identify every control service without malformed frames. Captured
+STEP 7/Snap7 S7-300 exchanges provide independent golden bytes; PLCSIM and
+physical-client execution remain pending.
 
 ## Release Qualification Matrix
 
