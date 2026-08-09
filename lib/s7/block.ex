@@ -200,3 +200,123 @@ defmodule S7.Block do
       {:error,
        Error.new(:client, operation, :invalid_block, details: %{field: field, value: value})}
 end
+
+defmodule S7.Block.Entry do
+  @moduledoc "One entry from a classic list-blocks-of-type response."
+
+  alias S7.Block
+
+  @enforce_keys [:block, :flags, :language, :language_code, :raw]
+  defstruct [:block, :flags, :language, :language_code, :raw]
+
+  @type t :: %__MODULE__{
+          block: Block.t(),
+          flags: byte(),
+          language: Block.language(),
+          language_code: byte(),
+          raw: binary()
+        }
+end
+
+defmodule S7.Block.Info do
+  @moduledoc "Decoded classic block metadata with its complete raw response retained."
+
+  alias S7.Block
+
+  @enforce_keys [
+    :block,
+    :language,
+    :language_code,
+    :flags,
+    :load_memory_size,
+    :security,
+    :security_code,
+    :code_timestamp,
+    :interface_timestamp,
+    :sbb_length,
+    :additional_length,
+    :local_data_length,
+    :mc7_size,
+    :author,
+    :family,
+    :name,
+    :version,
+    :checksum,
+    :raw_header,
+    :reserved,
+    :raw
+  ]
+  defstruct [
+    :block,
+    :language,
+    :language_code,
+    :flags,
+    :linked?,
+    :standard?,
+    :non_retain?,
+    :load_memory_size,
+    :security,
+    :security_code,
+    :code_timestamp,
+    :interface_timestamp,
+    :sbb_length,
+    :additional_length,
+    :local_data_length,
+    :mc7_size,
+    :author,
+    :family,
+    :name,
+    :version,
+    :checksum,
+    :raw_header,
+    :reserved,
+    :raw
+  ]
+
+  @type security :: :none | :know_how_protected | {:unknown, 0..0xFFFFFFFF}
+
+  @type t :: %__MODULE__{
+          block: Block.t(),
+          language: Block.language(),
+          language_code: byte(),
+          flags: byte(),
+          linked?: boolean(),
+          standard?: boolean(),
+          non_retain?: boolean(),
+          load_memory_size: non_neg_integer(),
+          security: security(),
+          security_code: 0..0xFFFFFFFF,
+          code_timestamp: NaiveDateTime.t(),
+          interface_timestamp: NaiveDateTime.t(),
+          sbb_length: non_neg_integer(),
+          additional_length: non_neg_integer(),
+          local_data_length: non_neg_integer(),
+          mc7_size: non_neg_integer(),
+          author: String.t(),
+          family: String.t(),
+          name: String.t(),
+          version: {0..15, 0..15},
+          checksum: 0..0xFFFF,
+          raw_header: binary(),
+          reserved: binary(),
+          raw: binary()
+        }
+end
+
+defmodule S7.Block.Inventory do
+  @moduledoc """
+  Counts reported by the classic block directory, keyed by block type.
+
+  Unknown type codes remain keys of the form `{:unknown, code}`.
+  """
+
+  alias S7.Block
+
+  @enforce_keys [:counts, :raw]
+  defstruct [:counts, :raw]
+
+  @type t :: %__MODULE__{
+          counts: %{optional(Block.decoded_type()) => non_neg_integer()},
+          raw: binary()
+        }
+end
