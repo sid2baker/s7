@@ -21,7 +21,7 @@ defmodule S7.Client do
     SZL
   }
 
-  alias S7.Connection.{Alarm, BlockDownloader, BlockUploader, Controller, Cyclic}
+  alias S7.Connection.{Alarm, BlockDownloader, BlockUploader, Cyclic, DestructiveRequest}
   alias S7.Connection.Programmer, as: ProgrammerRuntime
   alias S7.SZL.Metadata
 
@@ -900,7 +900,7 @@ defmodule S7.Client do
 
   defp control(client, action, opts) do
     with {:ok, limits} <- Destructive.validate_options(opts, action, action) do
-      call(fn -> Controller.execute(client, action, limits, action) end, action)
+      call(fn -> DestructiveRequest.control(client, action, limits, action) end, action)
     end
   end
 

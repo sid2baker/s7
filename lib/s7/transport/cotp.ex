@@ -1,3 +1,118 @@
+defmodule S7.Transport.COTP.ConnectionConfirm do
+  @moduledoc "A COTP Connection Confirm TPDU."
+
+  defstruct [
+    :src_tsap,
+    :dst_tsap,
+    :tpdu_size,
+    destination_reference: 0,
+    source_reference: 0,
+    class_option: 0,
+    unknown_parameters: []
+  ]
+
+  @type t :: %__MODULE__{
+          src_tsap: binary() | nil,
+          dst_tsap: binary() | nil,
+          tpdu_size: pos_integer() | nil,
+          destination_reference: 0..0xFFFF,
+          source_reference: 0..0xFFFF,
+          class_option: byte(),
+          unknown_parameters: [{byte(), binary()}]
+        }
+end
+
+defmodule S7.Transport.COTP.ConnectionRequest do
+  @moduledoc "A COTP Connection Request TPDU."
+
+  @enforce_keys [:src_tsap, :dst_tsap, :tpdu_size]
+  defstruct [
+    :src_tsap,
+    :dst_tsap,
+    :tpdu_size,
+    destination_reference: 0,
+    source_reference: 1,
+    class_option: 0,
+    unknown_parameters: []
+  ]
+
+  @type t :: %__MODULE__{
+          src_tsap: binary(),
+          dst_tsap: binary(),
+          tpdu_size: pos_integer(),
+          destination_reference: 0..0xFFFF,
+          source_reference: 0..0xFFFF,
+          class_option: byte(),
+          unknown_parameters: [{byte(), binary()}]
+        }
+end
+
+defmodule S7.Transport.COTP.Data do
+  @moduledoc "A COTP Data TPDU."
+
+  @enforce_keys [:payload]
+  defstruct [:payload, eot: true, tpdu_number: 0]
+
+  @type t :: %__MODULE__{
+          payload: binary(),
+          eot: boolean(),
+          tpdu_number: 0..0x7F
+        }
+end
+
+defmodule S7.Transport.COTP.DisconnectConfirm do
+  @moduledoc "A COTP Disconnect Confirm TPDU."
+
+  defstruct destination_reference: 0,
+            source_reference: 0,
+            unknown_parameters: []
+
+  @type t :: %__MODULE__{
+          destination_reference: 0..0xFFFF,
+          source_reference: 0..0xFFFF,
+          unknown_parameters: [{byte(), binary()}]
+        }
+end
+
+defmodule S7.Transport.COTP.DisconnectRequest do
+  @moduledoc """
+  A COTP Disconnect Request TPDU.
+
+  Additional information is represented separately from unknown TLVs so a
+  decoded packet can be encoded again without losing diagnostics.
+  """
+
+  defstruct destination_reference: 0,
+            source_reference: 0,
+            reason: 0,
+            additional_information: nil,
+            unknown_parameters: []
+
+  @type t :: %__MODULE__{
+          destination_reference: 0..0xFFFF,
+          source_reference: 0..0xFFFF,
+          reason: byte(),
+          additional_information: binary() | nil,
+          unknown_parameters: [{byte(), binary()}]
+        }
+end
+
+defmodule S7.Transport.COTP.ErrorTPDU do
+  @moduledoc "A COTP Error TPDU."
+
+  defstruct destination_reference: 0,
+            reject_cause: 0,
+            invalid_tpdu: nil,
+            unknown_parameters: []
+
+  @type t :: %__MODULE__{
+          destination_reference: 0..0xFFFF,
+          reject_cause: byte(),
+          invalid_tpdu: binary() | nil,
+          unknown_parameters: [{byte(), binary()}]
+        }
+end
+
 defmodule S7.Transport.COTP do
   @moduledoc """
   Codec for the COTP subset used by the S7 client.

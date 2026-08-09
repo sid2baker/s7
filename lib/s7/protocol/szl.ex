@@ -4,27 +4,45 @@ defmodule S7.Protocol.SZL do
   """
 
   alias S7.{Error, SZL}
-  alias S7.Protocol.SZL.Transaction
   alias S7.Protocol.UserData
   alias S7.Protocol.UserData.{Parameter, Payload}
 
   @subfunction 0x01
   @octet_string 0x09
 
+  @typep transaction :: %{
+           id: 0..0xFFFF,
+           index: 0..0xFFFF,
+           max_bytes: pos_integer(),
+           max_fragments: pos_integer(),
+           data_unit_reference: byte() | nil,
+           fragment_count: non_neg_integer(),
+           size: non_neg_integer(),
+           parts: [binary()]
+         }
+
   @typep consume_result ::
            {:ok, SZL.t()}
-           | {:continue, UserData.t(), Transaction.t()}
+           | {:continue, UserData.t(), transaction()}
            | {:error, Error.t()}
 
   @doc false
   @spec start(0..0xFFFF, 0..0xFFFF, S7.SZL.limits()) ::
-          {:ok, UserData.t(), Transaction.t()} | {:error, Error.t()}
+          {:ok, UserData.t(), transaction()} | {:error, Error.t()}
   def start(id, index, %{max_bytes: max_bytes, max_fragments: max_fragments} = limits)
       when id in 0..0xFFFF and index in 0..0xFFFF and is_integer(max_bytes) and max_bytes > 0 and
              is_integer(max_fragments) and max_fragments > 0 do
     with {:ok, request} <- UserData.request(:cpu, @subfunction, <<id::16, index::16>>) do
-      transaction =
-        struct!(Transaction, Map.merge(limits, %{id: id, index: index}))
+      transaction = %{
+        id: id,
+        index: index,
+        max_bytes: limits.max_bytes,
+        max_fragments: limits.max_fragments,
+        data_unit_reference: nil,
+        fragment_count: 0,
+        size: 0,
+        parts: []
+      }
 
       {:ok, request, transaction}
     end
@@ -34,8 +52,13 @@ defmodule S7.Protocol.SZL do
     do: {:error, Error.new(:client, :read_szl, :invalid_szl_request)}
 
   @doc false
-  @spec consume(UserData.t(), Transaction.t(), atom()) :: consume_result()
-  def consume(%UserData{} = response, %Transaction{} = transaction, operation) do
+  @spec consume(UserData.t(), transaction(), atom()) :: consume_result()
+  def consume(
+        %UserData{} = response,
+        %{id: id, index: index} = transaction,
+        operation
+      )
+      when id in 0..0xFFFF and index in 0..0xFFFF do
     with :ok <- validate_transport(response.payload, operation),
          {:ok, chunk} <- fragment_data(response, transaction, operation),
          {:ok, data_unit_reference, more?} <-

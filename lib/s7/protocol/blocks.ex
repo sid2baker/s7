@@ -9,7 +9,6 @@ defmodule S7.Protocol.Blocks do
   import Bitwise
 
   alias S7.{Block, Error}
-  alias S7.Protocol.Blocks.Transaction
   alias S7.Protocol.UserData
   alias S7.Protocol.UserData.{Parameter, Payload}
 
@@ -21,9 +20,21 @@ defmodule S7.Protocol.Blocks do
   @continuation 0x0A
 
   @type limits :: Block.limits()
+  @typep transaction :: %{
+           action: :counts | :list | :info,
+           type: Block.known_type() | nil,
+           block: Block.t() | nil,
+           max_bytes: pos_integer(),
+           max_fragments: pos_integer(),
+           data_unit_reference: byte() | nil,
+           fragment_count: non_neg_integer(),
+           size: non_neg_integer(),
+           parts: [binary()]
+         }
+
   @typep consume_result ::
            {:ok, Block.Inventory.t() | [Block.Entry.t()] | Block.Info.t()}
-           | {:continue, UserData.t(), Transaction.t()}
+           | {:continue, UserData.t(), transaction()}
            | {:error, Error.t()}
 
   @doc false
@@ -31,35 +42,24 @@ defmodule S7.Protocol.Blocks do
   defdelegate validate_list_options(opts, operation), to: Block
 
   @doc false
-  @spec start_counts() :: {:ok, UserData.t(), Transaction.t()} | {:error, Error.t()}
+  @spec start_counts() :: {:ok, UserData.t(), transaction()} | {:error, Error.t()}
   def start_counts do
     with {:ok, request} <-
            UserData.request(:blocks, @list_all, <<>>,
              return_code: @continuation,
              transport_size: @null
            ) do
-      {:ok, request,
-       %Transaction{
-         action: :counts,
-         max_bytes: 28,
-         max_fragments: 1
-       }}
+      {:ok, request, transaction(:counts, 28, 1)}
     end
   end
 
   @doc false
   @spec start_list(Block.known_type(), limits()) ::
-          {:ok, UserData.t(), Transaction.t()} | {:error, Error.t()}
+          {:ok, UserData.t(), transaction()} | {:error, Error.t()}
   def start_list(type, %{max_bytes: max_bytes, max_fragments: max_fragments}) do
     with {:ok, type} <- Block.validate_request_type(type, :list_blocks),
          {:ok, request} <- UserData.request(:blocks, @list_type, Block.encode_type(type)) do
-      {:ok, request,
-       %Transaction{
-         action: :list,
-         type: type,
-         max_bytes: max_bytes,
-         max_fragments: max_fragments
-       }}
+      {:ok, request, %{transaction(:list, max_bytes, max_fragments) | type: type}}
     end
   end
 
@@ -67,7 +67,7 @@ defmodule S7.Protocol.Blocks do
     do: {:error, Error.new(:client, :list_blocks, :invalid_block_request)}
 
   @doc false
-  @spec start_info(Block.t()) :: {:ok, UserData.t(), Transaction.t()} | {:error, Error.t()}
+  @spec start_info(Block.t()) :: {:ok, UserData.t(), transaction()} | {:error, Error.t()}
   def start_info(%Block{} = block) do
     with {:ok, %Block{type: type, number: number} = block} <-
            Block.validate(block, :block_info),
@@ -78,13 +78,7 @@ defmodule S7.Protocol.Blocks do
              "A"
            ]),
          {:ok, request} <- UserData.request(:blocks, @block_info, data) do
-      {:ok, request,
-       %Transaction{
-         action: :info,
-         block: block,
-         max_bytes: 78,
-         max_fragments: 1
-       }}
+      {:ok, request, %{transaction(:info, 78, 1) | block: block}}
     end
   end
 
@@ -92,8 +86,9 @@ defmodule S7.Protocol.Blocks do
     do: {:error, Error.new(:client, :block_info, :invalid_block_request)}
 
   @doc false
-  @spec consume(UserData.t(), Transaction.t(), atom()) :: consume_result()
-  def consume(%UserData{} = response, %Transaction{} = transaction, operation) do
+  @spec consume(UserData.t(), transaction(), atom()) :: consume_result()
+  def consume(%UserData{} = response, %{action: action} = transaction, operation)
+      when action in [:counts, :list, :info] do
     with :ok <- validate_transport(response.payload, operation),
          {:ok, data_unit_reference, more?} <-
            fragment_parameters(response.parameter, transaction, operation),
@@ -247,7 +242,7 @@ defmodule S7.Protocol.Blocks do
   defp fragment_parameters(_parameter, _transaction, operation),
     do: malformed(operation, %{parameter_extension: :invalid})
 
-  defp validate_continuation(%Transaction{action: :list}, _more?, _operation), do: :ok
+  defp validate_continuation(%{action: :list}, _more?, _operation), do: :ok
   defp validate_continuation(_transaction, false, _operation), do: :ok
 
   defp validate_continuation(transaction, true, operation),
@@ -283,7 +278,7 @@ defmodule S7.Protocol.Blocks do
     end
   end
 
-  defp finish_or_continue(response, %Transaction{action: :list} = transaction, true, _operation) do
+  defp finish_or_continue(response, %{action: :list} = transaction, true, _operation) do
     with {:ok, request} <- continuation_request(response.parameter.sequence) do
       {:continue, request, transaction}
     end
@@ -297,6 +292,20 @@ defmodule S7.Protocol.Blocks do
       :list -> decode_entries(transaction.type, raw, operation)
       :info -> decode_info(transaction.block, raw, operation)
     end
+  end
+
+  defp transaction(action, max_bytes, max_fragments) do
+    %{
+      action: action,
+      type: nil,
+      block: nil,
+      max_bytes: max_bytes,
+      max_fragments: max_fragments,
+      data_unit_reference: nil,
+      fragment_count: 0,
+      size: 0,
+      parts: []
+    }
   end
 
   defp continuation_request(sequence) do

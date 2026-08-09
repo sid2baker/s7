@@ -8,7 +8,6 @@ defmodule S7.Protocol.BlockDownload do
   """
 
   alias S7.{Block, Error}
-  alias S7.Protocol.BlockDownload.Transaction
   alias S7.Protocol.{Job, PDU}
 
   @request_download 0x1A
@@ -26,9 +25,20 @@ defmodule S7.Protocol.BlockDownload do
 
   @type end_request :: %{block: Block.t(), error_code: 0..0xFFFF}
 
+  @typep transaction :: %{
+           block: Block.t(),
+           image: binary(),
+           mc7_size: non_neg_integer(),
+           operation: atom(),
+           stage: :request_download | :download | :download_ended | :complete,
+           offset: non_neg_integer(),
+           fragment_count: non_neg_integer(),
+           references: MapSet.t(0..0xFFFF)
+         }
+
   @doc false
   @spec start_request(Block.Image.t(), atom()) ::
-          {:ok, PDU.t(), Transaction.t()} | {:error, Error.t()}
+          {:ok, PDU.t(), transaction()} | {:error, Error.t()}
   def start_request(%Block.Image{} = image, operation) do
     with {:ok, %Block{} = block} <- Block.validate(image.block, operation),
          :ok <- validate_image_size(image.raw, image.mc7_size, operation) do
@@ -46,11 +56,15 @@ defmodule S7.Protocol.BlockDownload do
         ])
 
       {:ok, PDU.new(:job, 0, parameters),
-       %Transaction{
+       %{
          block: block,
          image: image.raw,
          mc7_size: image.mc7_size,
-         operation: operation
+         operation: operation,
+         stage: :request_download,
+         offset: 0,
+         fragment_count: 0,
+         references: MapSet.new()
        }}
     end
   end
@@ -82,9 +96,9 @@ defmodule S7.Protocol.BlockDownload do
   def decode_start_request(_pdu, operation), do: malformed(operation, %{})
 
   @doc false
-  @spec consume_start(PDU.t(), Transaction.t()) ::
-          {:ok, Transaction.t()} | {:error, Error.t()}
-  def consume_start(%PDU{} = pdu, %Transaction{stage: :request_download} = transaction) do
+  @spec consume_start(PDU.t(), transaction()) ::
+          {:ok, transaction()} | {:error, Error.t()}
+  def consume_start(%PDU{} = pdu, %{stage: :request_download} = transaction) do
     with :ok <- validate_response_header(pdu, transaction.operation),
          <<@request_download>> <- pdu.parameters,
          <<>> <- pdu.data do
@@ -95,15 +109,15 @@ defmodule S7.Protocol.BlockDownload do
     end
   end
 
-  def consume_start(_pdu, %Transaction{operation: operation}),
+  def consume_start(_pdu, %{operation: operation}),
     do: malformed(operation, %{stage: :invalid})
 
   @doc false
-  @spec consume_download_job(PDU.t(), Transaction.t(), pos_integer()) ::
-          {:ok, PDU.t(), Transaction.t()} | {:error, Error.t()}
+  @spec consume_download_job(PDU.t(), transaction(), pos_integer()) ::
+          {:ok, PDU.t(), transaction()} | {:error, Error.t()}
   def consume_download_job(
         %PDU{} = request,
-        %Transaction{stage: :download} = transaction,
+        %{stage: :download} = transaction,
         pdu_size
       ) do
     with :ok <- validate_job(request, transaction, @download_block),
@@ -137,7 +151,7 @@ defmodule S7.Protocol.BlockDownload do
     end
   end
 
-  def consume_download_job(_pdu, %Transaction{operation: operation}, _pdu_size),
+  def consume_download_job(_pdu, %{operation: operation}, _pdu_size),
     do: malformed(operation, %{stage: :invalid})
 
   @doc false
@@ -158,9 +172,9 @@ defmodule S7.Protocol.BlockDownload do
   def decode_download_response(_pdu, operation), do: malformed(operation, %{})
 
   @doc false
-  @spec consume_end_job(PDU.t(), Transaction.t()) ::
-          {:ok, PDU.t(), Transaction.t(), end_request()} | {:error, Error.t()}
-  def consume_end_job(%PDU{} = request, %Transaction{stage: :download_ended} = transaction) do
+  @spec consume_end_job(PDU.t(), transaction()) ::
+          {:ok, PDU.t(), transaction(), end_request()} | {:error, Error.t()}
+  def consume_end_job(%PDU{} = request, %{stage: :download_ended} = transaction) do
     with :ok <- validate_job(request, transaction, @download_ended),
          {:ok, end_request} <- decode_end_parameters(request.parameters, transaction),
          :ok <- validate_reference(request.header.pdu_reference, transaction) do
@@ -176,7 +190,7 @@ defmodule S7.Protocol.BlockDownload do
     end
   end
 
-  def consume_end_job(_pdu, %Transaction{operation: operation}),
+  def consume_end_job(_pdu, %{operation: operation}),
     do: malformed(operation, %{stage: :invalid})
 
   @doc false

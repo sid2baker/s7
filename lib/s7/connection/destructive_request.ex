@@ -3,9 +3,24 @@ defmodule S7.Connection.DestructiveRequest do
 
   alias S7.{Connection, Destructive, Error}
   alias S7.Connection.TransactionCleanup
-  alias S7.Protocol.{Job, PDU}
+  alias S7.Protocol.{Job, PDU, PLCControl}
 
   @type decoder :: (PDU.t() -> :ok | {:error, Error.t()})
+
+  @spec control(pid(), PLCControl.action(), Destructive.limits(), atom()) ::
+          :ok | {:error, Error.t()}
+  def control(connection, action, limits, operation) do
+    with {:ok, request} <- PLCControl.request(action, operation) do
+      execute(
+        connection,
+        request,
+        limits,
+        operation,
+        action,
+        &PLCControl.decode_response(&1, action, operation)
+      )
+    end
+  end
 
   @spec execute(pid(), PDU.t(), Destructive.limits(), atom(), atom(), decoder()) ::
           :ok | {:error, Error.t()}

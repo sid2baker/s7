@@ -9,7 +9,6 @@ defmodule S7.Protocol.BlockUpload do
   import Bitwise
 
   alias S7.{Block, Error, Options}
-  alias S7.Protocol.BlockUpload.Transaction
   alias S7.Protocol.{Job, PDU}
 
   @start_upload 0x1D
@@ -30,9 +29,21 @@ defmodule S7.Protocol.BlockUpload do
           step_timeout: pos_integer() | nil
         }
 
+  @typep transaction :: %{
+           block: Block.t(),
+           operation: atom(),
+           upload_id: 0..0xFFFFFFFF | nil,
+           advertised_size: pos_integer() | nil,
+           max_bytes: pos_integer(),
+           max_fragments: pos_integer(),
+           fragment_count: non_neg_integer(),
+           size: non_neg_integer(),
+           parts: [binary()]
+         }
+
   @typep consume_result ::
-           {:continue, Transaction.t()}
-           | {:complete, binary(), Transaction.t()}
+           {:continue, transaction()}
+           | {:complete, binary(), transaction()}
            | {:error, Error.t()}
 
   @doc false
@@ -69,7 +80,7 @@ defmodule S7.Protocol.BlockUpload do
 
   @doc false
   @spec start_request(Block.t(), limits(), atom()) ::
-          {:ok, PDU.t(), Transaction.t()} | {:error, Error.t()}
+          {:ok, PDU.t(), transaction()} | {:error, Error.t()}
   def start_request(%Block{} = block, limits, operation) do
     with {:ok, %Block{type: type, number: number} = block} <- Block.validate(block, operation),
          :ok <- validate_limits(limits, operation) do
@@ -78,11 +89,16 @@ defmodule S7.Protocol.BlockUpload do
       parameters = <<@start_upload, 0, 0::16, 0::32, byte_size(filename), filename::binary>>
 
       {:ok, PDU.new(:job, 0, parameters),
-       %Transaction{
+       %{
          block: block,
          operation: operation,
+         upload_id: nil,
+         advertised_size: nil,
          max_bytes: limits.max_bytes,
-         max_fragments: limits.max_fragments
+         max_fragments: limits.max_fragments,
+         fragment_count: 0,
+         size: 0,
+         parts: []
        }}
     end
   end
@@ -91,9 +107,9 @@ defmodule S7.Protocol.BlockUpload do
     do: {:error, Error.new(:client, operation, :invalid_block_request)}
 
   @doc false
-  @spec consume_start(PDU.t(), Transaction.t()) ::
-          {:ok, Transaction.t()} | {:error, Error.t()}
-  def consume_start(%PDU{} = pdu, %Transaction{} = transaction) do
+  @spec consume_start(PDU.t(), transaction()) ::
+          {:ok, transaction()} | {:error, Error.t()}
+  def consume_start(%PDU{} = pdu, %{block: %Block{}} = transaction) do
     with :ok <- validate_response_header(pdu, transaction.operation),
          :ok <- validate_empty_data(pdu, transaction.operation),
          {:ok, upload_id, advertised_size} <-
@@ -107,12 +123,12 @@ defmodule S7.Protocol.BlockUpload do
     end
   end
 
-  def consume_start(_pdu, %Transaction{operation: operation}),
+  def consume_start(_pdu, %{operation: operation}),
     do: malformed(operation, %{})
 
   @doc false
-  @spec validate_advertised_size(Transaction.t()) :: :ok | {:error, Error.t()}
-  def validate_advertised_size(%Transaction{} = transaction) do
+  @spec validate_advertised_size(transaction()) :: :ok | {:error, Error.t()}
+  def validate_advertised_size(%{block: %Block{}} = transaction) do
     if transaction.advertised_size <= transaction.max_bytes do
       :ok
     else
@@ -121,17 +137,17 @@ defmodule S7.Protocol.BlockUpload do
   end
 
   @doc false
-  @spec upload_request(Transaction.t()) :: {:ok, PDU.t()} | {:error, Error.t()}
-  def upload_request(%Transaction{upload_id: upload_id}) when upload_id in 0..0xFFFFFFFF do
+  @spec upload_request(transaction()) :: {:ok, PDU.t()} | {:error, Error.t()}
+  def upload_request(%{upload_id: upload_id}) when upload_id in 0..0xFFFFFFFF do
     {:ok, PDU.new(:job, 0, <<@upload, 0, 0::16, upload_id::unsigned-big-32>>)}
   end
 
-  def upload_request(%Transaction{operation: operation}),
+  def upload_request(%{operation: operation}),
     do: malformed(operation, %{transaction_state: :not_started})
 
   @doc false
-  @spec consume_segment(PDU.t(), Transaction.t()) :: consume_result()
-  def consume_segment(%PDU{} = pdu, %Transaction{} = transaction) do
+  @spec consume_segment(PDU.t(), transaction()) :: consume_result()
+  def consume_segment(%PDU{} = pdu, %{block: %Block{}} = transaction) do
     with :ok <- validate_response_header(pdu, transaction.operation),
          {:ok, more?} <- decode_upload_parameters(pdu.parameters, transaction.operation),
          {:ok, chunk} <- decode_chunk(pdu.data, transaction.operation),
@@ -140,21 +156,21 @@ defmodule S7.Protocol.BlockUpload do
     end
   end
 
-  def consume_segment(_pdu, %Transaction{operation: operation}),
+  def consume_segment(_pdu, %{operation: operation}),
     do: malformed(operation, %{})
 
   @doc false
-  @spec end_request(Transaction.t()) :: {:ok, PDU.t()} | {:error, Error.t()}
-  def end_request(%Transaction{upload_id: upload_id}) when upload_id in 0..0xFFFFFFFF do
+  @spec end_request(transaction()) :: {:ok, PDU.t()} | {:error, Error.t()}
+  def end_request(%{upload_id: upload_id}) when upload_id in 0..0xFFFFFFFF do
     {:ok, PDU.new(:job, 0, <<@end_upload, 0, 0::16, upload_id::unsigned-big-32>>)}
   end
 
-  def end_request(%Transaction{operation: operation}),
+  def end_request(%{operation: operation}),
     do: malformed(operation, %{transaction_state: :not_started})
 
   @doc false
-  @spec consume_end(PDU.t(), Transaction.t()) :: :ok | {:error, Error.t()}
-  def consume_end(%PDU{} = pdu, %Transaction{} = transaction) do
+  @spec consume_end(PDU.t(), transaction()) :: :ok | {:error, Error.t()}
+  def consume_end(%PDU{} = pdu, %{block: %Block{}} = transaction) do
     with :ok <- validate_response_header(pdu, transaction.operation),
          :ok <- validate_empty_data(pdu, transaction.operation),
          <<@end_upload>> <- pdu.parameters do
@@ -165,7 +181,7 @@ defmodule S7.Protocol.BlockUpload do
     end
   end
 
-  def consume_end(_pdu, %Transaction{operation: operation}),
+  def consume_end(_pdu, %{operation: operation}),
     do: malformed(operation, %{})
 
   @doc false

@@ -12,15 +12,11 @@ defmodule S7.Connection do
   alias S7.{Address, Error, Result, SessionPassword, Telemetry, TSAP}
 
   alias S7.Connection.{
-    Close,
-    Drain,
     Exclusive,
     Reconnect,
     Request,
-    Session,
     Stream,
-    Subscription,
-    SubscriptionRegistry
+    Subscription
   }
 
   alias S7.Protocol.Blocks, as: BlocksProtocol
@@ -115,7 +111,7 @@ defmodule S7.Connection do
     queued_count: 0,
     pending: %{},
     request_index: %{},
-    session: %Session{}
+    session: %{local_reference: nil, remote_reference: nil, authenticated: false}
   ]
 
   @type state_name ::
@@ -695,7 +691,7 @@ defmodule S7.Connection do
         :info,
         {:drain_timeout, token},
         :draining,
-        %{drain: %Drain{token: token}} = data
+        %{drain: %{token: token}} = data
       ) do
     error = Error.new(:client, :close, :drain_timeout)
     fail_drain(data, error)
@@ -705,7 +701,7 @@ defmodule S7.Connection do
         :info,
         {:disconnect_timeout, token},
         :disconnecting,
-        %{close: %Close{token: token}} = data
+        %{close: %{token: token}} = data
       ) do
     complete_disconnect(data, Error.new(:cotp, :close, :disconnect_timeout))
   end
@@ -849,14 +845,14 @@ defmodule S7.Connection do
          max_items_per_pdu: max_items_per_pdu,
          max_queue_size: max_queue_size,
          allow_destructive: allow_destructive,
-         subscription_registry: %SubscriptionRegistry{limit: max_subscriptions},
+         subscription_registry: %{limit: max_subscriptions, entries: %{}, monitor_index: %{}},
          reference: reference,
          receive_buffer_limit: receive_buffer_limit,
          max_tpkt_size: max_tpkt_size,
          stream: Stream.new(),
          reconnect: struct!(Reconnect, Map.put(reconnect, :delay, reconnect.min_delay)),
-         drain: %Drain{},
-         close: %Close{}
+         drain: nil,
+         close: nil
        }}
     end
   end
@@ -1253,7 +1249,8 @@ defmodule S7.Connection do
       token = make_ref()
       timer = Process.send_after(self(), {:drain_timeout, token}, timeout)
 
-      {:next_state, :draining, %{data | drain: %Drain{from: from, timer: timer, token: token}}}
+      drain = %{from: from, timer: timer, token: token}
+      {:next_state, :draining, %{data | drain: drain}}
     end
   end
 
@@ -1294,12 +1291,14 @@ defmodule S7.Connection do
     {:stop, :normal, data}
   end
 
-  defp reply_closing_caller(%{drain: %Drain{from: nil}}, _reply), do: :ok
+  defp reply_closing_caller(%{drain: nil}, _reply), do: :ok
   defp reply_closing_caller(data, reply), do: :gen_statem.reply(data.drain.from, reply)
+
+  defp cancel_drain(%{drain: nil} = data), do: data
 
   defp cancel_drain(data) do
     cancel_timer(data.drain.timer)
-    %{data | drain: %Drain{}}
+    %{data | drain: nil}
   end
 
   defp begin_disconnect(from, data, timeout) do
@@ -1321,7 +1320,7 @@ defmodule S7.Connection do
          :ok <- :inet.setopts(data.socket, active: :once) do
       token = make_ref()
       timer = Process.send_after(self(), {:disconnect_timeout, token}, timeout)
-      close = %Close{from: from, timer: timer, token: token}
+      close = %{from: from, timer: timer, token: token}
       {:next_state, :disconnecting, %{data | close: close}}
     else
       {:error, %Error{} = error} -> force_close(from, data, error)
@@ -1352,12 +1351,14 @@ defmodule S7.Connection do
     )
   end
 
-  defp reply_close_caller(%{close: %Close{from: nil}}, _reply), do: :ok
+  defp reply_close_caller(%{close: nil}, _reply), do: :ok
   defp reply_close_caller(data, reply), do: :gen_statem.reply(data.close.from, reply)
+
+  defp cancel_close(%{close: nil} = data), do: data
 
   defp cancel_close(data) do
     cancel_timer(data.close.timer)
-    %{data | close: %Close{}}
+    %{data | close: nil}
   end
 
   defp cotp_connected?(data) do
@@ -2791,7 +2792,7 @@ defmodule S7.Connection do
 
   defp handle_received_pdus(
          [%DisconnectConfirm{} = confirm | _events],
-         %{close: %Close{from: from}} = data
+         %{close: %{from: from}} = data
        )
        when not is_nil(from) do
     case validate_disconnect_confirm(confirm, data) do
@@ -3684,7 +3685,7 @@ defmodule S7.Connection do
       | socket: nil,
         receive_buffer: <<>>,
         stream: Stream.new(),
-        session: %Session{}
+        session: %{local_reference: nil, remote_reference: nil, authenticated: false}
     }
   end
 
