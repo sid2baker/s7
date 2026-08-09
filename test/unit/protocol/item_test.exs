@@ -37,18 +37,93 @@ defmodule S7.Protocol.ItemTest do
     assert {:ok, ^item, <<>>} = item |> Item.encode() |> Item.decode()
   end
 
-  test "maps every v0.1 transport and area" do
-    assert Item.transport_code(:bit) == 0x01
-    assert Item.transport_code(:byte) == 0x02
-    assert Item.transport_code(:word) == 0x04
-    assert Item.transport_code(:int) == 0x05
-    assert Item.transport_code(:dword) == 0x06
-    assert Item.transport_code(:dint) == 0x07
-    assert Item.transport_code(:real) == 0x08
-    assert Item.area_code(:inputs) == 0x81
-    assert Item.area_code(:outputs) == 0x82
-    assert Item.area_code(:markers) == 0x83
-    assert Item.area_code(:db) == 0x84
+  test "maps every supported classic S7ANY transport and area" do
+    transports = [
+      bit: 0x01,
+      byte: 0x02,
+      char: 0x03,
+      word: 0x04,
+      int: 0x05,
+      dword: 0x06,
+      dint: 0x07,
+      real: 0x08,
+      date: 0x09,
+      time_of_day: 0x0A,
+      time: 0x0B,
+      s5time: 0x0C,
+      date_and_time: 0x0F,
+      counter: 0x1C,
+      timer: 0x1D
+    ]
+
+    areas = [
+      counters: 0x1C,
+      timers: 0x1D,
+      peripheral: 0x80,
+      inputs: 0x81,
+      outputs: 0x82,
+      markers: 0x83,
+      db: 0x84,
+      instance_db: 0x85,
+      local: 0x86,
+      previous_local: 0x87
+    ]
+
+    for {name, code} <- transports do
+      assert Item.transport_code(name) == code
+
+      item = %Item{
+        transport_size: name,
+        count: 1,
+        db_number: 0,
+        area: :markers,
+        bit_address: 0
+      }
+
+      assert {:ok, ^item, <<>>} = item |> Item.encode() |> Item.decode()
+    end
+
+    for {name, code} <- areas do
+      assert Item.area_code(name) == code
+
+      item = %Item{
+        transport_size: :byte,
+        count: 1,
+        db_number: 0,
+        area: name,
+        bit_address: 0
+      }
+
+      assert {:ok, ^item, <<>>} = item |> Item.encode() |> Item.decode()
+    end
+  end
+
+  test "derives wire count and element addressing from semantic addresses" do
+    string = %Address{area: :db, db_number: 1, byte_offset: 20, data_type: {:string, 10}}
+
+    native_date = %Address{
+      area: :db,
+      db_number: 1,
+      byte_offset: 4,
+      data_type: :date,
+      transport_size: :date
+    }
+
+    counter = %Address{area: :counters, element_offset: 42, data_type: :counter, count: 3}
+
+    assert {:ok, %Item{transport_size: :byte, count: 12, bit_address: 160}} =
+             Item.from_address(string)
+
+    assert {:ok, %Item{transport_size: :date, count: 1, bit_address: 32}} =
+             Item.from_address(native_date)
+
+    assert {:ok,
+            %Item{
+              transport_size: :counter,
+              count: 3,
+              area: :counters,
+              bit_address: 42
+            }} = Item.from_address(counter)
   end
 
   test "rejects malformed and unsupported S7ANY items" do

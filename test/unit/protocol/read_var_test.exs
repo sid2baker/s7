@@ -59,6 +59,24 @@ defmodule S7.Protocol.ReadVarTest do
              ReadVar.decode_response(wrong_length, address, 9)
   end
 
+  test "decodes semantic and alternate classic transports" do
+    date = %Address{area: :db, db_number: 1, byte_offset: 0, data_type: :date}
+    character = %{date | data_type: :char, byte_offset: 2}
+    dint = %{date | data_type: :dint, byte_offset: 4}
+    counter = %Address{area: :counters, element_offset: 3, data_type: :counter}
+
+    assert ReadVar.decode_response(response(4, :byte, 16, <<0, 1>>), date, 4) ==
+             {:ok, ~D[1990-01-02]}
+
+    assert ReadVar.decode_response(response(4, :octet, 1, "A"), character, 4) == {:ok, "A"}
+
+    assert ReadVar.decode_response(response(4, :dinteger, 4, <<0, 0, 0, 42>>), dint, 4) ==
+             {:ok, 42}
+
+    assert ReadVar.decode_response(response(4, :octet, 2, <<1, 0x23>>), counter, 4) ==
+             {:ok, 123}
+  end
+
   test "encodes and decodes multiple aligned items in request order" do
     byte = %Address{area: :markers, byte_offset: 0, data_type: :byte}
     word = %Address{area: :db, db_number: 1, byte_offset: 2, data_type: :word}
@@ -154,7 +172,16 @@ defmodule S7.Protocol.ReadVarTest do
   end
 
   defp response(reference, transport, encoded_length, payload) do
-    transport_code = %{bit: 0x03, byte: 0x04, integer: 0x05, real: 0x07}[transport]
+    transport_code =
+      %{
+        bit: 0x03,
+        byte: 0x04,
+        integer: 0x05,
+        dinteger: 0x06,
+        real: 0x07,
+        octet: 0x09
+      }[transport]
+
     data = <<0xFF, transport_code, encoded_length::unsigned-big-16, payload::binary>>
     PDU.new(:ack_data, reference, <<0x04, 1>>, data)
   end

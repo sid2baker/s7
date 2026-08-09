@@ -49,15 +49,24 @@ session and never replays work from the failed session.
 
 ## Addressing And Values
 
-The current client supports absolute S7ANY addresses in data blocks, inputs,
-outputs, and markers. The scalar types are `:bit`, `:byte`, `:word`, `:dword`,
-`:int`, `:dint`, and `:real`.
+The client models absolute S7ANY addresses in data blocks, instance data
+blocks, inputs, outputs, markers, direct peripherals, local and previous-local
+data, counters, and timers. Counter and timer offsets are element numbers;
+other offsets are byte/bit positions.
 
-Fixed-count values and raw byte ranges are implemented for all listed non-bit
-types. Bit access remains scalar because reference implementations and tested
-peers reject a bit transport amount greater than one. String and Siemens
-date/time types will be advertised only after golden captures and real PLC
-tests exist for each representation.
+The pure value layer implements booleans, signed and unsigned 8/16/32/64-bit
+integers, IEEE-754 binary32/binary64 values, byte and wide characters, fixed
+Siemens STRING/WSTRING storage, DATE, TIME, TIME_OF_DAY, DATE_AND_TIME,
+S5TIME, counters, and timers. Fixed-count values and raw byte ranges are
+implemented for all non-bit types. Bit access remains scalar because reference
+implementations and tested peers reject a bit transport amount greater than
+one.
+
+Semantic types and S7ANY transport sizes are separate. Native classic
+date/time transport codes can be selected explicitly, while byte transport is
+the compatibility default for representations whose native transport support
+varies by CPU. Codec support does not imply device qualification; each area,
+transport, and CPU-family combination remains subject to the matrix below.
 
 Raw SZL records are returned without CPU-family assumptions. Typed metadata
 helpers cover Siemens-documented module/component records plus the established

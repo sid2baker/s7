@@ -98,7 +98,7 @@ defmodule S7.Protocol.WriteVar do
   defp encode_item(address, value, index, last_index) do
     case Item.from_address(address) do
       {:ok, item} ->
-        data_item = DataItem.for_write(address.data_type, value) |> DataItem.encode()
+        data_item = DataItem.for_write(address, value) |> DataItem.encode()
         padding = if index < last_index and rem(byte_size(value), 2) == 1, do: <<0>>, else: <<>>
         {:ok, Item.encode(item), [data_item, padding]}
 

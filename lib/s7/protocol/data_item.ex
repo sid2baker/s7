@@ -3,13 +3,21 @@ defmodule S7.Protocol.DataItem do
   Codec for Read Var response and Write Var request data items.
   """
 
-  @transport_codes %{none: 0x00, bit: 0x03, byte: 0x04, integer: 0x05, real: 0x07, octet: 0x09}
+  @transport_codes %{
+    none: 0x00,
+    bit: 0x03,
+    byte: 0x04,
+    integer: 0x05,
+    dinteger: 0x06,
+    real: 0x07,
+    octet: 0x09
+  }
   @code_to_transport Map.new(@transport_codes, fn {name, code} -> {code, name} end)
 
   @enforce_keys [:return_code, :transport_size, :encoded_length, :data]
   defstruct [:return_code, :transport_size, :encoded_length, :data]
 
-  @type transport_size :: :none | :bit | :byte | :integer | :real | :octet
+  @type transport_size :: :none | :bit | :byte | :integer | :dinteger | :real | :octet
   @type t :: %__MODULE__{
           return_code: byte(),
           transport_size: transport_size(),
@@ -22,7 +30,18 @@ defmodule S7.Protocol.DataItem do
   @doc """
   Creates a Write Var data item for one already-encoded value.
   """
-  @spec for_write(S7.Address.data_type(), binary()) :: t()
+  @spec for_write(S7.Address.t() | S7.Address.data_type(), binary()) :: t()
+  def for_write(%S7.Address{} = address, data) when is_binary(data) do
+    transport_size = address |> S7.Address.transport_size() |> transport_for_s7any()
+
+    %__MODULE__{
+      return_code: 0,
+      transport_size: transport_size,
+      encoded_length: encoded_length(transport_size, byte_size(data)),
+      data: data
+    }
+  end
+
   def for_write(data_type, data) when is_binary(data) do
     transport_size = transport_for_data_type(data_type)
 
@@ -82,24 +101,43 @@ defmodule S7.Protocol.DataItem do
   def decode(_binary), do: {:error, :invalid_data_item}
 
   @doc false
-  @spec expected_transport(S7.Address.data_type()) :: transport_size()
+  @spec expected_transport(S7.Address.t() | S7.Address.data_type()) :: transport_size()
+  def expected_transport(%S7.Address{} = address) do
+    address
+    |> S7.Address.transport_size()
+    |> transport_for_s7any()
+  end
+
   def expected_transport(:bit), do: :bit
   def expected_transport(type) when type in [:byte, :word, :dword], do: :byte
   def expected_transport(type) when type in [:int, :dint], do: :integer
   def expected_transport(:real), do: :real
+  def expected_transport(type) when type in [:char, :counter, :timer], do: :octet
+  def expected_transport(_type), do: :byte
 
   @doc false
-  @spec expected_encoded_length(S7.Address.data_type(), non_neg_integer()) :: non_neg_integer()
-  def expected_encoded_length(data_type, payload_size) do
-    data_type
-    |> transport_for_data_type()
+  @spec expected_transports(S7.Address.t()) :: [transport_size()]
+  def expected_transports(%S7.Address{} = address) do
+    case S7.Address.transport_size(address) do
+      :dint -> [:integer, :dinteger]
+      _transport_size -> [expected_transport(address)]
+    end
+  end
+
+  @doc false
+  @spec expected_encoded_length(S7.Address.t() | S7.Address.data_type(), non_neg_integer()) ::
+          non_neg_integer()
+  def expected_encoded_length(data_type_or_address, payload_size) do
+    data_type_or_address
+    |> expected_transport()
     |> encoded_length(payload_size)
   end
 
   defp transport_for_data_type(data_type), do: expected_transport(data_type)
 
-  defp encoded_length(transport, payload_size) when transport in [:bit, :real, :octet],
-    do: payload_size
+  defp encoded_length(transport, payload_size)
+       when transport in [:bit, :dinteger, :real, :octet],
+       do: payload_size
 
   defp encoded_length(transport, payload_size) when transport in [:byte, :integer],
     do: payload_size * 8
@@ -110,7 +148,7 @@ defmodule S7.Protocol.DataItem do
   defp payload_size(transport, length) when transport in [:bit, :byte, :integer],
     do: div(length + 7, 8)
 
-  defp payload_size(transport, length) when transport in [:real, :octet], do: length
+  defp payload_size(transport, length) when transport in [:dinteger, :real, :octet], do: length
 
   defp decode_payload_size(:none, 0), do: {:ok, 0}
   defp decode_payload_size(:none, _length), do: {:error, :invalid_data_length}
@@ -118,8 +156,14 @@ defmodule S7.Protocol.DataItem do
   defp decode_payload_size(transport, length) when transport in [:bit, :byte, :integer],
     do: {:ok, div(length + 7, 8)}
 
-  defp decode_payload_size(transport, length) when transport in [:real, :octet],
+  defp decode_payload_size(transport, length) when transport in [:dinteger, :real, :octet],
     do: {:ok, length}
+
+  defp transport_for_s7any(:bit), do: :bit
+  defp transport_for_s7any(type) when type in [:int, :dint], do: :integer
+  defp transport_for_s7any(:real), do: :real
+  defp transport_for_s7any(type) when type in [:char, :counter, :timer], do: :octet
+  defp transport_for_s7any(_type), do: :byte
 
   defp decode_transport(code) do
     case @code_to_transport do

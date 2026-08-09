@@ -30,7 +30,7 @@ The exact scope and evidence rules are defined in
 | Milestone | Outcome | Status |
 | --- | --- | --- |
 | 12 | Classic completion contract and service matrix | Complete |
-| 13 | Remaining S7ANY areas and value representations | Planned |
+| 13 | Remaining S7ANY areas and value representations | Complete |
 | 14 | Runtime COTP DR/DC shutdown | Planned |
 | 15 | Exclusive, bidirectional transactions and bounded push routing | Planned |
 | 16 | Block inventory and block information | Planned |

@@ -8,23 +8,42 @@ defmodule S7.Protocol.Item do
   @transport_codes %{
     bit: 0x01,
     byte: 0x02,
+    char: 0x03,
     word: 0x04,
     int: 0x05,
     dword: 0x06,
     dint: 0x07,
-    real: 0x08
+    real: 0x08,
+    date: 0x09,
+    time_of_day: 0x0A,
+    time: 0x0B,
+    s5time: 0x0C,
+    date_and_time: 0x0F,
+    counter: 0x1C,
+    timer: 0x1D
   }
 
   @code_to_transport Map.new(@transport_codes, fn {name, code} -> {code, name} end)
 
-  @area_codes %{inputs: 0x81, outputs: 0x82, markers: 0x83, db: 0x84}
+  @area_codes %{
+    counters: 0x1C,
+    timers: 0x1D,
+    peripheral: 0x80,
+    inputs: 0x81,
+    outputs: 0x82,
+    markers: 0x83,
+    db: 0x84,
+    instance_db: 0x85,
+    local: 0x86,
+    previous_local: 0x87
+  }
   @code_to_area Map.new(@area_codes, fn {name, code} -> {code, name} end)
 
   @enforce_keys [:transport_size, :count, :db_number, :area, :bit_address]
   defstruct [:transport_size, :count, :db_number, :area, :bit_address]
 
   @type t :: %__MODULE__{
-          transport_size: Address.data_type(),
+          transport_size: Address.transport_size(),
           count: pos_integer(),
           db_number: non_neg_integer(),
           area: Address.area(),
@@ -43,14 +62,15 @@ defmodule S7.Protocol.Item do
   """
   @spec from_address(Address.t()) :: {:ok, t()} | {:error, S7.Error.t()}
   def from_address(%Address{} = address) do
-    with {:ok, address} <- Address.validate(address) do
+    with {:ok, address} <- Address.validate(address),
+         {:ok, wire_count} <- Address.wire_count(address) do
       {:ok,
        %__MODULE__{
-         transport_size: address.data_type,
-         count: address.count,
+         transport_size: Address.transport_size(address),
+         count: wire_count,
          db_number: address.db_number,
          area: address.area,
-         bit_address: Address.bit_address(address)
+         bit_address: Address.wire_address(address)
        }}
     end
   end
@@ -105,8 +125,8 @@ defmodule S7.Protocol.Item do
   def decode(_binary), do: {:error, :invalid_s7any_item}
 
   @doc false
-  @spec transport_code(Address.data_type()) :: byte()
-  def transport_code(data_type), do: Map.fetch!(@transport_codes, data_type)
+  @spec transport_code(Address.transport_size()) :: byte()
+  def transport_code(transport_size), do: Map.fetch!(@transport_codes, transport_size)
 
   @doc false
   @spec area_code(Address.area()) :: byte()

@@ -149,24 +149,32 @@ defmodule S7.Protocol.ReadVar do
     do: Protocol.malformed(:read, %{parameters: parameters, expected_count: expected_count})
 
   defp validate_item(item, address) do
-    expected_transport = DataItem.expected_transport(address.data_type)
+    expected_transports = DataItem.expected_transports(address)
 
-    with true <- item.transport_size == expected_transport,
+    with true <- item.transport_size in expected_transports,
          {:ok, expected_size} <- Data.encoded_size(address.data_type, address.count),
          true <- byte_size(item.data) == expected_size,
          true <-
            item.encoded_length ==
-             DataItem.expected_encoded_length(address.data_type, expected_size) do
+             expected_encoded_length(item.transport_size, expected_size) do
       :ok
     else
       _other ->
         Protocol.malformed(:read, %{
-          expected_transport: expected_transport,
+          expected_transports: expected_transports,
           received_transport: item.transport_size,
           payload_size: byte_size(item.data)
         })
     end
   end
+
+  defp expected_encoded_length(transport_size, payload_size)
+       when transport_size in [:bit, :dinteger, :real, :octet],
+       do: payload_size
+
+  defp expected_encoded_length(transport_size, payload_size)
+       when transport_size in [:byte, :integer],
+       do: payload_size * 8
 
   defp encode_items(addresses) do
     addresses

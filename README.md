@@ -118,9 +118,14 @@ String parsing supports:
 
 ```text
 DB1.DBX20.3  DB1.DBB20  DB1.DBW20  DB1.DBD20
+DBI1.DBIX0.0 DBI1.DBIB0 DBI1.DBIW0 DBI1.DBID0
 M10.0        MB10       MW10       MD10
 I0.0         IB0        IW0        ID0
 Q0.0         QB0        QW0        QD0
+P0.0         PB0        PW0        PD0
+L0.0         LB0        LW0        LD0
+V0.0         VB0        VW0        VD0
+C10          T5
 ```
 
 String `B`, `W`, and `D` forms are unsigned `:byte`, `:word`, and `:dword` values. Use an explicit
@@ -137,9 +142,20 @@ temperature = %S7.Address{
 {:ok, 12.5} = S7.Client.read(client, temperature)
 ```
 
-Supported types are `:bit`, `:byte`, `:word`, `:dword`, `:int`, `:dint`, and `:real`. All except
-`:bit` support a `count` greater than one. Wire conversion is independently available through
-`S7.Data.encode/2`, `S7.Data.encode/3`, `S7.Data.decode/2`, and `S7.Data.decode/3`.
+The address model also supports peripheral, instance DB, local, previous-local,
+counter, and timer areas. Counters and timers use `element_offset`; byte areas
+use `byte_offset`. All types except `:bit` support a `count` greater than one.
+
+`S7.Data` provides signed and unsigned 8/16/32/64-bit integers, REAL/LREAL,
+byte and wide characters, fixed `{:string, maximum}` and
+`{:wstring, maximum}` storage, `DATE`, `TIME`, `TIME_OF_DAY`,
+`DATE_AND_TIME`, `S5TIME`, counter, and timer codecs. Address semantics are
+separate from S7ANY transport selection. The default uses broadly compatible
+byte access where a native transport is not portable; set `transport_size` on
+an explicit address to opt into a native S7ANY date/time code.
+
+Wire conversion is independently available through `S7.Data.encode/2`,
+`S7.Data.encode/3`, `S7.Data.decode/2`, and `S7.Data.decode/3`.
 
 `S7.Client.write_raw/3` accepts an already encoded binary whose size exactly matches the address
 type and count. Raw access does not bypass address validation or negotiated PDU limits.
