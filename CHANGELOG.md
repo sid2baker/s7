@@ -9,6 +9,8 @@ Changes currently targeted for `0.1.0` are listed below.
 
 ### Changed
 
+- Extended the supported BEAM matrix through Elixir 1.20.3 and Erlang/OTP
+  29.0.5, and moved quality, release, and soak CI to that toolchain.
 - Moved the public facade from `S7.Client` to `S7`, without a compatibility
   module, so connection lifecycle and operations are available directly as
   `S7.connect/2`, `S7.read/2`, `S7.write/3`, and `S7.close/2`.

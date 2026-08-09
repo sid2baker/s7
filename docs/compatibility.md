@@ -8,7 +8,8 @@ The supported CI matrix is:
 | --- | --- | --- |
 | 1.17.3 | 26.2.5.21 | Minimum supported toolchain |
 | 1.18.4 | 27.3.4.16 | Intermediate supported toolchain |
-| 1.19.5 | 28.5 | Current supported toolchain |
+| 1.19.5 | 28.5.0.5 | Intermediate supported toolchain |
+| 1.20.3 | 29.0.5 | Current supported toolchain |
 
 `mix.exs` accepts Elixir `>= 1.17.0 and < 2.0.0`. A new Elixir or OTP major is
 not supported until it has a green matrix entry. The library has one runtime

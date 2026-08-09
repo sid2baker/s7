@@ -20,8 +20,8 @@ jobs:
       - name: Set up Erlang and Elixir
         uses: erlef/setup-beam@v1
         with:
-          otp-version: "28.1"
-          elixir-version: "1.19.1"
+          otp-version: "29.0.5"
+          elixir-version: "1.20.3"
 
       - name: Restore build cache
         uses: actions/cache@v4
@@ -29,7 +29,7 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-soak-otp-28.1-elixir-1.19.1-${{ hashFiles('mix.lock') }}
+          key: ${{ runner.os }}-soak-otp-29.0.5-elixir-1.20.3-${{ hashFiles('mix.lock') }}
 
       - name: Install dependencies
         run: mix deps.get
