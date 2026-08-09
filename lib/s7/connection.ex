@@ -3,7 +3,7 @@ defmodule S7.Connection do
   Stateful S7 connection process.
 
   This `:gen_statem` owns the TCP socket, queues callers, and correlates active
-  requests by S7 PDU reference. Callers interact through `S7.Client`; protocol
+  requests by S7 PDU reference. Callers interact through `S7`; protocol
   modules remain independent of this lifecycle layer.
   """
 

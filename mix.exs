@@ -121,7 +121,6 @@ defmodule S7.MixProject do
       groups_for_modules: [
         "Public API": [
           S7,
-          S7.Client,
           S7.Address,
           S7.Alarm.Acknowledgement,
           S7.Alarm.Acknowledgement.Result,

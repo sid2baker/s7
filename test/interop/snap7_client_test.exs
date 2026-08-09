@@ -7,7 +7,6 @@ defmodule S7.Snap7ClientInteropTest do
     Address,
     Alarm,
     Block,
-    Client,
     Error,
     PLC,
     Result,
@@ -22,25 +21,25 @@ defmodule S7.Snap7ClientInteropTest do
     port = System.fetch_env!("S7_TEST_PORT") |> String.to_integer()
 
     {:ok, client} =
-      Client.connect(host,
+      S7.connect(host,
         port: port,
         timeout: 2_000,
         max_jobs: 4,
         allow_destructive: true
       )
 
-    on_exit(fn -> Client.close(client) end)
+    on_exit(fn -> S7.close(client) end)
     {:ok, client: client}
   end
 
   test "negotiates and reads and writes every v0.1 area and scalar type", %{client: client} do
-    assert %{state: :ready, pdu_size: 480, max_jobs: 4} = Client.info(client)
-    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
-    assert Client.read(client, "I0.7") == {:ok, true}
+    assert %{state: :ready, pdu_size: 480, max_jobs: 4} = S7.info(client)
+    assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert S7.read(client, "I0.7") == {:ok, true}
 
     concurrent_reads =
       for _index <- 1..4 do
-        Task.async(fn -> Client.read(client, "DB1.DBW0") end)
+        Task.async(fn -> S7.read(client, "DB1.DBW0") end)
       end
 
     assert Enum.map(concurrent_reads, &Task.await/1) == List.duplicate({:ok, 1234}, 4)
@@ -61,8 +60,8 @@ defmodule S7.Snap7ClientInteropTest do
     ]
 
     for {address, value} <- values do
-      assert Client.write(client, address, value) == :ok
-      assert Client.read(client, address) == {:ok, value}
+      assert S7.write(client, address, value) == :ok
+      assert S7.read(client, address) == {:ok, value}
     end
 
     typed_values = [
@@ -72,17 +71,17 @@ defmodule S7.Snap7ClientInteropTest do
     ]
 
     for {address, value} <- typed_values do
-      assert Client.write(client, address, value) == :ok
-      assert Client.read(client, address) == {:ok, value}
+      assert S7.write(client, address, value) == :ok
+      assert S7.read(client, address) == {:ok, value}
     end
 
     words = %Address{area: :db, db_number: 1, byte_offset: 100, data_type: :word, count: 3}
-    assert Client.write(client, words, [1, 0x1234, 0xFFFF]) == :ok
-    assert Client.read(client, words) == {:ok, [1, 0x1234, 0xFFFF]}
+    assert S7.write(client, words, [1, 0x1234, 0xFFFF]) == :ok
+    assert S7.read(client, words) == {:ok, [1, 0x1234, 0xFFFF]}
 
     bytes = %Address{area: :db, db_number: 1, byte_offset: 120, data_type: :byte, count: 5}
-    assert Client.write_raw(client, bytes, <<1, 2, 3, 4, 5>>) == :ok
-    assert Client.read_raw(client, bytes) == {:ok, <<1, 2, 3, 4, 5>>}
+    assert S7.write_raw(client, bytes, <<1, 2, 3, 4, 5>>) == :ok
+    assert S7.read_raw(client, bytes) == {:ok, <<1, 2, 3, 4, 5>>}
 
     writes =
       for offset <- 300..349 do
@@ -90,35 +89,35 @@ defmodule S7.Snap7ClientInteropTest do
         {address, rem(offset, 256)}
       end
 
-    assert {:ok, write_results} = Client.write_multi(client, writes)
+    assert {:ok, write_results} = S7.write_multi(client, writes)
     assert Enum.all?(write_results, &match?(%Result{status: :ok}, &1))
 
     addresses = Enum.map(writes, &elem(&1, 0))
-    assert {:ok, read_results} = Client.read_multi(client, addresses)
+    assert {:ok, read_results} = S7.read_multi(client, addresses)
     assert Enum.map(read_results, & &1.value) == Enum.map(writes, &elem(&1, 1))
   end
 
   test "reads raw and typed classic SZL metadata", %{client: client} do
     assert {:ok, %SZL{id: 0x0011, record_length: 28, record_count: count}} =
-             Client.read_szl(client, 0x0011)
+             S7.read_szl(client, 0x0011)
 
     assert count > 0
-    assert {:ok, ids} = Client.list_szl(client)
+    assert {:ok, ids} = S7.list_szl(client)
     assert 0x0011 in ids
     assert 0x001C in ids
 
-    assert {:ok, %PLC.OrderCode{code: code}} = Client.order_code(client)
+    assert {:ok, %PLC.OrderCode{code: code}} = S7.order_code(client)
     assert code != ""
-    assert {:ok, %PLC.CPUInfo{module_type_name: module_type}} = Client.cpu_info(client)
+    assert {:ok, %PLC.CPUInfo{module_type_name: module_type}} = S7.cpu_info(client)
     assert is_binary(module_type)
-    assert {:ok, %PLC.CPInfo{max_pdu_length: max_pdu}} = Client.cp_info(client)
+    assert {:ok, %PLC.CPInfo{max_pdu_length: max_pdu}} = S7.cp_info(client)
     assert max_pdu > 0
-    assert {:ok, %PLC.Status{state: state}} = Client.plc_status(client)
+    assert {:ok, %PLC.Status{state: state}} = S7.plc_status(client)
     assert state in [:run, :stop, :unknown]
   end
 
   test "reads the classic block directory and DB metadata", %{client: client} do
-    assert {:ok, %Block.Inventory{counts: %{db: 1}}} = Client.block_counts(client)
+    assert {:ok, %Block.Inventory{counts: %{db: 1}}} = S7.block_counts(client)
 
     assert {:ok,
             [
@@ -127,7 +126,7 @@ defmodule S7.Snap7ClientInteropTest do
                 language: :db,
                 flags: 0x22
               }
-            ]} = Client.list_blocks(client, :db)
+            ]} = S7.list_blocks(client, :db)
 
     assert {:ok,
             %Block.Info{
@@ -136,59 +135,59 @@ defmodule S7.Snap7ClientInteropTest do
               linked?: true,
               mc7_size: 512,
               load_memory_size: 604
-            }} = Client.block_info(client, :db, 1)
+            }} = S7.block_info(client, :db, 1)
   end
 
   test "sets the classic clock and changes session authorization", %{client: client} do
-    assert Client.set_clock(client, ~N[2024-08-09 12:34:56.000]) == :ok
+    assert S7.set_clock(client, ~N[2024-08-09 12:34:56.000]) == :ok
 
-    assert %{authenticated: false} = Client.info(client)
-    assert Client.authenticate(client, "TESTONLY") == :ok
-    assert %{authenticated: true} = Client.info(client)
-    assert Client.logout(client) == :ok
-    assert %{authenticated: false} = Client.info(client)
+    assert %{authenticated: false} = S7.info(client)
+    assert S7.authenticate(client, "TESTONLY") == :ok
+    assert %{authenticated: true} = S7.info(client)
+    assert S7.logout(client) == :ok
+    assert %{authenticated: false} = S7.info(client)
   end
 
   test "reports the pinned server's explicit upload protection without losing the session", %{
     client: client
   } do
     assert {:error, %Error{reason: :access_denied, code: 0xD241}} =
-             Client.upload_block(client, :db, 1)
+             S7.upload_block(client, :db, 1)
 
-    assert %{state: :ready, exclusive_transaction: false} = Client.info(client)
-    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 
   test "bounds the pinned server's silent programmer-service drop", %{client: client} do
     assert {:error, %Error{reason: :transaction_timeout}} =
-             Client.variable_status(client, ["MB0"], timeout: 200, step_timeout: 200)
+             S7.variable_status(client, ["MB0"], timeout: 200, step_timeout: 200)
 
     assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
-             Client.info(client)
+             S7.info(client)
   end
 
   test "bounds the pinned server's silent cyclic-service drop", %{client: client} do
     assert {:error, %Error{reason: :transaction_timeout}} =
-             Client.subscribe_cyclic(client, ["MB0"], timeout: 200, step_timeout: 200)
+             S7.subscribe_cyclic(client, ["MB0"], timeout: 200, step_timeout: 200)
 
     assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
-             Client.info(client)
+             S7.info(client)
   end
 
   test "rejects the pinned server's malformed alarm-subscription response", %{client: client} do
     assert {:error, %Error{reason: :malformed_response}} =
-             Client.subscribe_alarms(client, :alarm_8, timeout: 200, step_timeout: 200)
+             S7.subscribe_alarms(client, :alarm_8, timeout: 200, step_timeout: 200)
 
     assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
-             Client.info(client)
+             S7.info(client)
   end
 
   test "decodes the pinned server's alarm-query rejection", %{client: client} do
     assert {:error, %Error{reason: :userdata_error, code: 0xD402}} =
-             Client.query_alarms(client, :alarm_8)
+             S7.query_alarms(client, :alarm_8)
 
-    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} = Client.info(client)
-    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} = S7.info(client)
+    assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 
   test "decodes the pinned server's alarm acknowledgment rejection", %{client: client} do
@@ -204,13 +203,13 @@ defmodule S7.Snap7ClientInteropTest do
               code: 0xD402,
               details: %{outcome: :rejected}
             }} =
-             Client.acknowledge_alarm(client, acknowledgement,
+             S7.acknowledge_alarm(client, acknowledgement,
                timeout: 200,
                step_timeout: 200
              )
 
-    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} = Client.info(client)
-    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} = S7.info(client)
+    assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 
   test "decodes download protection and emits a PI block-control request", %{client: client} do
@@ -221,32 +220,32 @@ defmodule S7.Snap7ClientInteropTest do
               reason: :access_denied,
               code: 0xD241,
               details: %{outcome: :rejected, stage: :request_download}
-            }} = Client.download_block(client, image, confirm: :download_block)
+            }} = S7.download_block(client, image, confirm: :download_block)
 
-    assert Client.delete_block(client, :db, 65_000, confirm: :delete_block) == :ok
-    assert %{state: :ready, exclusive_transaction: false} = Client.info(client)
-    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert S7.delete_block(client, :db, 65_000, confirm: :delete_block) == :ok
+    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 
   test "controls the disposable server CPU and runs bounded maintenance services", %{
     client: client
   } do
-    assert Client.stop_cpu(client, confirm: :stop_cpu) == :ok
-    assert {:ok, %PLC.Status{state: :stop}} = Client.plc_status(client)
+    assert S7.stop_cpu(client, confirm: :stop_cpu) == :ok
+    assert {:ok, %PLC.Status{state: :stop}} = S7.plc_status(client)
 
-    assert Client.warm_start_cpu(client, confirm: :warm_start_cpu) == :ok
-    assert {:ok, %PLC.Status{state: :run}} = Client.plc_status(client)
+    assert S7.warm_start_cpu(client, confirm: :warm_start_cpu) == :ok
+    assert {:ok, %PLC.Status{state: :run}} = S7.plc_status(client)
 
-    assert Client.stop_cpu(client, confirm: :stop_cpu) == :ok
-    assert Client.cold_start_cpu(client, confirm: :cold_start_cpu) == :ok
-    assert {:ok, %PLC.Status{state: :run}} = Client.plc_status(client)
+    assert S7.stop_cpu(client, confirm: :stop_cpu) == :ok
+    assert S7.cold_start_cpu(client, confirm: :cold_start_cpu) == :ok
+    assert {:ok, %PLC.Status{state: :run}} = S7.plc_status(client)
 
-    assert Client.stop_cpu(client, confirm: :stop_cpu) == :ok
-    assert Client.copy_ram_to_rom(client, confirm: :copy_ram_to_rom) == :ok
-    assert Client.compress_memory(client, confirm: :compress_memory) == :ok
+    assert S7.stop_cpu(client, confirm: :stop_cpu) == :ok
+    assert S7.copy_ram_to_rom(client, confirm: :copy_ram_to_rom) == :ok
+    assert S7.compress_memory(client, confirm: :compress_memory) == :ok
 
-    assert %{state: :ready, exclusive_transaction: false} = Client.info(client)
-    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 
   defp captured_download_image do

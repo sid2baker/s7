@@ -32,24 +32,24 @@ classic alarms. Alarm success paths remain subject to named physical-device qual
 
 ```elixir
 {:ok, client} =
-  S7.Client.connect("192.168.1.10",
+  S7.connect("192.168.1.10",
     rack: 0,
     slot: 2
   )
 
-{:ok, current} = S7.Client.read(client, "DB1.DBW0")
-:ok = S7.Client.write(client, "DB1.DBW0", current + 1)
-{:ok, raw} = S7.Client.read_raw(client, "DB1.DBW0")
-{:ok, %S7.PLC.OrderCode{code: order_code}} = S7.Client.order_code(client)
-{:ok, dbs} = S7.Client.list_blocks(client, :db)
-{:ok, %S7.PLC.Clock{datetime: plc_time}} = S7.Client.read_clock(client)
+{:ok, current} = S7.read(client, "DB1.DBW0")
+:ok = S7.write(client, "DB1.DBW0", current + 1)
+{:ok, raw} = S7.read_raw(client, "DB1.DBW0")
+{:ok, %S7.PLC.OrderCode{code: order_code}} = S7.order_code(client)
+{:ok, dbs} = S7.list_blocks(client, :db)
+{:ok, %S7.PLC.Clock{datetime: plc_time}} = S7.read_clock(client)
 {:ok, %S7.Programmer.VariableStatus{items: status_items}} =
-  S7.Client.variable_status(client, ["MB0", "DB1.DBW0"])
-{:ok, cyclic} = S7.Client.subscribe_cyclic(client, ["DB1.DBW0"], interval: 1_000)
+  S7.variable_status(client, ["MB0", "DB1.DBW0"])
+{:ok, cyclic} = S7.subscribe_cyclic(client, ["DB1.DBW0"], interval: 1_000)
 {:ok, %S7.Cyclic.Event{items: [%S7.Cyclic.Event.Item{value: next_value}]}} =
-  S7.Client.next_cyclic(client, cyclic)
-:ok = S7.Client.unsubscribe_cyclic(client, cyclic)
-:ok = S7.Client.close(client)
+  S7.next_cyclic(client, cyclic)
+:ok = S7.unsubscribe_cyclic(client, cyclic)
+:ok = S7.close(client)
 ```
 
 Counted addresses return lists from typed reads and accept lists for typed writes:
@@ -63,9 +63,9 @@ words = %S7.Address{
   count: 4
 }
 
-:ok = S7.Client.write(client, words, [1, 2, 3, 4])
-{:ok, [1, 2, 3, 4]} = S7.Client.read(client, words)
-{:ok, <<0, 1, 0, 2, 0, 3, 0, 4>>} = S7.Client.read_raw(client, words)
+:ok = S7.write(client, words, [1, 2, 3, 4])
+{:ok, [1, 2, 3, 4]} = S7.read(client, words)
+{:ok, <<0, 1, 0, 2, 0, 3, 0, 4>>} = S7.read_raw(client, words)
 ```
 
 The client returned by `connect/2` is the PID that owns the socket. All public failures use
@@ -98,7 +98,7 @@ The client returned by `connect/2` is the PID that owns the socket. All public f
 | `:subscription_limit` | `16` | Maximum session-local userdata indication subscriptions |
 | `:allow_destructive` | `false` | Enables destructive APIs; every call still requires its exact confirmation atom |
 
-The PLC may negotiate smaller PDU or job limits. `S7.Client.info/1` reports negotiated limits,
+The PLC may negotiate smaller PDU or job limits. `S7.info/1` reports negotiated limits,
 the next reference, and current queue/in-flight counts. The default remains one job for broad PLC
 compatibility; opt into concurrency with `max_jobs: n` only when the peer supports it.
 
@@ -108,7 +108,7 @@ Use `start_link/1` under a supervisor when the client must retain a stable PID o
 
 ```elixir
 children = [
-  {S7.Client,
+  {S7,
    host: "192.168.1.10",
    name: MyApp.PLC,
    rack: 0,
@@ -121,7 +121,7 @@ Supervisor.start_link(children, strategy: :one_for_one)
 
 An unavailable supervised client with reconnect enabled starts in `:reconnecting`. Backoff is
 bounded and reset after a successful Setup Communication exchange. Session loss fails all accepted
-calls before reconnecting; requests and writes are never replayed. `S7.Client.reconnect/1` starts a
+calls before reconnecting; requests and writes are never replayed. `S7.reconnect/1` starts a
 fresh explicit attempt after a configured attempt cap is reached.
 
 Immediate close remains the default. It fails accepted work, sends a COTP
@@ -130,7 +130,7 @@ Disconnect Confirm or TCP close before forcing socket closure. To finish
 accepted work before that exchange while rejecting new calls:
 
 ```elixir
-:ok = S7.Client.close(client, mode: :drain, timeout: 5_000)
+:ok = S7.close(client, mode: :drain, timeout: 5_000)
 ```
 
 ## Addresses And Values
@@ -160,7 +160,7 @@ temperature = %S7.Address{
   data_type: :real
 }
 
-{:ok, 12.5} = S7.Client.read(client, temperature)
+{:ok, 12.5} = S7.read(client, temperature)
 ```
 
 The address model also supports peripheral, instance DB, local, previous-local,
@@ -178,17 +178,17 @@ an explicit address to opt into a native S7ANY date/time code.
 Wire conversion is independently available through `S7.Data.encode/2`,
 `S7.Data.encode/3`, `S7.Data.decode/2`, and `S7.Data.decode/3`.
 
-`S7.Client.write_raw/3` accepts an already encoded binary whose size exactly matches the address
+`S7.write_raw/3` accepts an already encoded binary whose size exactly matches the address
 type and count. Raw access does not bypass address validation or negotiated PDU limits.
 
 Multi-item operations preserve input order and split automatically:
 
 ```elixir
-{:ok, results} = S7.Client.read_multi(client, ["DB1.DBW0", "MW10", "IW0"])
+{:ok, results} = S7.read_multi(client, ["DB1.DBW0", "MW10", "IW0"])
 values = Enum.map(results, &{&1.status, &1.value})
 
 {:ok, results} =
-  S7.Client.write_multi(client, [
+  S7.write_multi(client, [
     {"DB1.DBW0", 123},
     {"MW10", 456}
   ])
@@ -203,15 +203,15 @@ Raw SZL reads preserve record boundaries and bytes while validating the PLC's de
 
 ```elixir
 {:ok, %S7.SZL{record_length: length, records: records}} =
-  S7.Client.read_szl(client, 0x0011, 0,
+  S7.read_szl(client, 0x0011, 0,
     max_bytes: 1_048_576,
     max_fragments: 64
   )
 
-{:ok, ids} = S7.Client.list_szl(client)
-{:ok, %S7.PLC.CPUInfo{} = cpu} = S7.Client.cpu_info(client)
-{:ok, %S7.PLC.CPInfo{} = communication} = S7.Client.cp_info(client)
-{:ok, %S7.PLC.Status{state: :run}} = S7.Client.plc_status(client)
+{:ok, ids} = S7.list_szl(client)
+{:ok, %S7.PLC.CPUInfo{} = cpu} = S7.cpu_info(client)
+{:ok, %S7.PLC.CPInfo{} = communication} = S7.cp_info(client)
+{:ok, %S7.PLC.Status{state: :run}} = S7.plc_status(client)
 ```
 
 The order-code, component-identification, communication-limit, and status helpers decode known
@@ -225,16 +225,16 @@ block images:
 
 ```elixir
 {:ok, %S7.Block.Inventory{counts: %{db: db_count}}} =
-  S7.Client.block_counts(client)
+  S7.block_counts(client)
 
 {:ok, [%S7.Block.Entry{} | _] = dbs} =
-  S7.Client.list_blocks(client, :db,
+  S7.list_blocks(client, :db,
     max_bytes: 1_048_576,
     max_fragments: 64
   )
 
 {:ok, %S7.Block.Info{name: name, mc7_size: size}} =
-  S7.Client.block_info(client, :db, 1)
+  S7.block_info(client, :db, 1)
 ```
 
 `list_blocks/3` assembles the PLC's continuation sequence under aggregate byte and fragment
@@ -249,13 +249,13 @@ Classic block upload retrieves one complete load-memory image through an exclusi
 
 ```elixir
 {:ok, %S7.Block.Image{} = image} =
-  S7.Client.upload_block(client, :db, 1,
+  S7.upload_block(client, :db, 1,
     max_bytes: 1_048_576,
     max_fragments: 64,
     timeout: 30_000
   )
 
-{:ok, raw_image} = S7.Client.upload_block_raw(client, %S7.Block{type: :db, number: 1})
+{:ok, raw_image} = S7.upload_block_raw(client, %S7.Block{type: :db, number: 1})
 ```
 
 The parsed image retains every original byte, validates the requested block identity and declared
@@ -276,24 +276,24 @@ default. Both the connection capability and the operation-specific confirmation 
 
 ```elixir
 {:ok, maintenance_client} =
-  S7.Client.connect("192.168.1.10",
+  S7.connect("192.168.1.10",
     rack: 0,
     slot: 2,
     allow_destructive: true
   )
 
 :ok =
-  S7.Client.download_block(maintenance_client, image,
+  S7.download_block(maintenance_client, image,
     confirm: :download_block
   )
 
 :ok =
-  S7.Client.replace_block(maintenance_client, replacement,
+  S7.replace_block(maintenance_client, replacement,
     confirm: :replace_block
   )
 
 :ok =
-  S7.Client.delete_block(maintenance_client, :db, 1,
+  S7.delete_block(maintenance_client, :db, 1,
     confirm: :delete_block
   )
 ```
@@ -316,13 +316,13 @@ CPU control uses a short exclusive transaction and the same two-level policy as 
 Each action has a distinct confirmation atom:
 
 ```elixir
-:ok = S7.Client.stop_cpu(maintenance_client, confirm: :stop_cpu)
-:ok = S7.Client.warm_start_cpu(maintenance_client, confirm: :warm_start_cpu)
-:ok = S7.Client.cold_start_cpu(maintenance_client, confirm: :cold_start_cpu)
+:ok = S7.stop_cpu(maintenance_client, confirm: :stop_cpu)
+:ok = S7.warm_start_cpu(maintenance_client, confirm: :warm_start_cpu)
+:ok = S7.cold_start_cpu(maintenance_client, confirm: :cold_start_cpu)
 
 # These operations commonly require the CPU to be in STOP.
-:ok = S7.Client.copy_ram_to_rom(maintenance_client, confirm: :copy_ram_to_rom)
-:ok = S7.Client.compress_memory(maintenance_client, confirm: :compress_memory)
+:ok = S7.copy_ram_to_rom(maintenance_client, confirm: :copy_ram_to_rom)
+:ok = S7.compress_memory(maintenance_client, confirm: :compress_memory)
 ```
 
 All calls accept bounded `:timeout` and `:step_timeout` options. A complete PLC rejection returns
@@ -335,8 +335,8 @@ session. The client never replays CPU control after reconnect.
 Classic PLC clock values are timezone-free local civil time:
 
 ```elixir
-{:ok, %S7.PLC.Clock{datetime: current}} = S7.Client.read_clock(client)
-:ok = S7.Client.set_clock(client, ~N[2030-02-03 04:05:06.789])
+{:ok, %S7.PLC.Clock{datetime: current}} = S7.read_clock(client)
+:ok = S7.set_clock(client, ~N[2030-02-03 04:05:06.789])
 ```
 
 `set_clock/2` is state-changing and is never replayed after an ambiguous outcome. The returned
@@ -347,8 +347,8 @@ Classic protected-session login changes authorization for the current connection
 
 ```elixir
 password = System.fetch_env!("S7_PASSWORD")
-:ok = S7.Client.authenticate(client, password)
-:ok = S7.Client.logout(client)
+:ok = S7.authenticate(client, password)
+:ok = S7.logout(client)
 ```
 
 Passwords are one to eight printable ASCII bytes. Authentication is an ordering barrier: earlier
@@ -363,14 +363,14 @@ Read Var:
 
 ```elixir
 {:ok, subscription} =
-  S7.Client.subscribe_cyclic(client, ["MW10", "DB1.DBD20"],
+  S7.subscribe_cyclic(client, ["MW10", "DB1.DBD20"],
     interval: 1_000,
     queue_limit: 32
   )
 
 initial_snapshot = subscription.initial
-{:ok, %S7.Cyclic.Event{items: items}} = S7.Client.next_cyclic(client, subscription)
-:ok = S7.Client.unsubscribe_cyclic(client, subscription)
+{:ok, %S7.Cyclic.Event{items: items}} = S7.next_cyclic(client, subscription)
+:ok = S7.unsubscribe_cyclic(client, subscription)
 ```
 
 Intervals must be represented exactly by the classic 100 ms, 1 s, or 10 s wire bases; the client
@@ -390,19 +390,19 @@ wire record and CPU-specific associated value:
 
 ```elixir
 {:ok, alarms} =
-  S7.Client.subscribe_alarms(client, :alarm_8,
+  S7.subscribe_alarms(client, :alarm_8,
     queue_limit: 64
   )
 
 {:ok, %S7.Alarm.Event{objects: [object | _]} = event} =
-  S7.Client.next_alarm(client, alarms)
+  S7.next_alarm(client, alarms)
 
 {:ok, %S7.Alarm.Query{records: records}} =
-  S7.Client.query_alarms(client, :alarm_8)
+  S7.query_alarms(client, :alarm_8)
 
-:ok = S7.Client.acknowledge_alarm(client, object)
-{:ok, results} = S7.Client.acknowledge_alarms(client, event)
-:ok = S7.Client.unsubscribe_alarms(client, alarms)
+:ok = S7.acknowledge_alarm(client, object)
+{:ok, results} = S7.acknowledge_alarms(client, event)
+:ok = S7.unsubscribe_alarms(client, alarms)
 ```
 
 Use `:alarm_s` for the S7-300-style path and `:alarm_8` for the S7-400-style path. Events are
@@ -415,7 +415,7 @@ Query records and associated values preserve raw bytes for CPU-family-specific v
 ## Architecture
 
 ```text
-S7.Client
+S7
   -> S7.Connection (:gen_statem, active-once :gen_tcp owner)
     -> bounded queue / PDU-reference correlation / request timers / reconnect backoff
     -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL, Blocks, BlockUpload, BlockDownload, PIService, Clock, Security, Programmer, Cyclic, Alarm}

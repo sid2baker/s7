@@ -4,7 +4,7 @@ defmodule S7.Protocol.PIService do
 
   The currently modeled block actions activate a downloaded passive image or
   remove a block. Both operations are destructive and policy is enforced by
-  `S7.Client`, not by this wire codec.
+  `S7`, not by this wire codec.
   """
 
   alias S7.{Block, Error}

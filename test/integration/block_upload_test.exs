@@ -1,7 +1,7 @@
 defmodule S7.BlockUploadIntegrationTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Block, Client, Error}
+  alias S7.{Block, Error}
   alias S7.Protocol.PDU
   alias S7.Test.{Fixture, MockPLC}
 
@@ -11,14 +11,14 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:ok, %Block.Image{block: %Block{type: :sdb, number: 0}, raw: ^raw}} =
-             Client.upload_block(client, block(), max_fragments: 8)
+             S7.upload_block(client, block(), max_fragments: 8)
 
-    assert Client.upload_block_raw(client, :sdb, 0, max_fragments: 8) == {:ok, raw}
+    assert S7.upload_block_raw(client, :sdb, 0, max_fragments: 8) == {:ok, raw}
 
     assert %{state: :ready, exclusive_transaction: false, in_flight_requests: 0} =
-             Client.info(client)
+             S7.info(client)
 
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
   end
 
   test "reserves the connection and bounds callers waiting behind an upload" do
@@ -31,21 +31,21 @@ defmodule S7.BlockUploadIntegrationTest do
       )
 
     assert {:ok, client} = connect(server, queue_limit: 1)
-    upload = Task.async(fn -> Client.upload_block(client, block()) end)
+    upload = Task.async(fn -> S7.upload_block(client, block()) end)
     assert_receive {:mock_plc_request, :upload_segment, _reference}, 500
 
-    read = Task.async(fn -> Client.read(client, "DB1.DBW0") end)
+    read = Task.async(fn -> S7.read(client, "DB1.DBW0") end)
     assert %{exclusive_transaction: true, queued_requests: 1} = await_queue(client, 1)
     refute_receive {:mock_plc_request, :read, _reference}, 30
 
     assert {:error, %Error{reason: :queue_full, details: %{limit: 1}}} =
-             Client.read(client, "DB1.DBW0")
+             S7.read(client, "DB1.DBW0")
 
     assert {:ok, %Block.Image{}} = Task.await(upload)
     assert Task.await(read) == {:ok, 1234}
     assert_receive {:mock_plc_request, :upload_end, _reference}, 500
     assert_receive {:mock_plc_request, :read, _reference}, 500
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
   end
 
   test "keeps the session usable after an initial PLC rejection" do
@@ -59,11 +59,11 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:error, %Error{reason: :access_denied, code: 0xD241}} =
-             Client.upload_block(client, block())
+             S7.upload_block(client, block())
 
-    assert %{state: :ready, exclusive_transaction: false} = Client.info(client)
-    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
-    assert Client.close(client) == :ok
+    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert S7.close(client) == :ok
   end
 
   test "ends the remote upload cleanly when local byte or fragment bounds are reached" do
@@ -80,13 +80,13 @@ defmodule S7.BlockUploadIntegrationTest do
             %Error{
               reason: :block_upload_too_large,
               details: %{size: 216, limit: 100}
-            }} = Client.upload_block(size_client, block(), max_bytes: 100)
+            }} = S7.upload_block(size_client, block(), max_bytes: 100)
 
     assert_receive {:mock_plc_request, :upload_start, _reference}, 500
     assert_receive {:mock_plc_request, :upload_end, _reference}, 500
     refute_receive {:mock_plc_request, :upload_segment, _reference}, 30
-    assert Client.read(size_client, "DB1.DBW0") == {:ok, 1234}
-    assert Client.close(size_client) == :ok
+    assert S7.read(size_client, "DB1.DBW0") == {:ok, 1234}
+    assert S7.close(size_client) == :ok
 
     fragment_server =
       start_server(
@@ -99,12 +99,12 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:ok, fragment_client} = connect(fragment_server)
 
     assert {:error, %Error{reason: :too_many_upload_fragments, details: %{limit: 1}}} =
-             Client.upload_block(fragment_client, block(), max_fragments: 1)
+             S7.upload_block(fragment_client, block(), max_fragments: 1)
 
     assert_receive {:mock_plc_request, :upload_segment, _reference}, 500
     assert_receive {:mock_plc_request, :upload_end, _reference}, 500
-    assert Client.read(fragment_client, "DB1.DBW0") == {:ok, 1234}
-    assert Client.close(fragment_client) == :ok
+    assert S7.read(fragment_client, "DB1.DBW0") == {:ok, 1234}
+    assert S7.close(fragment_client) == :ok
   end
 
   test "invalidates ambiguous malformed and disconnected upload sessions" do
@@ -118,10 +118,10 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:ok, malformed_client} = connect(malformed_server)
 
     assert {:error, %Error{reason: :malformed_response}} =
-             Client.upload_block(malformed_client, block())
+             S7.upload_block(malformed_client, block())
 
-    assert %{state: :disconnected, exclusive_transaction: false} = Client.info(malformed_client)
-    assert Client.close(malformed_client) == :ok
+    assert %{state: :disconnected, exclusive_transaction: false} = S7.info(malformed_client)
+    assert S7.close(malformed_client) == :ok
 
     disconnected_server =
       start_server(
@@ -132,13 +132,13 @@ defmodule S7.BlockUploadIntegrationTest do
 
     assert {:ok, disconnected_client} = connect(disconnected_server)
 
-    assert {:error, %Error{reason: reason}} = Client.upload_block(disconnected_client, block())
+    assert {:error, %Error{reason: reason}} = S7.upload_block(disconnected_client, block())
     assert reason in [:connection_closed, :remote_disconnect]
 
     assert %{state: :disconnected, exclusive_transaction: false} =
-             Client.info(disconnected_client)
+             S7.info(disconnected_client)
 
-    assert Client.close(disconnected_client) == :ok
+    assert S7.close(disconnected_client) == :ok
   end
 
   test "invalidates malformed start/end envelopes and bounded step timeouts" do
@@ -155,12 +155,12 @@ defmodule S7.BlockUploadIntegrationTest do
       step_timeout = if fault == :segment_silence, do: 20, else: 200
 
       assert {:error, %Error{reason: reason}} =
-               Client.upload_block(client, block(), step_timeout: step_timeout)
+               S7.upload_block(client, block(), step_timeout: step_timeout)
 
       expected_reason = if fault == :segment_silence, do: :timeout, else: :malformed_response
       assert reason == expected_reason
-      assert %{state: :disconnected, exclusive_transaction: false} = Client.info(client)
-      assert Client.close(client) == :ok
+      assert %{state: :disconnected, exclusive_transaction: false} = S7.info(client)
+      assert S7.close(client) == :ok
     end
   end
 
@@ -170,12 +170,12 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:error, %Error{reason: :malformed_block_image}} =
-             Client.upload_block(client, block())
+             S7.upload_block(client, block())
 
-    assert %{state: :ready, exclusive_transaction: false} = Client.info(client)
-    assert Client.upload_block_raw(client, block()) == {:ok, raw}
-    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
-    assert Client.close(client) == :ok
+    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert S7.upload_block_raw(client, block()) == {:ok, raw}
+    assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert S7.close(client) == :ok
   end
 
   test "disconnects if the upload owner dies mid-transaction" do
@@ -188,29 +188,29 @@ defmodule S7.BlockUploadIntegrationTest do
       )
 
     assert {:ok, client} = connect(server)
-    caller = spawn(fn -> Client.upload_block(client, block()) end)
+    caller = spawn(fn -> S7.upload_block(client, block()) end)
     assert_receive {:mock_plc_request, :upload_segment, _reference}, 500
     Process.exit(caller, :kill)
 
     assert %{state: :disconnected, exclusive_transaction: false} =
              await_state(client, :disconnected)
 
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
   end
 
   test "rejects invalid blocks and options before reserving the connection" do
     server = start_server()
     assert {:ok, client} = connect(server)
 
-    assert {:error, %Error{reason: :invalid_block}} = Client.upload_block(client, :invalid, 1)
+    assert {:error, %Error{reason: :invalid_block}} = S7.upload_block(client, :invalid, 1)
 
     assert {:error, %Error{reason: :invalid_option}} =
-             Client.upload_block(client, block(), max_bytes: 0)
+             S7.upload_block(client, block(), max_bytes: 0)
 
     assert %{state: :ready, exclusive_transaction: false, queued_requests: 0} =
-             Client.info(client)
+             S7.info(client)
 
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
   end
 
   defp captured_image do
@@ -229,7 +229,7 @@ defmodule S7.BlockUploadIntegrationTest do
   end
 
   defp connect(server, opts \\ []) do
-    Client.connect(
+    S7.connect(
       {127, 0, 0, 1},
       Keyword.merge([port: server.port, timeout: 1_000], opts)
     )
@@ -247,7 +247,7 @@ defmodule S7.BlockUploadIntegrationTest do
   defp await_info(client, predicate, attempts \\ 100)
 
   defp await_info(client, predicate, attempts) when attempts > 0 do
-    info = Client.info(client)
+    info = S7.info(client)
 
     if predicate.(info) do
       info
@@ -257,5 +257,5 @@ defmodule S7.BlockUploadIntegrationTest do
     end
   end
 
-  defp await_info(client, _predicate, 0), do: Client.info(client)
+  defp await_info(client, _predicate, 0), do: S7.info(client)
 end

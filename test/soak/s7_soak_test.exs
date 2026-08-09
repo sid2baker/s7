@@ -1,9 +1,8 @@
-defmodule S7.ClientSoakTest do
+defmodule S7.SoakTest do
   use ExUnit.Case, async: false
 
   @moduletag :soak
 
-  alias S7.Client
   alias S7.Test.MockPLC
 
   test "sustains bounded concurrent traffic without retaining request state" do
@@ -19,7 +18,7 @@ defmodule S7.ClientSoakTest do
     on_exit(fn -> MockPLC.stop(server) end)
 
     assert {:ok, client} =
-             Client.connect({127, 0, 0, 1},
+             S7.connect({127, 0, 0, 1},
                port: server.port,
                max_jobs: 8,
                queue_limit: 64,
@@ -39,23 +38,23 @@ defmodule S7.ClientSoakTest do
       |> Enum.frequencies()
 
     assert results == %{{:ok, :ok} => iterations}
-    assert %{in_flight_requests: 0, queued_requests: 0, state: :ready} = Client.info(client)
+    assert %{in_flight_requests: 0, queued_requests: 0, state: :ready} = S7.info(client)
 
     :erlang.garbage_collect(client)
     assert process_memory(client) <= baseline_memory + 1_000_000
     assert {:message_queue_len, 0} = Process.info(client, :message_queue_len)
-    assert Client.close(client, mode: :drain) == :ok
+    assert S7.close(client, mode: :drain) == :ok
   end
 
   defp operation(client, iteration) when rem(iteration, 2) == 0 do
-    case Client.read(client, "DB1.DBW0") do
+    case S7.read(client, "DB1.DBW0") do
       {:ok, 1234} -> :ok
       result -> result
     end
   end
 
   defp operation(client, iteration) do
-    Client.write(client, "MB40", rem(iteration, 0x100))
+    S7.write(client, "MB40", rem(iteration, 0x100))
   end
 
   defp soak_iterations do

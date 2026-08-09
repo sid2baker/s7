@@ -9,6 +9,9 @@ Changes currently targeted for `0.1.0` are listed below.
 
 ### Changed
 
+- Moved the public facade from `S7.Client` to `S7`, without a compatibility
+  module, so connection lifecycle and operations are available directly as
+  `S7.connect/2`, `S7.read/2`, `S7.write/3`, and `S7.close/2`.
 - Grouped public result types under their owning domains, including
   `S7.Block.Info`, `S7.Alarm.Event`, `S7.Cyclic.Event`, `S7.Programmer.Event`,
   and `S7.PLC.Status`.

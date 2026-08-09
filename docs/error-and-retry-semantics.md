@@ -54,7 +54,7 @@ the additional load.
 
 Reconnect backoff has configurable minimum, maximum, jitter, and attempt cap.
 Exhausting the cap leaves the stable client process in `:disconnected`; an
-explicit `S7.Client.reconnect/1` starts a fresh attempt series. A successful
+explicit `S7.reconnect/1` starts a fresh attempt series. A successful
 Setup Communication exchange resets the series.
 
 Clock writes and protected-session changes are never retried automatically.

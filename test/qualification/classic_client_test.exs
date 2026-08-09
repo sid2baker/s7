@@ -1,7 +1,7 @@
 defmodule S7.Test.DeviceQualification do
   @moduledoc false
 
-  alias S7.{Address, Client}
+  alias S7.Address
 
   @families ~w(plcsim_advanced s7_300 s7_400 s7_1200 s7_1500)
   @supported_capabilities MapSet.new(
@@ -73,7 +73,7 @@ defmodule S7.Test.DeviceQualification do
   end
 
   def connect(config) do
-    Client.connect(config.host,
+    S7.connect(config.host,
       port: config.port,
       rack: config.rack,
       slot: config.slot,
@@ -128,7 +128,7 @@ defmodule S7.Test.DeviceQualification do
   def restore_scratch!(client, config, original) do
     address = scratch(config, :byte, 0, count: config.scratch_size)
 
-    case Client.write_raw(client, address, original) do
+    case S7.write_raw(client, address, original) do
       :ok ->
         :ok
 
@@ -233,12 +233,12 @@ defmodule S7.Test.DeviceQualification do
     case connect(config) do
       {:ok, recovery} ->
         try do
-          case Client.write_raw(recovery, address, original) do
+          case S7.write_raw(recovery, address, original) do
             :ok -> :ok
             result -> raise "failed to restore qualification scratch DB: #{inspect(result)}"
           end
         after
-          Client.close(recovery)
+          S7.close(recovery)
         end
 
       result ->
@@ -302,7 +302,6 @@ defmodule S7.ClassicDeviceQualificationTest do
   alias S7.{
     Alarm,
     Block,
-    Client,
     Cyclic,
     PLC,
     Programmer,
@@ -321,9 +320,9 @@ defmodule S7.ClassicDeviceQualificationTest do
 
   setup %{config: config} do
     assert {:ok, client} = Qualification.connect(config)
-    info = Client.info(client)
+    info = S7.info(client)
     Qualification.write_session_metadata!(config, info)
-    on_exit(fn -> Client.close(client) end)
+    on_exit(fn -> S7.close(client) end)
     {:ok, client: client, info: info}
   end
 
@@ -332,7 +331,7 @@ defmodule S7.ClassicDeviceQualificationTest do
     assert pdu_size > 0
     assert max_jobs > 0
     assert tpdu_size > 0
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
   end
 
   test "round-trips typed, raw, multi-item, and split DB access", %{
@@ -340,12 +339,12 @@ defmodule S7.ClassicDeviceQualificationTest do
     config: config
   } do
     scratch = Qualification.scratch(config, :byte, 0, count: config.scratch_size)
-    assert {:ok, original} = Client.read_raw(client, scratch)
+    assert {:ok, original} = S7.read_raw(client, scratch)
     on_exit(fn -> Qualification.restore_scratch!(client, config, original) end)
 
     pattern = for index <- 0..(config.scratch_size - 1), into: <<>>, do: <<rem(index, 256)>>
-    assert Client.write_raw(client, scratch, pattern) == :ok
-    assert Client.read_raw(client, scratch) == {:ok, pattern}
+    assert S7.write_raw(client, scratch, pattern) == :ok
+    assert S7.read_raw(client, scratch) == {:ok, pattern}
 
     typed = [
       {Qualification.scratch(config, :bit, 0, bit_offset: 0), true},
@@ -357,10 +356,10 @@ defmodule S7.ClassicDeviceQualificationTest do
       {Qualification.scratch(config, :real, 14), 12.5}
     ]
 
-    assert {:ok, write_results} = Client.write_multi(client, typed)
+    assert {:ok, write_results} = S7.write_multi(client, typed)
     assert Enum.all?(write_results, &match?(%Result{status: :ok}, &1))
 
-    assert {:ok, read_results} = Client.read_multi(client, Enum.map(typed, &elem(&1, 0)))
+    assert {:ok, read_results} = S7.read_multi(client, Enum.map(typed, &elem(&1, 0)))
     assert Enum.map(read_results, & &1.value) == Enum.map(typed, &elem(&1, 1))
 
     split_items =
@@ -368,17 +367,17 @@ defmodule S7.ClassicDeviceQualificationTest do
         {Qualification.scratch(config, :byte, 32 + relative_offset), relative_offset + 1}
       end
 
-    assert {:ok, split_writes} = Client.write_multi(client, split_items)
+    assert {:ok, split_writes} = S7.write_multi(client, split_items)
     assert Enum.all?(split_writes, &match?(%Result{status: :ok}, &1))
 
     assert {:ok, split_reads} =
-             Client.read_multi(client, Enum.map(split_items, &elem(&1, 0)))
+             S7.read_multi(client, Enum.map(split_items, &elem(&1, 0)))
 
     assert Enum.map(split_reads, & &1.value) == Enum.map(split_items, &elem(&1, 1))
   end
 
   test "verifies the configured CPU identity", %{client: client, config: config} do
-    assert {:ok, %PLC.OrderCode{code: order_number, version: version}} = Client.order_code(client)
+    assert {:ok, %PLC.OrderCode{code: order_number, version: version}} = S7.order_code(client)
     observed_firmware = version |> Tuple.to_list() |> Enum.join(".")
 
     Qualification.write_observed_identity!(config, order_number, observed_firmware)
@@ -389,43 +388,43 @@ defmodule S7.ClassicDeviceQualificationTest do
   @tag skip: if("areas" in @capabilities, do: false, else: "areas capability not declared")
   test "reads configured input, output, marker, and peripheral addresses", %{client: client} do
     for address <- Qualification.read_addresses!() do
-      assert {:ok, value} = Client.read_raw(client, address)
+      assert {:ok, value} = S7.read_raw(client, address)
       assert is_binary(value)
     end
   end
 
   @tag skip: if("szl" in @capabilities, do: false, else: "szl capability not declared")
   test "reads raw and typed CPU metadata", %{client: client} do
-    assert {:ok, %SZL{records: [_ | _]}} = Client.read_szl(client, 0x0011)
-    assert {:ok, %PLC.CPUInfo{}} = Client.cpu_info(client)
-    assert {:ok, %PLC.Status{state: state}} = Client.plc_status(client)
+    assert {:ok, %SZL{records: [_ | _]}} = S7.read_szl(client, 0x0011)
+    assert {:ok, %PLC.CPUInfo{}} = S7.cpu_info(client)
+    assert {:ok, %PLC.Status{state: state}} = S7.plc_status(client)
     assert state in [:run, :stop, :unknown]
   end
 
   @tag skip: if("cp_info" in @capabilities, do: false, else: "cp_info capability not declared")
   test "reads communication processor limits", %{client: client} do
-    assert {:ok, %PLC.CPInfo{max_pdu_length: maximum}} = Client.cp_info(client)
+    assert {:ok, %PLC.CPInfo{max_pdu_length: maximum}} = S7.cp_info(client)
     assert maximum > 0
   end
 
   @tag skip: if("blocks" in @capabilities, do: false, else: "blocks capability not declared")
   test "reads block inventory and configured block metadata", %{client: client, config: config} do
-    assert {:ok, %Block.Inventory{}} = Client.block_counts(client)
-    assert {:ok, entries} = Client.list_blocks(client, config.block_type)
+    assert {:ok, %Block.Inventory{}} = S7.block_counts(client)
+    assert {:ok, entries} = S7.list_blocks(client, config.block_type)
     expected = %Block{type: config.block_type, number: config.block_number}
     assert Enum.any?(entries, &(&1.block == expected))
-    assert {:ok, %Block.Info{block: ^expected}} = Client.block_info(client, expected)
+    assert {:ok, %Block.Info{block: ^expected}} = S7.block_info(client, expected)
   end
 
   @tag skip: if("upload" in @capabilities, do: false, else: "upload capability not declared")
   test "uploads and parses the configured block", %{client: client, config: config} do
     block = %Block{type: config.block_type, number: config.block_number}
-    assert {:ok, %Block.Image{block: ^block}} = Client.upload_block(client, block)
+    assert {:ok, %Block.Image{block: ^block}} = S7.upload_block(client, block)
   end
 
   @tag skip: if("clock" in @capabilities, do: false, else: "clock capability not declared")
   test "reads the PLC clock", %{client: client} do
-    assert {:ok, %PLC.Clock{datetime: %NaiveDateTime{}}} = Client.read_clock(client)
+    assert {:ok, %PLC.Clock{datetime: %NaiveDateTime{}}} = S7.read_clock(client)
   end
 
   @tag skip:
@@ -434,20 +433,20 @@ defmodule S7.ClassicDeviceQualificationTest do
            else: "clock_write capability not declared"
          )
   test "writes and restores the PLC clock", %{client: client} do
-    assert {:ok, %PLC.Clock{datetime: original}} = Client.read_clock(client)
-    on_exit(fn -> Client.set_clock(client, original) end)
-    assert Client.set_clock(client, original) == :ok
-    assert {:ok, %PLC.Clock{datetime: observed}} = Client.read_clock(client)
+    assert {:ok, %PLC.Clock{datetime: original}} = S7.read_clock(client)
+    on_exit(fn -> S7.set_clock(client, original) end)
+    assert S7.set_clock(client, original) == :ok
+    assert {:ok, %PLC.Clock{datetime: observed}} = S7.read_clock(client)
     assert NaiveDateTime.diff(observed, original, :second) in -1..1
   end
 
   @tag skip: if("security" in @capabilities, do: false, else: "security capability not declared")
   test "changes and clears classic session authorization", %{client: client} do
-    assert Client.authenticate(client, Qualification.password!()) == :ok
-    on_exit(fn -> Client.logout(client) end)
-    assert %{authenticated: true} = Client.info(client)
-    assert Client.logout(client) == :ok
-    assert %{authenticated: false} = Client.info(client)
+    assert S7.authenticate(client, Qualification.password!()) == :ok
+    on_exit(fn -> S7.logout(client) end)
+    assert %{authenticated: true} = S7.info(client)
+    assert S7.logout(client) == :ok
+    assert %{authenticated: false} = S7.info(client)
   end
 
   @tag skip:
@@ -456,7 +455,7 @@ defmodule S7.ClassicDeviceQualificationTest do
     address = Qualification.scratch(config, :word, 2)
 
     assert {:ok, %Programmer.VariableStatus{items: [%Programmer.VariableStatus.Item{error: nil}]}} =
-             Client.variable_status(client, [address], timeout: 10_000, step_timeout: 5_000)
+             S7.variable_status(client, [address], timeout: 10_000, step_timeout: 5_000)
   end
 
   @tag skip: if("cyclic" in @capabilities, do: false, else: "cyclic capability not declared")
@@ -464,7 +463,7 @@ defmodule S7.ClassicDeviceQualificationTest do
     address = Qualification.scratch(config, :word, 2)
 
     assert {:ok, subscription} =
-             Client.subscribe_cyclic(client, [address],
+             S7.subscribe_cyclic(client, [address],
                interval: config.cyclic_interval,
                timeout: 10_000,
                step_timeout: 5_000
@@ -472,9 +471,9 @@ defmodule S7.ClassicDeviceQualificationTest do
 
     try do
       assert {:ok, %Cyclic.Event{items: [%Cyclic.Event.Item{error: nil}]}} =
-               Client.next_cyclic(client, subscription, 10_000)
+               S7.next_cyclic(client, subscription, 10_000)
     after
-      assert Client.unsubscribe_cyclic(client, subscription) == :ok
+      assert S7.unsubscribe_cyclic(client, subscription) == :ok
     end
   end
 
@@ -484,12 +483,12 @@ defmodule S7.ClassicDeviceQualificationTest do
     config: config
   } do
     assert config.alarm_type in [:alarm_s, :alarm_8]
-    assert {:ok, subscription} = Client.subscribe_alarms(client, config.alarm_type)
+    assert {:ok, subscription} = S7.subscribe_alarms(client, config.alarm_type)
 
     try do
-      assert {:ok, %Alarm.Query{}} = Client.query_alarms(client, config.alarm_type)
+      assert {:ok, %Alarm.Query{}} = S7.query_alarms(client, config.alarm_type)
     after
-      assert Client.unsubscribe_alarms(client, subscription) == :ok
+      assert S7.unsubscribe_alarms(client, subscription) == :ok
     end
   end
 
@@ -500,14 +499,14 @@ defmodule S7.ClassicDeviceQualificationTest do
          )
   test "receives and explicitly acknowledges an alarm event", %{client: client, config: config} do
     assert config.alarm_type in [:alarm_s, :alarm_8]
-    assert {:ok, subscription} = Client.subscribe_alarms(client, config.alarm_type)
+    assert {:ok, subscription} = S7.subscribe_alarms(client, config.alarm_type)
 
     try do
-      assert {:ok, %Alarm.Event{} = event} = Client.next_alarm(client, subscription, 30_000)
-      assert {:ok, results} = Client.acknowledge_alarms(client, event)
+      assert {:ok, %Alarm.Event{} = event} = S7.next_alarm(client, subscription, 30_000)
+      assert {:ok, results} = S7.acknowledge_alarms(client, event)
       assert Enum.all?(results, &match?(%Alarm.Acknowledgement.Result{status: :ok}, &1))
     after
-      assert Client.unsubscribe_alarms(client, subscription) == :ok
+      assert S7.unsubscribe_alarms(client, subscription) == :ok
     end
   end
 end

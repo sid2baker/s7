@@ -120,7 +120,7 @@ defmodule S7.Alarm.Acknowledgement do
 
   `ack_state_going` and `ack_state_coming` are the signal masks copied from the
   alarm object being acknowledged. Applications can use an alarm event object
-  directly through `S7.Client.acknowledge_alarm/3` instead of constructing this
+  directly through `S7.acknowledge_alarm/3` instead of constructing this
   struct.
   """
 

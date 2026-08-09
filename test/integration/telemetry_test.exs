@@ -1,7 +1,7 @@
 defmodule S7.TelemetryIntegrationTest do
   use ExUnit.Case, async: false
 
-  alias S7.{Client, Telemetry}
+  alias S7.Telemetry
   alias S7.Test.MockPLC
 
   setup do
@@ -27,9 +27,9 @@ defmodule S7.TelemetryIntegrationTest do
 
   test "emits correlated connection and request events without process data" do
     server = start_server()
-    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
-    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
-    assert Client.close(client) == :ok
+    assert {:ok, client} = S7.connect({127, 0, 0, 1}, port: server.port)
+    assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
+    assert S7.close(client) == :ok
 
     assert_receive {:s7_telemetry, [:s7, :connection, :connected], connected,
                     %{connection: ^client, reconnected: false}}
@@ -77,7 +77,7 @@ defmodule S7.TelemetryIntegrationTest do
     port = reserve_port()
 
     assert {:ok, client} =
-             Client.start_link(
+             S7.start_link(
                host: {127, 0, 0, 1},
                port: port,
                reconnect: true,
@@ -93,7 +93,7 @@ defmodule S7.TelemetryIntegrationTest do
 
     assert measurements.attempt == 1
     assert System.convert_time_unit(measurements.delay, :native, :millisecond) == 50
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
   end
 
   test "publishes a stable event and metadata-exclusion contract" do
@@ -107,8 +107,8 @@ defmodule S7.TelemetryIntegrationTest do
   test "never publishes session credentials in request telemetry" do
     secret = "PRIVATE"
     server = start_server(session_password: secret)
-    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
-    assert Client.authenticate(client, secret) == :ok
+    assert {:ok, client} = S7.connect({127, 0, 0, 1}, port: server.port)
+    assert S7.authenticate(client, secret) == :ok
 
     for event <- [
           [:s7, :request, :queued],
@@ -121,7 +121,7 @@ defmodule S7.TelemetryIntegrationTest do
       refute inspect({measurements, metadata}) =~ secret
     end
 
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
   end
 
   defp start_server(opts \\ []) do

@@ -17,8 +17,8 @@ with the public API and wire contracts documented in this repository.
 
 ## Architecture
 
-- Keep `S7.Client` as the public facade and `S7.Connection` as the only owner and
-  operator of TCP sockets.
+- Keep `S7` as the sole public facade and `S7.Connection` as the only owner and
+  operator of TCP sockets. Do not add a `S7.Client` compatibility module.
 - Keep `S7.Protocol.*` and `S7.Transport.*` codecs pure and independently usable.
   They must not depend on the connection runtime or telemetry.
 - Keep transport limited to RFC 1006/TPKT and COTP. Classic S7 service codecs belong

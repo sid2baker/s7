@@ -7,7 +7,7 @@ function.
 ## Layers
 
 ```text
-S7.Client
+S7
     |
 S7.Connection
     |
@@ -35,7 +35,7 @@ transport, and model modules cannot depend on it, so wire codecs remain pure.
 
 The following dependency rules are enforced by Reach through `.reach.exs`:
 
-- `S7.Client` is the public facade and delegates lifecycle work to the runtime.
+- `S7` is the sole public facade and delegates lifecycle work to the runtime.
 - `S7.Connection` is the only layer allowed to own or operate a TCP socket.
 - `S7.Protocol.*` may use value and address models but never the runtime.
 - `S7.Transport.*` knows only RFC 1006 and COTP wire structures.
@@ -126,7 +126,7 @@ an indeterminate post-send outcome remain distinguishable.
 The same connection PID may own a sequence of sessions. Opt-in reconnect uses
 bounded exponential backoff with jitter, but first fails all work belonging to
 the lost session. No PDU or logical operation crosses a session boundary.
-Supervisors can start the client through `S7.Client.start_link/1`; optional
+Supervisors can start the client through `S7.start_link/1`; optional
 registration uses the standard local, global, or `:via` forms.
 
 Graceful close enters `:draining`, rejects new work, and finishes work already

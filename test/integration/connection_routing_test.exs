@@ -1,7 +1,7 @@
 defmodule S7.ConnectionRoutingIntegrationTest do
   use ExUnit.Case, async: true
 
-  alias S7.{Client, Connection, Error}
+  alias S7.{Connection, Error}
   alias S7.Protocol.{PDU, UserData}
   alias S7.Test.MockPLC
 
@@ -10,7 +10,7 @@ defmodule S7.ConnectionRoutingIntegrationTest do
     client = connect(server)
 
     assert {:ok, token} = Connection.begin_transaction(client, :test_transaction)
-    queued_read = Task.async(fn -> Client.read(client, "DB1.DBW0") end)
+    queued_read = Task.async(fn -> S7.read(client, "DB1.DBW0") end)
     assert %{exclusive_transaction: true, queued_requests: 1} = await_queue(client, 1)
 
     request = PDU.new(:job, 0, <<0xEE, 0x01>>)
@@ -31,8 +31,8 @@ defmodule S7.ConnectionRoutingIntegrationTest do
 
     assert Connection.end_transaction(client, token) == :ok
     assert Task.await(queued_read) == {:ok, 1234}
-    assert %{exclusive_transaction: false, queued_requests: 0} = Client.info(client)
-    assert Client.close(client) == :ok
+    assert %{exclusive_transaction: false, queued_requests: 0} = S7.info(client)
+    assert S7.close(client) == :ok
   end
 
   test "bounds transaction traffic and unsolicited Job buffering" do
@@ -49,8 +49,8 @@ defmodule S7.ConnectionRoutingIntegrationTest do
                PDU.new(:job, 0, <<0xEE, 0x01>>)
              )
 
-    assert %{state: :disconnected} = Client.info(message_client)
-    assert Client.close(message_client) == :ok
+    assert %{state: :disconnected} = S7.info(message_client)
+    assert S7.close(message_client) == :ok
 
     inbox_server = start_server(transaction_jobs: 2)
     inbox_client = connect(inbox_server)
@@ -63,8 +63,8 @@ defmodule S7.ConnectionRoutingIntegrationTest do
                PDU.new(:job, 0, <<0xEE, 0x01>>)
              )
 
-    assert %{state: :disconnected} = Client.info(inbox_client)
-    assert Client.close(inbox_client) == :ok
+    assert %{state: :disconnected} = S7.info(inbox_client)
+    assert S7.close(inbox_client) == :ok
   end
 
   test "bounds transaction waits and disconnects when its owner dies" do
@@ -75,7 +75,7 @@ defmodule S7.ConnectionRoutingIntegrationTest do
     assert {:error, %Error{reason: :timeout}} =
              Connection.transaction_receive(client, token, 10)
 
-    assert %{state: :ready, exclusive_transaction: true} = Client.info(client)
+    assert %{state: :ready, exclusive_transaction: true} = S7.info(client)
     assert Connection.end_transaction(client, token) == :ok
 
     parent = self()
@@ -91,7 +91,7 @@ defmodule S7.ConnectionRoutingIntegrationTest do
     Process.exit(owner, :kill)
 
     assert %{state: :disconnected} = await_state(client, :disconnected)
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
   end
 
   test "lets an accepted transaction finish while graceful close drains" do
@@ -99,7 +99,7 @@ defmodule S7.ConnectionRoutingIntegrationTest do
     client = connect(server)
     assert {:ok, token} = Connection.begin_transaction(client, :drain_transaction)
 
-    close = Task.async(fn -> Client.close(client, mode: :drain, timeout: 500) end)
+    close = Task.async(fn -> S7.close(client, mode: :drain, timeout: 500) end)
     assert %{state: :draining, exclusive_transaction: true} = await_state(client, :draining)
     assert Connection.end_transaction(client, token) == :ok
     assert Task.await(close) == :ok
@@ -125,8 +125,8 @@ defmodule S7.ConnectionRoutingIntegrationTest do
             }} = Connection.next_userdata(client, subscription)
 
     assert Connection.unsubscribe_userdata(client, subscription) == :ok
-    assert %{subscriptions: 0, state: :ready} = Client.info(client)
-    assert Client.close(client) == :ok
+    assert %{subscriptions: 0, state: :ready} = S7.info(client)
+    assert S7.close(client) == :ok
   end
 
   test "isolates subscription overflow and removes subscriptions with their owners" do
@@ -144,9 +144,9 @@ defmodule S7.ConnectionRoutingIntegrationTest do
     assert {:error, %Error{reason: :subscription_overflow, details: %{limit: 1}}} =
              Connection.next_userdata(overflow_client, subscription)
 
-    assert %{state: :ready} = Client.info(overflow_client)
-    assert Client.read(overflow_client, "DB1.DBW0") == {:ok, 1234}
-    assert Client.close(overflow_client) == :ok
+    assert %{state: :ready} = S7.info(overflow_client)
+    assert S7.read(overflow_client, "DB1.DBW0") == {:ok, 1234}
+    assert S7.close(overflow_client) == :ok
 
     owner_server = start_server()
     owner_client = connect(owner_server)
@@ -160,17 +160,17 @@ defmodule S7.ConnectionRoutingIntegrationTest do
       end)
 
     assert_receive {:subscription_owner, ^owner, {:ok, _subscription}}, 500
-    assert %{subscriptions: 1} = Client.info(owner_client)
+    assert %{subscriptions: 1} = S7.info(owner_client)
     Process.exit(owner, :kill)
     assert %{subscriptions: 0} = await_subscriptions(owner_client, 0)
-    assert Client.close(owner_client) == :ok
+    assert S7.close(owner_client) == :ok
   end
 
   test "validates transaction and subscription ownership and bounds" do
     server = start_server()
 
     assert {:ok, client} =
-             Client.connect({127, 0, 0, 1}, port: server.port, subscription_limit: 1)
+             S7.connect({127, 0, 0, 1}, port: server.port, subscription_limit: 1)
 
     assert {:error, %Error{reason: :invalid_options}} =
              Connection.begin_transaction(client, :test, [:invalid])
@@ -201,7 +201,7 @@ defmodule S7.ConnectionRoutingIntegrationTest do
              Connection.next_userdata(client, subscription, 0)
 
     assert Connection.unsubscribe_userdata(client, subscription) == :ok
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
   end
 
   test "rejects invalid transaction options, ownership, and PDU directions locally" do
@@ -248,7 +248,7 @@ defmodule S7.ConnectionRoutingIntegrationTest do
              Connection.end_transaction(client, make_ref())
 
     assert Connection.end_transaction(client, token) == :ok
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
   end
 
   test "requires PLC-initiated Jobs to be consumed before transaction release" do
@@ -267,13 +267,13 @@ defmodule S7.ConnectionRoutingIntegrationTest do
 
     assert {:ok, %PDU{}} = Connection.transaction_receive(client, token)
     assert Connection.end_transaction(client, token) == :ok
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
   end
 
   test "bounds both pending reservation and active transaction lifetimes" do
     waiting_server = start_server(read_response_delay: 100, notify_requests: true)
     waiting_client = connect(waiting_server)
-    read = Task.async(fn -> Client.read(waiting_client, "DB1.DBW0") end)
+    read = Task.async(fn -> S7.read(waiting_client, "DB1.DBW0") end)
     assert_receive {:mock_plc_request, :read, _reference}, 500
 
     owner =
@@ -283,8 +283,8 @@ defmodule S7.ConnectionRoutingIntegrationTest do
 
     assert {:error, %Error{reason: :transaction_timeout}} = Task.await(owner)
     assert Task.await(read) == {:ok, 1234}
-    assert %{state: :ready, transaction_waiting: false} = Client.info(waiting_client)
-    assert Client.close(waiting_client) == :ok
+    assert %{state: :ready, transaction_waiting: false} = S7.info(waiting_client)
+    assert S7.close(waiting_client) == :ok
 
     active_server = start_server()
     active_client = connect(active_server)
@@ -293,7 +293,7 @@ defmodule S7.ConnectionRoutingIntegrationTest do
              Connection.begin_transaction(active_client, :active_transaction, timeout: 20)
 
     assert %{state: :disconnected} = await_state(active_client, :disconnected)
-    assert Client.close(active_client) == :ok
+    assert S7.close(active_client) == :ok
   end
 
   test "validates subscription filters and keeps timed-out subscriptions usable" do
@@ -345,7 +345,7 @@ defmodule S7.ConnectionRoutingIntegrationTest do
              Connection.next_userdata(client, make_ref(), 10)
 
     assert Connection.unsubscribe_userdata(client, subscription) == :ok
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
   end
 
   test "delivers an indication directly to a waiting subscription caller" do
@@ -365,7 +365,7 @@ defmodule S7.ConnectionRoutingIntegrationTest do
 
     assert {:ok, %UserData{}} = Task.await(request_task)
     assert Connection.unsubscribe_userdata(client, subscription) == :ok
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
   end
 
   test "wakes a subscription waiter when its session closes" do
@@ -383,7 +383,7 @@ defmodule S7.ConnectionRoutingIntegrationTest do
 
     assert_receive {:subscription_waiting, ^owner, _subscription}, 500
     Process.sleep(20)
-    assert Client.close(client) == :ok
+    assert S7.close(client) == :ok
 
     assert_receive {:subscription_result, ^owner,
                     {:error, %Error{reason: :connection_closed, operation: :next_userdata}}},
@@ -392,7 +392,7 @@ defmodule S7.ConnectionRoutingIntegrationTest do
 
   defp connect(server) do
     assert {:ok, client} =
-             Client.connect({127, 0, 0, 1}, port: server.port, timeout: 500)
+             S7.connect({127, 0, 0, 1}, port: server.port, timeout: 500)
 
     client
   end
@@ -412,7 +412,7 @@ defmodule S7.ConnectionRoutingIntegrationTest do
   defp await_info(client, predicate, attempts \\ 50)
 
   defp await_info(client, predicate, attempts) when attempts > 0 do
-    info = Client.info(client)
+    info = S7.info(client)
 
     if predicate.(info) do
       info
@@ -422,5 +422,5 @@ defmodule S7.ConnectionRoutingIntegrationTest do
     end
   end
 
-  defp await_info(client, _predicate, 0), do: Client.info(client)
+  defp await_info(client, _predicate, 0), do: S7.info(client)
 end

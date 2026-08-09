@@ -130,7 +130,7 @@ evidence. At minimum, exercise:
    make those operations recoverable.
 
 Use a separate client opened with `allow_destructive: true` and the exact per-call
-confirmation documented by `S7.Client`. Never run this procedure against a live
+confirmation documented by `S7`. Never run this procedure against a live
 process. A rejected, unavailable, or inapplicable service must be recorded as such
 rather than converted into a passing result.
 
