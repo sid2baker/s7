@@ -60,9 +60,9 @@ adapters may be added later without weakening the core support claim.
 | Request Download | `0x1A` | Negotiate a block download | Destructive | Planned |
 | Download Block | `0x1B` | PLC-driven block data transfer | Destructive | Planned |
 | Download Ended | `0x1C` | Finish block transfer | Destructive | Planned |
-| Start Upload | `0x1D` | Open a block upload session | Read-only | Planned |
-| Upload | `0x1E` | Transfer one upload segment | Read-only | Planned |
-| End Upload | `0x1F` | Close an upload session | Read-only | Planned |
+| Start Upload | `0x1D` | Open a block upload session | Read-only | Implemented; device qualification pending |
+| Upload | `0x1E` | Transfer one upload segment | Read-only | Implemented; device qualification pending |
+| End Upload | `0x1F` | Close an upload session | Read-only | Implemented; device qualification pending |
 | PI-Service | `0x28` | Start, insert/delete, compress, copy memory | Destructive | Planned |
 | PLC Stop | `0x29` | Stop CPU execution | Destructive | Planned |
 | Setup Communication | `0xF0` | Negotiate PDU and AMQ limits | Session | Implemented |

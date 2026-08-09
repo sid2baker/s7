@@ -167,13 +167,20 @@ defmodule S7.Protocol.Blocks do
     with :ok <- validate_info_header(raw_header, operation),
          :ok <- validate_block_identity(requested, subtype, number, operation),
          {:ok, code_timestamp} <-
-           decode_timestamp(code_milliseconds, code_days, :code_timestamp, operation),
+           Block.decode_timestamp(
+             code_milliseconds,
+             code_days,
+             :code_timestamp,
+             operation,
+             :malformed_response
+           ),
          {:ok, interface_timestamp} <-
-           decode_timestamp(
+           Block.decode_timestamp(
              interface_milliseconds,
              interface_days,
              :interface_timestamp,
-             operation
+             operation,
+             :malformed_response
            ) do
       {:ok,
        %BlockInfo{
@@ -358,17 +365,6 @@ defmodule S7.Protocol.Blocks do
         expected: {requested.type, requested.number},
         received: {type, number}
       })
-
-  defp decode_timestamp(milliseconds, days, field, operation)
-       when milliseconds < 86_400_000 do
-    base = ~N[1984-01-01 00:00:00.000]
-    {:ok, NaiveDateTime.add(base, days * 86_400_000 + milliseconds, :millisecond)}
-  rescue
-    ArgumentError -> malformed(operation, %{field: field, milliseconds: milliseconds, days: days})
-  end
-
-  defp decode_timestamp(milliseconds, days, field, operation),
-    do: malformed(operation, %{field: field, milliseconds: milliseconds, days: days})
 
   defp decode_security(0), do: :none
   defp decode_security(3), do: :know_how_protected

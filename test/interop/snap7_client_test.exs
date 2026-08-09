@@ -12,6 +12,7 @@ defmodule S7.Snap7ClientInteropTest do
     Client,
     CPInfo,
     CPUInfo,
+    Error,
     OrderCode,
     PLCStatus,
     Result,
@@ -140,5 +141,15 @@ defmodule S7.Snap7ClientInteropTest do
     assert %{authenticated: true} = Client.info(client)
     assert Client.logout(client) == :ok
     assert %{authenticated: false} = Client.info(client)
+  end
+
+  test "reports the pinned server's explicit upload protection without losing the session", %{
+    client: client
+  } do
+    assert {:error, %Error{reason: :access_denied, code: 0xD241}} =
+             Client.upload_block(client, :db, 1)
+
+    assert %{state: :ready, exclusive_transaction: false} = Client.info(client)
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 end

@@ -71,6 +71,13 @@ reply with Ack/AckData PDUs. Caller death, an overall deadline, an inbox
 overflow, or an incoming traffic-limit violation closes the session because
 the remote transaction state can no longer be established safely.
 
+Block upload is the first typed service on this boundary. It reserves the
+connection for the complete Start/Upload/End sequence and validates each
+correlated response before advancing. An initial PLC rejection is a complete
+outcome and releases ownership. A local byte or fragment limit sends End Upload
+before release; malformed, timed-out, disconnected, or otherwise ambiguous
+mid-sequence outcomes abort the transaction and invalidate the session.
+
 Unsolicited userdata indications never enter PDU-reference correlation. They
 are routed by group, subfunction, and type to monitored subscriptions. Each
 subscription has one pull waiter and a bounded queue. Queue overflow terminates

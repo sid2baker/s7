@@ -90,6 +90,16 @@ overflow, or aggregate-size overflow invalidates the session. Block counts and
 block information are fixed-size responses and reject continuation. A complete
 PLC-reported directory error leaves the session usable.
 
+Block upload is one exclusive Start/Upload/End transaction and is never
+replayed. A complete PLC rejection of Start Upload releases the reservation and
+leaves the session usable. If the advertised image or accumulated fragments
+exceed a caller bound, the client sends End Upload before returning the local
+limit error. A malformed response, timeout, disconnect, or sequence ambiguity
+after the remote transaction may have started invalidates the session. Parsing
+the completed image occurs only after End Upload succeeds, so an unsupported
+image variant can be returned as a structured error without abandoning remote
+state; `upload_block_raw` preserves that image for inspection.
+
 Exclusive transactions are never replayed. A transaction has an overall
 deadline, a per-request timeout, aggregate message and byte limits, and a
 bounded inbox for PLC-initiated Jobs. An invalid owner/token or local option

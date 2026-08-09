@@ -257,6 +257,12 @@ defmodule S7.Connection do
   end
 
   @doc false
+  @spec abort_transaction(pid(), reference(), Error.t()) :: :ok | {:error, Error.t()}
+  def abort_transaction(connection, token, %Error{} = error) do
+    :gen_statem.call(connection, {:abort_transaction, token, error}, :infinity)
+  end
+
+  @doc false
   @spec subscribe_userdata(pid(), Subscription.filter(), keyword()) ::
           {:ok, reference()} | {:error, Error.t()}
   def subscribe_userdata(connection, filter, opts \\ []) do
@@ -498,6 +504,16 @@ defmodule S7.Connection do
   def handle_event({:call, from}, {:end_transaction, token}, state, data)
       when state in [:ready, :draining] do
     finish_exclusive(from, token, state, data)
+  end
+
+  def handle_event(
+        {:call, from},
+        {:abort_transaction, token, %Error{} = error},
+        state,
+        data
+      )
+      when state in [:ready, :draining] do
+    abort_exclusive(from, token, error, state, data)
   end
 
   def handle_event(
@@ -1678,6 +1694,17 @@ defmodule S7.Connection do
     else
       {:error, %Error{} = error} ->
         {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  defp abort_exclusive(from, token, error, state, data) do
+    with {:ok, exclusive} <- fetch_exclusive(data, from, token),
+         :ok <- ensure_transaction_idle(data, exclusive.operation) do
+      :gen_statem.reply(from, :ok)
+      disconnect_with_error(state, data, with_operation(error, exclusive.operation))
+    else
+      {:error, %Error{} = transaction_error} ->
+        {:keep_state_and_data, [{:reply, from, {:error, transaction_error}}]}
     end
   end
 
@@ -3526,7 +3553,12 @@ defmodule S7.Connection do
     do: operation
 
   defp operation_name({operation, _token, _value})
-       when operation in [:transaction_request, :transaction_receive, :transaction_reply],
+       when operation in [
+              :transaction_request,
+              :transaction_receive,
+              :transaction_reply,
+              :abort_transaction
+            ],
        do: operation
 
   defp operation_name({operation, _value})

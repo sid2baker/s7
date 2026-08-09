@@ -1,6 +1,8 @@
 defmodule S7.Test.MockPLC do
   @moduledoc false
 
+  import Bitwise
+
   alias S7.{Block, Connection, SessionPassword}
   alias S7.Protocol.{Clock, DataItem, Item, PDU, Security, SetupCommunication, UserData}
   alias S7.Protocol.UserData.{Parameter, Payload}
@@ -60,11 +62,13 @@ defmodule S7.Test.MockPLC do
       szl_fault: Keyword.get(opts, :szl_fault),
       block_fault: Keyword.get(opts, :block_fault),
       clock_fault: Keyword.get(opts, :clock_fault),
+      upload_fault: Keyword.get(opts, :upload_fault),
       clock: Keyword.get(opts, :clock, ~N[2024-08-09 12:34:56.123]),
       security_password: Security.encode_password(security_password),
       authenticated: false,
       szl_pending: nil,
       block_pending: nil,
+      upload_pending: nil,
       deferred_reads: [],
       client_reference: nil,
       server_reference: 1,
@@ -217,6 +221,39 @@ defmodule S7.Test.MockPLC do
 
   defp handle_received(
          {:ok,
+          %PDU{
+            header: %{rosctr: :job},
+            parameters: <<0x1D, 0, 0::16, 0::32, 9, filename::binary-size(9)>>,
+            data: <<>>
+          } = request, state}
+       ) do
+    state |> handle_upload_start(request, filename) |> serve()
+  end
+
+  defp handle_received(
+         {:ok,
+          %PDU{
+            header: %{rosctr: :job},
+            parameters: <<0x1E, 0, 0::16, upload_id::unsigned-big-32>>,
+            data: <<>>
+          } = request, state}
+       ) do
+    state |> handle_upload_segment(request, upload_id) |> serve()
+  end
+
+  defp handle_received(
+         {:ok,
+          %PDU{
+            header: %{rosctr: :job},
+            parameters: <<0x1F, 0, _error::16, upload_id::unsigned-big-32>>,
+            data: <<>>
+          } = request, state}
+       ) do
+    state |> handle_upload_end(request, upload_id) |> serve()
+  end
+
+  defp handle_received(
+         {:ok,
           %PDU{header: %{rosctr: rosctr, pdu_reference: reference}, parameters: <<0xEE, 0x03>>},
           state}
        )
@@ -244,6 +281,157 @@ defmodule S7.Test.MockPLC do
   end
 
   defp handle_received({:error, :closed, state}), do: close_server_socket(state, false)
+
+  defp handle_upload_start(state, request, filename) do
+    state = notify_request(state, :upload_start, request)
+
+    with {:ok, block} <- decode_upload_filename(filename),
+         {:ok, image} <- upload_image(state, block) do
+      case state.upload_fault do
+        :start_rejected ->
+          send_upload_header_error(%{state | upload_fault: nil}, request, 0xD241)
+
+        :malformed_start ->
+          response = PDU.new(:ack_data, request.header.pdu_reference, <<0x1D, 0>>)
+          :ok = send_pdu(state, response)
+          %{state | upload_fault: nil}
+
+        _other ->
+          upload_id = Keyword.get(state.options, :upload_id, 7)
+          advertised_size = advertised_upload_size(state, image)
+          size = advertised_size |> Integer.to_string() |> String.pad_leading(7, "0")
+
+          response =
+            PDU.new(
+              :ack_data,
+              request.header.pdu_reference,
+              <<0x1D, 0, 0x0100::16, upload_id::unsigned-big-32, byte_size(size), size::binary>>
+            )
+
+          :ok = send_pdu(state, response)
+
+          %{
+            state
+            | upload_pending: %{id: upload_id, image: image, offset: 0, block: block}
+          }
+      end
+    else
+      :error -> send_upload_header_error(state, request, 0xD209)
+    end
+  end
+
+  defp handle_upload_segment(
+         %{upload_pending: %{id: upload_id} = pending} = state,
+         request,
+         upload_id
+       ) do
+    state = notify_request(state, :upload_segment, request)
+    Process.sleep(Keyword.get(state.options, :upload_response_delay, 0))
+
+    case state.upload_fault do
+      :segment_header_error ->
+        send_upload_header_error(%{state | upload_fault: nil}, request, 0xD241)
+
+      :segment_disconnect ->
+        :ok = :gen_tcp.close(state.socket)
+        %{state | upload_fault: nil}
+
+      :segment_silence ->
+        %{state | upload_fault: nil}
+
+      _other ->
+        send_upload_segment(state, request, pending)
+    end
+  end
+
+  defp handle_upload_segment(state, request, _upload_id),
+    do: send_upload_header_error(state, request, 0xD209)
+
+  defp send_upload_segment(state, request, pending) do
+    remaining_size = byte_size(pending.image) - pending.offset
+    configured_size = Keyword.get(state.options, :upload_chunk_size, remaining_size)
+    chunk_size = min(configured_size, remaining_size)
+    chunk = binary_part(pending.image, pending.offset, chunk_size)
+    offset = pending.offset + chunk_size
+    more? = offset < byte_size(pending.image) or state.upload_fault == :endless_segments
+    status = if more?, do: 1, else: 0
+    marker = if state.upload_fault == :malformed_segment, do: 0x00FA, else: 0x00FB
+
+    response =
+      PDU.new(
+        :ack_data,
+        request.header.pdu_reference,
+        <<0x1E, status>>,
+        <<byte_size(chunk)::unsigned-big-16, marker::unsigned-big-16, chunk::binary>>
+      )
+
+    :ok = send_pdu(state, response)
+
+    state =
+      if state.upload_fault == :malformed_segment,
+        do: %{state | upload_fault: nil},
+        else: state
+
+    %{state | upload_pending: %{pending | offset: offset}}
+  end
+
+  defp handle_upload_end(
+         %{upload_pending: %{id: upload_id}} = state,
+         request,
+         upload_id
+       ) do
+    state = notify_request(state, :upload_end, request)
+
+    response =
+      if state.upload_fault == :malformed_end do
+        PDU.new(:ack_data, request.header.pdu_reference, <<0x1F, 0>>)
+      else
+        PDU.new(:ack_data, request.header.pdu_reference, <<0x1F>>)
+      end
+
+    :ok = send_pdu(state, response)
+    %{state | upload_pending: nil, upload_fault: nil}
+  end
+
+  defp handle_upload_end(state, request, _upload_id),
+    do: send_upload_header_error(state, request, 0xD209)
+
+  defp send_upload_header_error(state, request, code) do
+    response =
+      PDU.new(:ack, request.header.pdu_reference, <<>>, <<>>,
+        error_class: code >>> 8,
+        error_code: code &&& 0xFF
+      )
+
+    :ok = send_pdu(state, response)
+    state
+  end
+
+  defp decode_upload_filename(<<"_", type_code::unsigned-big-16, number::binary-size(5), "A">>) do
+    case {Block.decode_type(type_code), Integer.parse(number)} do
+      {type, {number, ""}} when is_atom(type) and number in 0..0xFFFF ->
+        {:ok, %Block{type: type, number: number}}
+
+      _other ->
+        :error
+    end
+  end
+
+  defp upload_image(state, block) do
+    expected = Keyword.get(state.options, :upload_block, block)
+    image = Keyword.get(state.options, :upload_image)
+
+    if expected == block and is_binary(image) and byte_size(image) > 0,
+      do: {:ok, image},
+      else: :error
+  end
+
+  defp advertised_upload_size(state, image) do
+    case state.upload_fault do
+      :wrong_advertised_size -> byte_size(image) + 1
+      _other -> Keyword.get(state.options, :upload_advertised_size, byte_size(image))
+    end
+  end
 
   defp handle_read_items(state, request, [item]),
     do: handle_read(state, request, Item.encode(item))

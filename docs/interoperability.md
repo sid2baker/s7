@@ -10,7 +10,7 @@ security configuration.
 | --- | --- | --- | --- |
 | In-process fault server | TCP/COTP fragmentation, malformed frames, out-of-order responses, concurrency, timeout, reconnect, drain | Every commit | Passing |
 | Snap7 server | `valiot/snap7` commit `a1845454f5f16f3b127b987807f1cbc59205db70` | Every commit | Passing |
-| Wireshark/tshark | Pinned netshoot image; Setup, Read/Write Var, SZL, block, clock, and security-service filters; zero malformed frames | Every commit | Passing |
+| Wireshark/tshark | Pinned netshoot image; Setup, Read/Write Var, SZL, block directory/upload, clock, and security-service filters; zero malformed frames | Every commit | Passing |
 | Request soak | 20,000 mixed concurrent reads/writes with bounded memory and empty final mailbox | Weekly/manual | Automated |
 
 The Snap7 gate negotiates four jobs, exercises concurrent reads, all supported
@@ -21,7 +21,11 @@ Read-clock decoding uses an independently captured PLC response because the
 pinned Snap7 server emits a zero-based weekday that violates the Siemens
 timestamp codec. The generated PCAP is retained by CI for seven days, and
 Wireshark must identify all three block functions plus set-clock and password
-services.
+services. The pinned Snap7 server does not implement block upload: the gate
+requires its `0xD241` rejection to decode as `:access_denied`, verifies the
+session remains usable, and requires tshark to identify Start Upload. Successful
+Start/Upload/End assembly is qualified against an exact real-PLC capture and the
+fault server; successful PLCSIM and physical-device execution remains pending.
 
 ## Release Qualification Matrix
 

@@ -124,6 +124,7 @@ defmodule S7.MixProject do
           S7.Block,
           S7.BlockEntry,
           S7.BlockInfo,
+          S7.BlockImage,
           S7.BlockInventory,
           S7.Data,
           S7.Error,
@@ -133,6 +134,7 @@ defmodule S7.MixProject do
           S7.Telemetry
         ],
         "S7 Protocol": [
+          S7.Protocol.BlockUpload,
           S7.Protocol.Blocks,
           S7.Protocol.Clock,
           S7.Protocol.DataItem,

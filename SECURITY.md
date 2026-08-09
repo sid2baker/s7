@@ -36,6 +36,11 @@ adding those fields in application handlers, logs, exception reports, or packet
 captures. PCAP files contain process traffic and must be handled as sensitive
 operational data.
 
+Uploaded block images can contain proprietary control logic, symbols, comments,
+and operational details. Treat both `%S7.BlockImage{}` values and raw upload
+binaries as sensitive program material; do not emit them through telemetry,
+logs, exceptions, fixtures, or public packet captures.
+
 ## Session Passwords
 
 `S7.Client.authenticate/2` implements the classic protected-session exchange,

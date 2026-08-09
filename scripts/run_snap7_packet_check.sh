@@ -60,6 +60,7 @@ grep -Fq "[Block functions] -> [List blocks of type]" <<<"${DECODED}"
 grep -Fq "[Block functions] -> [Get block info]" <<<"${DECODED}"
 grep -Fq "[Time functions] -> [Set clock]" <<<"${DECODED}"
 grep -Fq "[Security] -> [PLC password]" <<<"${DECODED}"
+grep -q "Function:\[Start upload\]" <<<"${DECODED}"
 test -z "${MALFORMED}"
 
 if [[ -n "${S7_CAPTURE_FILE:-}" ]]; then

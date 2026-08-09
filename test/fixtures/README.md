@@ -24,6 +24,11 @@ Clock fixtures are S7 PDU bytes from frames 45-48 of the pinned
 `step7_s300_AuthPassword.pcapng`. Password-bearing request bytes are intentionally not committed;
 the transform is tested with a non-secret test value instead.
 
+Block-upload fixtures are S7 PDU bytes from frames 17-22 and 44 of the pinned
+`snap7_s300_everything.pcapng` capture. They contain a successful full SDB0
+upload and a PLC-reported OB0 rejection. The complete uploaded load-memory
+image remains embedded in the captured segment response.
+
 ```text
 fixture -> decode -> expected struct
 expected struct -> encode -> fixture

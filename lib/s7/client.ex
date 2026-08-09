@@ -11,6 +11,7 @@ defmodule S7.Client do
     Address,
     Block,
     BlockEntry,
+    BlockImage,
     BlockInfo,
     BlockInventory,
     Connection,
@@ -26,6 +27,7 @@ defmodule S7.Client do
     SZL
   }
 
+  alias S7.Connection.BlockUploader
   alias S7.SZL.Metadata
 
   @opaque t :: GenServer.server()
@@ -322,6 +324,55 @@ defmodule S7.Client do
   end
 
   @doc """
+  Uploads and parses one complete classic load-memory block image.
+
+  The operation reserves the connection for the stateful upload sequence.
+  Options are `:max_bytes`, `:max_fragments`, `:timeout`, and `:step_timeout`.
+  """
+  @spec upload_block(t(), Block.t(), keyword()) ::
+          {:ok, BlockImage.t()} | {:error, Error.t()}
+  def upload_block(client, block, opts \\ [])
+
+  def upload_block(client, %Block{} = block, opts) do
+    upload_block_operation(client, block, opts, false)
+  end
+
+  @spec upload_block(t(), Block.known_type(), 0..0xFFFF) ::
+          {:ok, BlockImage.t()} | {:error, Error.t()}
+  def upload_block(client, type, number), do: upload_block(client, type, number, [])
+
+  @spec upload_block(t(), Block.known_type(), 0..0xFFFF, keyword()) ::
+          {:ok, BlockImage.t()} | {:error, Error.t()}
+  def upload_block(client, type, number, opts) do
+    with {:ok, block} <- Block.normalize(type, number, :upload_block) do
+      upload_block_operation(client, block, opts, false)
+    end
+  end
+
+  @doc """
+  Uploads one complete classic load-memory block image without parsing it.
+  """
+  @spec upload_block_raw(t(), Block.t(), keyword()) ::
+          {:ok, binary()} | {:error, Error.t()}
+  def upload_block_raw(client, block, opts \\ [])
+
+  def upload_block_raw(client, %Block{} = block, opts) do
+    upload_block_operation(client, block, opts, true)
+  end
+
+  @spec upload_block_raw(t(), Block.known_type(), 0..0xFFFF) ::
+          {:ok, binary()} | {:error, Error.t()}
+  def upload_block_raw(client, type, number), do: upload_block_raw(client, type, number, [])
+
+  @spec upload_block_raw(t(), Block.known_type(), 0..0xFFFF, keyword()) ::
+          {:ok, binary()} | {:error, Error.t()}
+  def upload_block_raw(client, type, number, opts) do
+    with {:ok, block} <- Block.normalize(type, number, :upload_block) do
+      upload_block_operation(client, block, opts, true)
+    end
+  end
+
+  @doc """
   Returns negotiated connection information.
   """
   @spec info(t()) :: map() | {:error, Error.t()}
@@ -404,6 +455,16 @@ defmodule S7.Client do
   defp read_szl_operation(client, id, index, opts, operation) do
     with {:ok, limits} <- SZL.validate_request(id, index, opts, operation) do
       call(fn -> Connection.read_szl(client, id, index, limits, operation) end, operation)
+    end
+  end
+
+  defp upload_block_operation(client, block, opts, raw?) do
+    with {:ok, block} <- Block.validate(block, :upload_block),
+         {:ok, limits} <- BlockUploader.validate_options(opts, :upload_block) do
+      call(
+        fn -> BlockUploader.upload(client, block, limits, raw?, :upload_block) end,
+        :upload_block
+      )
     end
   end
 

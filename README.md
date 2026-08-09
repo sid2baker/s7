@@ -3,8 +3,9 @@
 An Elixir client for classic S7comm over RFC 1006. The protocol surface includes COTP connection
 setup, S7 Setup Communication, single- or multi-item Read Var and Write Var jobs, bounded
 userdata-backed System Status List (SZL/SSL) reads, and classic block directory and metadata
-queries. PLC clock access and classic session-password authorization are also supported. One
-S7ANY item may represent either a scalar or a fixed-count range.
+queries. Bounded classic block upload, PLC clock access, and classic session-password
+authorization are also supported. One S7ANY item may represent either a scalar or a fixed-count
+range.
 
 The implementation keeps protocol codecs pure and gives the TCP socket to one `:gen_statem`
 process. Its `active: :once` request engine correlates responses by PDU reference, bounds queued
@@ -17,10 +18,10 @@ reads and writes. CI also builds a server from a pinned Snap7 revision and verif
 splitting and read-after-write for every supported area and value type. PLCSIM Advanced and
 physical Siemens hardware remain external release gates, so `0.1.0` remains a release candidate.
 
-S7comm-plus, symbolic addressing, optimized DB access, block upload/download, PLC control,
-alarms, and programmer diagnostics are not supported. The common classic userdata envelope is
-implemented for SZL, block-directory, clock, and protected-session requests plus safe handling of
-unsolicited indications.
+S7comm-plus, symbolic addressing, optimized DB access, block download/replacement/deletion, PLC
+control, alarms, and programmer diagnostics are not supported. The common classic userdata
+envelope is implemented for SZL, block-directory, clock, and protected-session requests plus safe
+handling of unsolicited indications.
 
 ## Usage
 
@@ -229,6 +230,33 @@ limits. Directory entries and detailed metadata retain raw bytes and preserve un
 type, and security codes. Block upload and download use different stateful Job services and are
 not aliases for Read Var, Write Var, or these directory calls.
 
+## Block Upload
+
+Classic block upload retrieves one complete load-memory image through an exclusive, bounded
+`Start Upload` / `Upload` / `End Upload` transaction:
+
+```elixir
+{:ok, %S7.BlockImage{} = image} =
+  S7.Client.upload_block(client, :db, 1,
+    max_bytes: 1_048_576,
+    max_fragments: 64,
+    timeout: 30_000
+  )
+
+{:ok, raw_image} = S7.Client.upload_block_raw(client, %S7.Block{type: :db, number: 1})
+```
+
+The parsed image retains every original byte, validates the requested block identity and declared
+sizes, and exposes known header, timestamp, MC7, and footer fields. Classic MC7 and footer ranges
+can overlap, so `S7.BlockImage` also exposes non-overlapping `payload`, `raw_header`, and
+`raw_footer` fields. The raw API is available for CPU-specific image variants.
+
+An initial PLC rejection leaves the connection usable. Local byte or fragment limits close the
+remote upload cleanly; malformed or ambiguous mid-transaction responses invalidate the session.
+Successful upload is qualified by an independently captured real-PLC exchange and the fault
+server. The pinned Snap7 server rejects upload with `0xD241`, which the interoperability gate
+checks explicitly.
+
 ## PLC Clock And Session Authorization
 
 Classic PLC clock values are timezone-free local civil time:
@@ -261,7 +289,7 @@ provides no encryption, integrity, or peer authentication; see [Security policy]
 S7.Client
   -> S7.Connection (:gen_statem, active-once :gen_tcp owner)
     -> bounded queue / PDU-reference correlation / request timers / reconnect backoff
-    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL, Blocks, Clock, Security}
+    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL, Blocks, BlockUpload, Clock, Security}
       -> S7.Protocol.PDU / Header / Item / DataItem
         -> S7.Transport.COTP
           -> S7.Transport.TPKT
@@ -308,8 +336,8 @@ The script uses the ignored local Snap7 reference when present and otherwise che
 revision into a temporary directory.
 
 With Docker available, capture the same exchange and require tshark to identify Setup, Read Var,
-Write Var, SZL, block-directory, set-clock, and session-password services without malformed
-packets:
+Write Var, SZL, block-directory, block-upload, set-clock, and session-password services without
+malformed packets:
 
 ```bash
 bash scripts/run_snap7_packet_check.sh

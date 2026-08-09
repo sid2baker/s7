@@ -34,11 +34,12 @@ The complete scope and risk policy are defined in
 | Block counts, list by type, and block information | Implemented with bounded continuation | Supported after device qualification |
 | Read/set PLC clock | Implemented; timezone-free wire value retained | Supported after device qualification |
 | Protected-session login/logout | Implemented with credential redaction and queue barriers | Supported after device qualification |
+| Block upload and load-memory image parsing | Implemented with exclusive bounded transactions | Supported after successful device qualification |
 | Common userdata envelope and request routing | Implemented | Supported |
 | Exclusive bidirectional service transactions | Implemented, internal typed-service boundary | Supported |
 | Bounded unsolicited userdata routing | Implemented, internal typed-service boundary | Supported |
 | Userdata diagnostics/services | Not implemented | Post-1.0 |
-| Block upload/download | Not implemented; distinct from directory and Read/Write Var services | Separate opt-in surface |
+| Block download, replacement, and deletion | Not implemented; distinct from upload and Read/Write Var services | Separate opt-in surface |
 | PLC control | Not implemented | Separate opt-in surface |
 | Alarms | Not implemented | Post-1.0 |
 
@@ -58,7 +59,8 @@ services can reserve the connection for a bounded bidirectional transaction;
 unsolicited userdata indications are isolated from reference correlation and
 routed to bounded monitored subscriptions. Session login/logout is serialized
 as a queue barrier: earlier jobs complete first and later jobs cannot overtake
-the authorization change.
+the authorization change. Block upload runs exclusively and has independent
+aggregate byte, fragment, step-timeout, and overall-deadline bounds.
 
 ## Addressing And Values
 
@@ -91,8 +93,12 @@ Block inventory returns all advertised type counts, preserving unknown wire
 types. Lists by type are assembled under caller-configurable aggregate byte and
 fragment bounds. Detailed block information validates the requested identity,
 fixed response geometry, and Siemens timestamps while preserving its complete
-raw payload. These read-only userdata services do not implement block image
-upload, download, replacement, or deletion.
+raw payload. Block upload is a separate stateful Job transaction. It validates
+the requested identity, declared load-memory and MC7 sizes, timestamps, and
+known footer fields while retaining the exact image. The raw API preserves
+CPU-specific variants. Classic image MC7 and footer ranges can overlap, so the
+model does not incorrectly treat them as disjoint sections. Download,
+replacement, and deletion remain unimplemented.
 
 Clock reads return a timezone-free `S7.PLCClock` with the complete ten-byte
 timestamp. Clock writes accept millisecond-precision `NaiveDateTime` values.

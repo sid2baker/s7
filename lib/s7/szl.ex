@@ -8,7 +8,7 @@ defmodule S7.SZL do
 
   import Bitwise
 
-  alias S7.Error
+  alias S7.{Error, Options}
 
   @default_max_bytes 1_048_576
   @default_max_fragments 64
@@ -38,9 +38,9 @@ defmodule S7.SZL do
          :ok <- validate_word(index, :index, operation),
          :ok <- validate_options(opts, operation),
          {:ok, max_bytes} <-
-           positive_option(opts, :max_bytes, @default_max_bytes, @maximum_bytes, operation),
+           Options.positive(opts, :max_bytes, @default_max_bytes, @maximum_bytes, operation),
          {:ok, max_fragments} <-
-           positive_option(
+           Options.positive(
              opts,
              :max_fragments,
              @default_max_fragments,
@@ -134,16 +134,6 @@ defmodule S7.SZL do
 
   defp validate_options(opts, operation),
     do: {:error, Error.new(:client, operation, :invalid_options, details: %{options: opts})}
-
-  defp positive_option(opts, key, default, maximum, operation) do
-    value = Keyword.get(opts, key, default)
-
-    if is_integer(value) and value > 0 and value <= maximum do
-      {:ok, value}
-    else
-      invalid_option(operation, key, value)
-    end
-  end
 
   defp invalid_option(operation, option, value),
     do:

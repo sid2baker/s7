@@ -6,7 +6,7 @@ defmodule S7.Block do
   `{:unknown, code}` without creating atoms.
   """
 
-  alias S7.Error
+  alias S7.{Error, Options}
 
   @type_codes %{
     ob: 0x3038,
@@ -108,13 +108,43 @@ defmodule S7.Block do
   def decode_language(code), do: Map.get(@language_codes, code, {:unknown, code})
 
   @doc false
+  @spec decode_timestamp(non_neg_integer(), non_neg_integer()) ::
+          {:ok, NaiveDateTime.t()} | :error
+  def decode_timestamp(milliseconds, days)
+      when is_integer(milliseconds) and milliseconds >= 0 and milliseconds < 86_400_000 and
+             is_integer(days) and days >= 0 do
+    base = ~N[1984-01-01 00:00:00.000]
+    {:ok, NaiveDateTime.add(base, days * 86_400_000 + milliseconds, :millisecond)}
+  rescue
+    ArgumentError -> :error
+  end
+
+  def decode_timestamp(_milliseconds, _days), do: :error
+
+  @doc false
+  @spec decode_timestamp(non_neg_integer(), non_neg_integer(), atom(), atom(), atom()) ::
+          {:ok, NaiveDateTime.t()} | {:error, Error.t()}
+  def decode_timestamp(milliseconds, days, field, operation, error_reason) do
+    case decode_timestamp(milliseconds, days) do
+      {:ok, timestamp} ->
+        {:ok, timestamp}
+
+      :error ->
+        {:error,
+         Error.new(:s7, operation, error_reason,
+           details: %{field: field, milliseconds: milliseconds, days: days}
+         )}
+    end
+  end
+
+  @doc false
   @spec validate_list_options(term(), atom()) :: {:ok, limits()} | {:error, Error.t()}
   def validate_list_options(opts, operation) when is_list(opts) do
     with :ok <- validate_keyword_options(opts, operation),
          {:ok, max_bytes} <-
-           positive_option(opts, :max_bytes, @default_max_bytes, @maximum_bytes, operation),
+           Options.positive(opts, :max_bytes, @default_max_bytes, @maximum_bytes, operation),
          {:ok, max_fragments} <-
-           positive_option(
+           Options.positive(
              opts,
              :max_fragments,
              @default_max_fragments,
@@ -144,17 +174,6 @@ defmodule S7.Block do
       end
     else
       invalid_options(operation, opts)
-    end
-  end
-
-  defp positive_option(opts, key, default, maximum, operation) do
-    value = Keyword.get(opts, key, default)
-
-    if is_integer(value) and value > 0 and value <= maximum do
-      {:ok, value}
-    else
-      {:error,
-       Error.new(:client, operation, :invalid_option, details: %{option: key, value: value})}
     end
   end
 
