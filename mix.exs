@@ -143,13 +143,17 @@ defmodule S7.MixProject do
           S7.Cyclic.Subscription,
           S7.Data,
           S7.Error,
+          S7.PLC.CPInfo,
+          S7.PLC.CPUInfo,
           S7.PLC.Clock,
+          S7.PLC.OrderCode,
+          S7.PLC.Status,
           S7.Programmer.Event,
+          S7.Programmer.VariableStatus,
+          S7.Programmer.VariableStatus.Item,
           S7.Result,
           S7.SZL,
-          S7.Telemetry,
-          S7.Programmer.VariableStatus,
-          S7.Programmer.VariableStatus.Item
+          S7.Telemetry
         ],
         "S7 Protocol": [
           S7.Protocol.Alarm,
@@ -179,6 +183,9 @@ defmodule S7.MixProject do
           S7.Transport.COTP.ConnectionConfirm,
           S7.Transport.COTP.ConnectionRequest,
           S7.Transport.COTP.Data,
+          S7.Transport.COTP.DisconnectConfirm,
+          S7.Transport.COTP.DisconnectRequest,
+          S7.Transport.COTP.ErrorTPDU,
           S7.Transport.TPKT,
           S7.TSAP
         ]

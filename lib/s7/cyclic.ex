@@ -23,7 +23,6 @@ defmodule S7.Cyclic.Event do
     """
 
     alias S7.{Address, Error}
-    alias S7.Protocol.DataItem
 
     @enforce_keys [
       :return_code,
@@ -45,10 +44,12 @@ defmodule S7.Cyclic.Event do
       :raw
     ]
 
+    @type transport_size :: :none | :bit | :byte | :integer | :dinteger | :real | :octet | byte()
+
     @type t :: %__MODULE__{
             address: Address.t() | nil,
             return_code: byte(),
-            transport_size: DataItem.transport_size() | byte(),
+            transport_size: transport_size(),
             encoded_length: non_neg_integer(),
             data: binary(),
             padding: binary(),

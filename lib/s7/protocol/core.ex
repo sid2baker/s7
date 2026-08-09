@@ -136,3 +136,128 @@ defmodule S7.Protocol.Header do
   defp validate_byte!(value, _field) when value in 0..0xFF, do: :ok
   defp validate_byte!(_value, field), do: raise(ArgumentError, "invalid #{field}")
 end
+
+defmodule S7.Protocol.PDU do
+  @moduledoc "A generic S7 PDU with opaque parameter and data fields."
+
+  alias S7.Protocol.Header
+
+  @enforce_keys [:header, :parameters, :data]
+  defstruct [:header, :parameters, :data]
+
+  @type t :: %__MODULE__{header: Header.t(), parameters: binary(), data: binary()}
+  @type decode_error :: Header.decode_error() | :invalid_s7_pdu
+
+  @doc "Creates a PDU and derives its header lengths from the supplied fields."
+  @spec new(Header.rosctr(), 0..0xFFFF, binary(), binary(), keyword()) :: t()
+  def new(rosctr, reference, parameters, data \\ <<>>, opts \\ [])
+      when is_binary(parameters) and is_binary(data) do
+    %__MODULE__{
+      header: %Header{
+        rosctr: rosctr,
+        pdu_reference: reference,
+        parameter_length: byte_size(parameters),
+        data_length: byte_size(data),
+        error_class: Keyword.get(opts, :error_class),
+        error_code: Keyword.get(opts, :error_code)
+      },
+      parameters: parameters,
+      data: data
+    }
+  end
+
+  @doc "Encodes a PDU as iodata. Header lengths are always recalculated."
+  @spec encode(t()) :: iodata()
+  def encode(%__MODULE__{header: header, parameters: parameters, data: data})
+      when is_binary(parameters) and is_binary(data) do
+    header = %{
+      header
+      | parameter_length: byte_size(parameters),
+        data_length: byte_size(data)
+    }
+
+    [Header.encode(header), parameters, data]
+  end
+
+  def encode(_pdu), do: raise(ArgumentError, "invalid S7 PDU")
+
+  @doc "Decodes one PDU and leaves bytes following its declared data field."
+  @spec decode(binary()) ::
+          {:ok, t(), binary()} | {:more, pos_integer()} | {:error, decode_error()}
+  def decode(binary) when is_binary(binary) do
+    with {:ok, header, payload} <- Header.decode(binary) do
+      decode_fields(header, payload)
+    end
+  end
+
+  def decode(_binary), do: {:error, :invalid_s7_pdu}
+
+  @doc false
+  @spec encoded_size(t()) :: pos_integer()
+  def encoded_size(%__MODULE__{} = pdu), do: IO.iodata_length(encode(pdu))
+
+  defp decode_fields(header, payload) do
+    parameter_length = header.parameter_length
+    data_length = header.data_length
+    expected = parameter_length + data_length
+
+    if byte_size(payload) < expected do
+      {:more, expected - byte_size(payload)}
+    else
+      <<parameters::binary-size(^parameter_length), data::binary-size(^data_length),
+        remaining::binary>> = payload
+
+      {:ok, %__MODULE__{header: header, parameters: parameters, data: data}, remaining}
+    end
+  end
+end
+
+defmodule S7.Protocol.Job do
+  @moduledoc false
+
+  import Bitwise
+
+  alias S7.Error
+  alias S7.Protocol.PDU
+
+  @complete_rejections [
+    :access_denied,
+    :object_not_found,
+    :invalid_block,
+    :resource_busy,
+    :operation_not_supported,
+    :plc_error
+  ]
+
+  @spec validate_response_header(PDU.t(), atom()) :: :ok | {:error, Error.t()}
+  def validate_response_header(%PDU{header: header}, operation) do
+    code = (header.error_class || 0) <<< 8 ||| (header.error_code || 0)
+
+    cond do
+      code != 0 -> plc_error(operation, code)
+      header.rosctr != :ack_data -> malformed(operation, %{rosctr: header.rosctr})
+      true -> :ok
+    end
+  end
+
+  @spec complete_rejection?(Error.t()) :: boolean()
+  def complete_rejection?(%Error{reason: reason}), do: reason in @complete_rejections
+
+  @spec plc_error(atom(), 0..0xFFFF) :: {:error, Error.t()}
+  def plc_error(operation, code) do
+    reason =
+      case code do
+        0xD241 -> :access_denied
+        value when value in [0xD209, 0xD20E] -> :object_not_found
+        value when value in [0xD20C, 0xD20D, 0xD210, 0xD212, 0xD219, 0xD220] -> :invalid_block
+        value when value in [0xD2A1, 0xD2A4] -> :resource_busy
+        value when value in [0xD201, 0xD202, 0xD2C2] -> :operation_not_supported
+        _other -> :plc_error
+      end
+
+    {:error, Error.new(:s7, operation, reason, code: code)}
+  end
+
+  defp malformed(operation, details),
+    do: {:error, Error.new(:s7, operation, :malformed_response, details: details)}
+end

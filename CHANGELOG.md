@@ -7,6 +7,15 @@ Keep a Changelog, and stable releases use Semantic Versioning.
 
 Changes currently targeted for `0.1.0` are listed below.
 
+### Changed
+
+- Grouped public result types under their owning domains, including
+  `S7.Block.Info`, `S7.Alarm.Event`, `S7.Cyclic.Event`, `S7.Programmer.Event`,
+  and `S7.PLC.Status`.
+- Co-located related models and wire packet types, and replaced private
+  one-service transaction structs with typed maps to reduce source and module
+  sprawl without changing protocol behavior.
+
 ## 0.1.0 - Unreleased Release Candidate
 
 ### Added

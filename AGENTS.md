@@ -28,6 +28,20 @@ with the public API and wire contracts documented in this repository.
   protocol and introduce shared transport abstractions only after a real second
   consumer demonstrates the need.
 
+## Code Organization
+
+- Use domain-owned public names such as `S7.Block.Info`, `S7.Alarm.Event`, and
+  `S7.PLC.Status`. Dots express ownership; do not split every word into another
+  namespace level.
+- Keep structs for stable public values, distinct wire packets, and runtime records
+  whose identity is actively pattern-matched. Use maps or tagged tuples for private,
+  one-service bookkeeping that does not need a module identity.
+- Co-locate small related modules in one domain file. Give substantial codecs or
+  shared runtime behavior their own file; do not create one file per tiny struct or
+  merge unrelated services merely to reduce the file count.
+- Prefer the existing public facade and domain vocabulary over compatibility aliases,
+  pass-through wrappers, or speculative abstractions.
+
 ## Protocol Work
 
 - Never guess a wire layout. Follow the evidence ranking and clean-room requirements

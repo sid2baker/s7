@@ -21,7 +21,7 @@ defmodule S7.Client do
     SZL
   }
 
-  alias S7.Connection.{Alarm, BlockDownloader, BlockUploader, Cyclic, DestructiveRequest}
+  alias S7.Connection.{Alarm, Blocks, Cyclic, DestructiveRequest}
   alias S7.Connection.Programmer, as: ProgrammerRuntime
   alias S7.SZL.Metadata
 
@@ -729,7 +729,7 @@ defmodule S7.Client do
     with {:ok, block} <- Block.validate(block, :delete_block),
          {:ok, limits} <-
            Destructive.validate_options(opts, :delete_block, :delete_block) do
-      call(fn -> BlockDownloader.delete(client, block, limits, :delete_block) end, :delete_block)
+      call(fn -> Blocks.delete(client, block, limits, :delete_block) end, :delete_block)
     end
   end
 
@@ -877,9 +877,9 @@ defmodule S7.Client do
 
   defp upload_block_operation(client, block, opts, raw?) do
     with {:ok, block} <- Block.validate(block, :upload_block),
-         {:ok, limits} <- BlockUploader.validate_options(opts, :upload_block) do
+         {:ok, limits} <- Blocks.validate_upload_options(opts, :upload_block) do
       call(
-        fn -> BlockUploader.upload(client, block, limits, raw?, :upload_block) end,
+        fn -> Blocks.upload(client, block, limits, raw?, :upload_block) end,
         :upload_block
       )
     end
@@ -894,7 +894,7 @@ defmodule S7.Client do
   defp download_block_operation(client, image, opts, confirmation, operation) do
     with {:ok, limits} <- Destructive.validate_options(opts, confirmation, operation),
          {:ok, image} <- Block.Image.decode(image.raw, image.block, operation) do
-      call(fn -> BlockDownloader.download(client, image, limits, operation) end, operation)
+      call(fn -> Blocks.download(client, image, limits, operation) end, operation)
     end
   end
 
