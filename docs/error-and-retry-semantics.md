@@ -144,6 +144,19 @@ after transmission makes the remote job state ambiguous and invalidates the
 session. Unsubscribe also invalidates the session unless remote success is
 confirmed; stale handles are never reused after reconnect.
 
+Alarm setup and teardown follow the same remote-backed ownership rule. A complete setup rejection
+leaves the session usable; a missing or malformed setup response removes the provisional queue and
+invalidates the session. Teardown requires confirmed success. Alarm pull timeouts do not alter the
+remote subscription, duplicate indications are retained, and queue overflow remains locally
+observable so teardown can still be attempted.
+
+Alarm queries are read-only ordinary userdata requests. Alarm acknowledgment is state-changing and
+never replayed. Local validation or an oversized PDU returns `details.outcome: :not_attempted`; a
+complete PLC-level rejection returns `:rejected` and leaves the session usable; timeout,
+disconnect, or malformed response after transmission returns `:indeterminate` and invalidates the
+session. A syntactically complete response returns ordered per-object results, including individual
+PLC errors, without collapsing them into a transport failure.
+
 ## Multi-Item Contract
 
 Multi-item responses preserve input order and retain each PLC return code in

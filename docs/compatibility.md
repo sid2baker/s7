@@ -29,6 +29,11 @@ S7-1200 and S7-1500 CPUs generally require classic PUT/GET access and compatible
 non-optimized data blocks. Optimized or protected symbolic access requires a
 different protocol and is not inferred from successful classic S7ANY access.
 
+Classic alarm support is also CPU-, firmware-, and project-configuration-specific. The client
+implements the observed `ALARM_S` path used by S7-300 systems and the `ALARM_8` path used by
+S7-400 systems, but does not infer support on S7-1200/1500 from compatible userdata framing. Each
+family requires the named-device evidence in `docs/interoperability.md`.
+
 ## Versioning Policy
 
 Before 1.0, minor releases may refine public option and result contracts but

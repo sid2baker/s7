@@ -5,6 +5,7 @@ defmodule S7.Protocol.DecoderSafetyTest do
   alias S7.CyclicSubscription
 
   alias S7.Protocol.{
+    Alarm,
     Cyclic,
     DataItem,
     Header,
@@ -76,6 +77,52 @@ defmodule S7.Protocol.DecoderSafetyTest do
       }
 
       assert tagged?(Cyclic.decode_indication(indication, subscription, :decoder_safety))
+    end
+  end
+
+  property "alarm decoders return tagged results for arbitrary service payloads" do
+    check all(
+            binary <- binary(max_length: 512),
+            subfunction <- member_of(Alarm.indication_subfunctions()),
+            max_runs: 500
+          ) do
+      indication = %UserData{
+        parameter: %Parameter{
+          method: 0x11,
+          type: :indication,
+          function_group: :cpu,
+          subfunction: subfunction,
+          sequence: 0
+        },
+        payload: %Payload{return_code: 0xFF, transport_size: 0x09, data: binary}
+      }
+
+      query_response = %UserData{
+        parameter: %Parameter{
+          method: 0x12,
+          type: :response,
+          function_group: :cpu,
+          subfunction: 0x13,
+          sequence: 0,
+          data_unit_reference: 1,
+          last_data_unit: 0,
+          error_code: 0
+        },
+        payload: %Payload{return_code: 0xFF, transport_size: 0x09, data: binary}
+      }
+
+      request = put_in(indication.parameter.type, :request)
+
+      assert tagged?(Alarm.decode_request(request, :decoder_safety))
+      assert tagged?(Alarm.decode_indication(indication, :decoder_safety))
+
+      assert tagged?(
+               Alarm.decode_query_response(
+                 query_response,
+                 {:alarm_type, :alarm_8},
+                 :decoder_safety
+               )
+             )
     end
   end
 

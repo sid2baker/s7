@@ -109,8 +109,11 @@ An indication accepted by a subscription is bounded by that subscription's
 queue and does not consume an unrelated exclusive transaction's aggregate
 message budget. Unmatched indications remain visible through telemetry and do
 consume that budget while an exclusive transaction is active. Remote-backed
-cyclic subscriptions additionally mark the session as dependent on their owner;
-owner death closes the session so the PLC cannot retain an orphaned job.
+cyclic and alarm subscriptions additionally mark the session as dependent on
+their owner; owner death closes the session so the PLC cannot retain an
+orphaned job or message subscription. Alarm acknowledgments use a short
+exclusive transaction so complete PLC rejection, local non-transmission, and
+an indeterminate post-send outcome remain distinguishable.
 
 The same connection PID may own a sequence of sessions. Opt-in reconnect uses
 bounded exponential backoff with jitter, but first fails all work belonging to

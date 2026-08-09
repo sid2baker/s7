@@ -54,6 +54,15 @@ indication are independently constructed from the pinned PLC4X `s7.mspec`
 grammar and checked against the pinned Wireshark cyclic-service decoder; the
 local capture corpus has no fixed-cycle (`0x01`) exchange.
 
+Alarm subscription, teardown, query, `ALARM_8`, and `NOTIFY` fixtures are exact
+S7 PDU bytes from frames 8-12 and 163-164 of
+`wincc_s300_setup-alarm-read-write.pcapng` and frames 15-19 and 351 of
+`wincc_s400_production.pcapng`. The acknowledgment request, response, and
+indication are independently constructed from the pinned PLC4X `s7.mspec`
+grammar and checked against the pinned Wireshark `0x0B`/`0x0C` decoder. The
+local capture corpus has no alarm-acknowledgment exchange, so those three
+fixtures remain subject to physical-device qualification.
+
 ```text
 fixture -> decode -> expected struct
 expected struct -> encode -> fixture

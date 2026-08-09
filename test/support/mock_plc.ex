@@ -6,6 +6,7 @@ defmodule S7.Test.MockPLC do
   alias S7.{Block, Connection, SessionPassword}
 
   alias S7.Protocol.{
+    Alarm,
     BlockDownload,
     Clock,
     Cyclic,
@@ -82,6 +83,7 @@ defmodule S7.Test.MockPLC do
       control_fault: Keyword.get(opts, :control_fault),
       programmer_fault: Keyword.get(opts, :programmer_fault),
       cyclic_fault: Keyword.get(opts, :cyclic_fault),
+      alarm_fault: Keyword.get(opts, :alarm_fault),
       clock: Keyword.get(opts, :clock, ~N[2024-08-09 12:34:56.123]),
       security_password: Security.encode_password(security_password),
       authenticated: false,
@@ -92,6 +94,7 @@ defmodule S7.Test.MockPLC do
       programmer_pending: nil,
       cyclic_jobs: %{},
       next_cyclic_job: 1,
+      alarm_subscription: nil,
       deferred_reads: [],
       client_reference: nil,
       server_reference: 1,
@@ -869,6 +872,40 @@ defmodule S7.Test.MockPLC do
          request_pdu,
          %UserData{
            parameter: %Parameter{
+             method: 0x11,
+             type: :request,
+             function_group: :cpu,
+             subfunction: subfunction
+           }
+         } = request
+       )
+       when subfunction in [0x02, 0x0B, 0x13] do
+    case Alarm.decode_request(request, :mock_alarm) do
+      {:ok, %{action: :subscribe} = decoded} ->
+        handle_alarm_subscribe(state, request_pdu, request, decoded)
+
+      {:ok, %{action: :unsubscribe} = decoded} ->
+        handle_alarm_unsubscribe(state, request_pdu, request, decoded)
+
+      {:ok, %{action: :query} = decoded} ->
+        handle_alarm_query(state, request_pdu, request, decoded)
+
+      {:ok, %{action: :acknowledge} = decoded} ->
+        handle_alarm_acknowledgement(state, request_pdu, request, decoded)
+
+      {:error, _error} ->
+        send_userdata_response(state, request_pdu, request,
+          error_code: 0xD20C,
+          data: <<>>
+        )
+    end
+  end
+
+  defp handle_userdata(
+         state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{
              method: 0x12,
              type: :request,
              function_group: :programmer,
@@ -1557,6 +1594,242 @@ defmodule S7.Test.MockPLC do
   defp programmer_value(_values, 6, 0), do: <<0x41, 0x33, 0x85, 0x1F, 0xDE, 0xAD>>
   defp programmer_value(_values, 1, 1), do: <<2>>
   defp programmer_value(_values, size, _index), do: :binary.copy(<<0>>, size)
+
+  defp handle_alarm_subscribe(state, request_pdu, request, decoded) do
+    state = notify_request(state, :alarm_subscribe, request_pdu)
+
+    case state.alarm_fault do
+      :setup_silence ->
+        %{state | alarm_fault: nil}
+
+      :setup_rejected ->
+        send_userdata_response(%{state | alarm_fault: nil}, request_pdu, request,
+          error_code: 0xD241,
+          data: <<>>
+        )
+
+      :malformed_setup ->
+        send_userdata_response(%{state | alarm_fault: nil}, request_pdu, request, data: <<0>>)
+
+      _other ->
+        subscription = %{
+          alarm_type: decoded.alarm_type,
+          subscription_key: decoded.subscription_key
+        }
+
+        state =
+          send_userdata_response(state, request_pdu, request,
+            data: <<2, 0, alarm_subscription_state(decoded.alarm_type, :subscribe), 1, 0>>
+          )
+
+        state
+        |> Map.put(:alarm_subscription, subscription)
+        |> send_alarm_pushes(subscription)
+    end
+  end
+
+  defp handle_alarm_unsubscribe(state, request_pdu, request, decoded) do
+    state = notify_request(state, :alarm_unsubscribe, request_pdu)
+
+    case state.alarm_fault do
+      :unsubscribe_silence ->
+        %{state | alarm_fault: nil}
+
+      :unsubscribe_rejected ->
+        send_userdata_response(%{state | alarm_fault: nil}, request_pdu, request,
+          error_code: 0xD241,
+          return_code: 0x0A,
+          transport_size: 0,
+          data: <<>>
+        )
+
+      :malformed_unsubscribe ->
+        send_userdata_response(%{state | alarm_fault: nil}, request_pdu, request, data: <<0>>)
+
+      _other ->
+        state =
+          send_userdata_response(state, request_pdu, request,
+            data: <<2, 0, alarm_subscription_state(decoded.alarm_type, :unsubscribe), 1, 0>>
+          )
+
+        %{state | alarm_subscription: nil}
+    end
+  end
+
+  defp handle_alarm_query(state, request_pdu, request, decoded) do
+    state = notify_request(state, :alarm_query, request_pdu)
+
+    case state.alarm_fault do
+      :query_silence ->
+        %{state | alarm_fault: nil}
+
+      :query_rejected ->
+        send_userdata_response(%{state | alarm_fault: nil}, request_pdu, request,
+          error_code: 0xD241,
+          data: <<>>
+        )
+
+      :malformed_query ->
+        send_userdata_response(%{state | alarm_fault: nil}, request_pdu, request,
+          data: <<0, 1, 0xFF, 9, 0, 12, 10, 0>>
+        )
+
+      _other ->
+        send_userdata_response(state, request_pdu, request,
+          data: alarm_query_data(state, decoded.selector)
+        )
+    end
+  end
+
+  defp handle_alarm_acknowledgement(state, request_pdu, request, decoded) do
+    state = notify_request(state, :alarm_acknowledge, request_pdu)
+
+    case state.alarm_fault do
+      :ack_silence ->
+        %{state | alarm_fault: nil}
+
+      :ack_rejected ->
+        send_userdata_response(%{state | alarm_fault: nil}, request_pdu, request,
+          error_code: 0xD241,
+          data: <<>>
+        )
+
+      :malformed_ack ->
+        send_userdata_response(%{state | alarm_fault: nil}, request_pdu, request,
+          data: <<9, length(decoded.acknowledgements), 0xFF, 0xFF>>
+        )
+
+      :ack_item_rejected ->
+        count = length(decoded.acknowledgements)
+        return_codes = <<0x03, :binary.copy(<<0xFF>>, count - 1)::binary>>
+
+        send_userdata_response(%{state | alarm_fault: nil}, request_pdu, request,
+          data: <<9, count, return_codes::binary>>
+        )
+
+      _other ->
+        count = length(decoded.acknowledgements)
+
+        return_codes =
+          Keyword.get(state.options, :alarm_ack_return_codes, :binary.copy(<<0xFF>>, count))
+
+        true = is_binary(return_codes) and byte_size(return_codes) == count
+
+        send_userdata_response(state, request_pdu, request,
+          data: <<9, count, return_codes::binary>>
+        )
+    end
+  end
+
+  defp send_alarm_pushes(state, subscription) do
+    event_ids =
+      case Keyword.fetch(state.options, :alarm_event_ids) do
+        {:ok, event_ids} -> event_ids
+        :error -> List.duplicate(0xAF, Keyword.get(state.options, :alarm_push_count, 1))
+      end
+
+    if event_ids == [] do
+      state
+    else
+      Process.sleep(Keyword.get(state.options, :alarm_push_delay, 20))
+
+      Enum.reduce(event_ids, state, fn event_id, state ->
+        send_alarm_indication(state, subscription, event_id)
+      end)
+    end
+  end
+
+  defp send_alarm_indication(
+         %{alarm_fault: :silence_indication} = state,
+         _subscription,
+         _event_id
+       ),
+       do: %{state | alarm_fault: nil}
+
+  defp send_alarm_indication(state, subscription, event_id) do
+    subfunction =
+      if state.alarm_fault == :wrong_alarm_subfunction,
+        do: 0x07,
+        else: alarm_indication_subfunction(subscription.alarm_type)
+
+    data =
+      case state.alarm_fault do
+        :malformed_indication -> <<0, 1>>
+        :invalid_alarm_timestamp -> <<0::unsigned-big-64, 0x40, 0>>
+        _other -> alarm_event_data(event_id)
+      end
+
+    indication = %UserData{
+      parameter: %Parameter{
+        method: 0x11,
+        type: :indication,
+        function_group: :cpu,
+        subfunction: subfunction,
+        sequence: 0
+      },
+      payload: %Payload{return_code: 0xFF, transport_size: 0x09, data: data}
+    }
+
+    {:ok, indication_pdu} = UserData.to_pdu(indication, 0)
+    :ok = send_pdu(state, indication_pdu)
+
+    if state.alarm_fault in [
+         :wrong_alarm_subfunction,
+         :malformed_indication,
+         :invalid_alarm_timestamp
+       ],
+       do: %{state | alarm_fault: nil},
+       else: state
+  end
+
+  defp alarm_event_data(event_id) do
+    timestamp = <<0x24, 0x08, 0x09, 0x12, 0x34, 0x56, 0x12, 0x36>>
+    object = <<0x12, 0x0A, 0x16, 1, event_id::unsigned-big-32, 1, 0, 1, 1>>
+    associated_value = <<0xFF, 0x04, 16::unsigned-big-16, 1_234::unsigned-big-16>>
+    <<timestamp::binary, 0x40, 1, object::binary, associated_value::binary>>
+  end
+
+  defp alarm_query_data(state, selector) do
+    if Keyword.get(state.options, :alarm_query_empty, false) do
+      <<0, 1, 0x0A, 0, 0::unsigned-big-16>>
+    else
+      event_ids = alarm_query_event_ids(state.options, selector)
+
+      alarm_type = alarm_query_type(state, selector)
+      records = IO.iodata_to_binary(Enum.map(event_ids, &alarm_query_record(alarm_type, &1)))
+      count = length(event_ids)
+      <<0, count, 0xFF, 0x09, byte_size(records)::unsigned-big-16, records::binary>>
+    end
+  end
+
+  defp alarm_query_record(alarm_type, event_id) do
+    <<10, 0::unsigned-big-16, alarm_type_code(alarm_type), event_id::unsigned-big-32, 0, 1, 1, 1>>
+  end
+
+  defp alarm_query_event_ids(options, selector) do
+    Keyword.get_lazy(options, :alarm_query_event_ids, fn -> default_alarm_query_ids(selector) end)
+  end
+
+  defp default_alarm_query_ids({:event_id, event_id}), do: [event_id]
+  defp default_alarm_query_ids({:alarm_type, _alarm_type}), do: [0xAF]
+
+  defp alarm_query_type(_state, {:alarm_type, alarm_type}), do: alarm_type
+
+  defp alarm_query_type(%{alarm_subscription: %{alarm_type: alarm_type}}, {:event_id, _event_id}),
+    do: alarm_type
+
+  defp alarm_query_type(_state, {:event_id, _event_id}), do: :alarm_8
+
+  defp alarm_type_code(:alarm_8), do: 0x02
+  defp alarm_type_code(:alarm_s), do: 0x04
+
+  defp alarm_subscription_state(:alarm_8, :subscribe), do: 0x05
+  defp alarm_subscription_state(:alarm_8, :unsubscribe), do: 0x04
+  defp alarm_subscription_state(:alarm_s, :subscribe), do: 0x09
+  defp alarm_subscription_state(:alarm_s, :unsubscribe), do: 0x08
+
+  defp alarm_indication_subfunction(:alarm_8), do: 0x05
+  defp alarm_indication_subfunction(:alarm_s), do: 0x12
 
   defp handle_cyclic_subscribe(state, request_pdu, request, decoded) do
     state = notify_request(state, :cyclic_subscribe, request_pdu)

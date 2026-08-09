@@ -8,8 +8,9 @@ authorization are also supported. Destructive block download, replacement, and d
 available only through an explicit two-level opt-in, as are CPU stop/start, RAM-to-ROM copy, and
 memory compression. Capture-backed read-only programmer diagnostics and one-shot variable-status
 sampling are raw-first and bounded. Typed fixed-cycle subscriptions and raw change-driven cyclic
-jobs use owner-bound, session-local handles with bounded pull queues. One S7ANY item may represent
-either a scalar or a fixed-count range.
+jobs use owner-bound, session-local handles with bounded pull queues. Classic `ALARM_S` and
+`ALARM_8` subscriptions, queries, indications, and explicit acknowledgments use the same bounded
+ownership model. One S7ANY item may represent either a scalar or a fixed-count range.
 
 The implementation keeps protocol codecs pure and gives the TCP socket to one `:gen_statem`
 process. Its `active: :once` request engine correlates responses by PDU reference, bounds queued
@@ -22,10 +23,10 @@ reads and writes. CI also builds a server from a pinned Snap7 revision and verif
 splitting and read-after-write for every supported area and value type. PLCSIM Advanced and
 physical Siemens hardware remain external release gates, so `0.1.0` remains a release candidate.
 
-S7comm-plus, symbolic addressing, optimized DB access, alarms, and destructive programmer
-commands are not supported. The common classic userdata envelope is implemented for SZL,
-block-directory, clock, protected-session, evidence-backed read-only programmer jobs, and bounded
-cyclic subscriptions.
+S7comm-plus, symbolic addressing, optimized DB access, and destructive programmer commands are
+not supported. The common classic userdata envelope is implemented for SZL, block-directory,
+clock, protected-session, evidence-backed read-only programmer jobs, cyclic subscriptions, and
+classic alarms. Alarm success paths remain subject to named physical-device qualification.
 
 ## Usage
 
@@ -382,13 +383,42 @@ terminal for event delivery but `unsubscribe_cyclic/3` still releases the PLC jo
 an ambiguous setup, modification, or teardown invalidates the session; reconnect never restores a
 subscription, and handles from an earlier session are rejected.
 
+## Classic Alarms
+
+Alarm subscriptions expose validated timestamps and known object headers while retaining every
+wire record and CPU-specific associated value:
+
+```elixir
+{:ok, alarms} =
+  S7.Client.subscribe_alarms(client, :alarm_8,
+    queue_limit: 64
+  )
+
+{:ok, %S7.AlarmEvent{objects: [object | _]} = event} =
+  S7.Client.next_alarm(client, alarms)
+
+{:ok, %S7.AlarmQuery{records: records}} =
+  S7.Client.query_alarms(client, :alarm_8)
+
+:ok = S7.Client.acknowledge_alarm(client, object)
+{:ok, results} = S7.Client.acknowledge_alarms(client, event)
+:ok = S7.Client.unsubscribe_alarms(client, alarms)
+```
+
+Use `:alarm_s` for the S7-300-style path and `:alarm_8` for the S7-400-style path. Events are
+delivered in receive order without deduplication. Handles belong to their creating process and
+current S7 session; reconnect requires explicit resubscription. Alarm acknowledgment is
+state-changing and is never replayed. A complete PLC rejection leaves the session usable, while a
+missing or malformed response after transmission is indeterminate and invalidates the session.
+Query records and associated values preserve raw bytes for CPU-family-specific variants.
+
 ## Architecture
 
 ```text
 S7.Client
   -> S7.Connection (:gen_statem, active-once :gen_tcp owner)
     -> bounded queue / PDU-reference correlation / request timers / reconnect backoff
-    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL, Blocks, BlockUpload, BlockDownload, PIService, Clock, Security, Programmer, Cyclic}
+    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL, Blocks, BlockUpload, BlockDownload, PIService, Clock, Security, Programmer, Cyclic, Alarm}
       -> S7.Protocol.PDU / Header / Item / DataItem
         -> S7.Transport.COTP
           -> S7.Transport.TPKT
@@ -436,7 +466,7 @@ revision into a temporary directory.
 
 With Docker available, capture the same exchange and require tshark to identify Setup, Read Var,
 Write Var, SZL, block-directory, block transfer, CPU control, set-clock, session-password,
-programmer, and cyclic services without malformed packets:
+programmer, cyclic, and alarm services without malformed packets:
 
 ```bash
 bash scripts/run_snap7_packet_check.sh

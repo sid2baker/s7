@@ -40,7 +40,7 @@ The exact scope and evidence rules are defined in
 | 20 | Opt-in PLC control | Complete |
 | 21 | Raw-first programmer diagnostics and variable status | Complete |
 | 22 | Cyclic subscriptions | Complete |
-| 23 | Alarm subscription, query, and acknowledgment | Planned |
+| 23 | Alarm subscription, query, and acknowledgment | Complete |
 | 24 | Cross-family qualification and classic `1.0.0` release | Planned |
 
 Every milestone is committed independently after its local and repository-wide

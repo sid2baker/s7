@@ -1893,7 +1893,8 @@ defmodule S7.Connection do
         filter: filter,
         queue: :queue.new(),
         queue_limit: subscription_options.queue_limit,
-        session_bound: subscription_options.session_bound
+        session_bound: subscription_options.session_bound,
+        owner_down_operation: subscription_options.owner_down_operation
       }
 
       registry = data.subscription_registry
@@ -1963,6 +1964,16 @@ defmodule S7.Connection do
   defp validate_subscription_subfunction(:any), do: :ok
   defp validate_subscription_subfunction(value) when value in 0..0xFF, do: :ok
 
+  defp validate_subscription_subfunction({:one_of, values}) when is_list(values) do
+    if values != [] and Enum.count_until(values, 0x101) <= 0x100 and
+         Enum.all?(values, &(&1 in 0..0xFF)) and
+         Enum.uniq(values) == values do
+      :ok
+    else
+      subscription_error(:subscribe_userdata, :invalid_filter, %{subfunction: {:one_of, values}})
+    end
+  end
+
   defp validate_subscription_subfunction(value),
     do: subscription_error(:subscribe_userdata, :invalid_filter, %{subfunction: value})
 
@@ -1979,7 +1990,7 @@ defmodule S7.Connection do
     do: subscription_error(:subscribe_userdata, :invalid_filter, %{type: type})
 
   defp validate_subscription_options(opts) when is_list(opts) do
-    allowed = [:queue_limit, :session_bound]
+    allowed = [:queue_limit, :session_bound, :owner_down_operation]
 
     with true <- Keyword.keyword?(opts),
          nil <- Enum.find(Keyword.keys(opts), &(&1 not in allowed)),
@@ -1990,8 +2001,14 @@ defmodule S7.Connection do
              @default_subscription_queue_limit
            ),
          {:ok, session_bound} <-
-           validate_boolean_subscription_option(opts, :session_bound, false) do
-      {:ok, %{queue_limit: queue_limit, session_bound: session_bound}}
+           validate_boolean_subscription_option(opts, :session_bound, false),
+         {:ok, owner_down_operation} <- validate_owner_down_operation(opts) do
+      {:ok,
+       %{
+         queue_limit: queue_limit,
+         session_bound: session_bound,
+         owner_down_operation: owner_down_operation
+       }}
     else
       false ->
         subscription_error(:subscribe_userdata, :invalid_options, %{options: opts})
@@ -2026,6 +2043,18 @@ defmodule S7.Connection do
       do: {:ok, value},
       else:
         subscription_error(:subscribe_userdata, :invalid_option, %{option: option, value: value})
+  end
+
+  defp validate_owner_down_operation(opts) do
+    operation = Keyword.get(opts, :owner_down_operation, :userdata_subscription)
+
+    if is_atom(operation),
+      do: {:ok, operation},
+      else:
+        subscription_error(:subscribe_userdata, :invalid_option, %{
+          option: :owner_down_operation,
+          value: operation
+        })
   end
 
   defp ensure_subscription_capacity(data) do
@@ -2198,6 +2227,7 @@ defmodule S7.Connection do
   end
 
   defp filter_match?(:any, _value), do: true
+  defp filter_match?({:one_of, values}, value), do: value in values
   defp filter_match?(expected, value), do: expected == value
 
   defp deliver_subscription(data, %Subscription{error: %Error{}} = subscription, _message),
@@ -2339,8 +2369,11 @@ defmodule S7.Connection do
     end
   end
 
-  defp finish_owner_subscription(data, %Subscription{session_bound: true}) do
-    error = Error.new(:client, :cyclic_subscription, :subscription_owner_down)
+  defp finish_owner_subscription(
+         data,
+         %Subscription{session_bound: true, owner_down_operation: operation}
+       ) do
+    error = Error.new(:client, operation, :subscription_owner_down)
     {:session_bound, error, data}
   end
 

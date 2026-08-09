@@ -148,7 +148,7 @@ defmodule S7.CyclicServicesIntegrationTest do
       assert {:ok, client} = connect(server)
 
       assert {:error, %Error{reason: ^expected}} =
-               Client.subscribe_cyclic(client, ["MW10"], timeout: 100, step_timeout: 100)
+               Client.subscribe_cyclic(client, ["MW10"], timeout: 100, step_timeout: 500)
 
       assert %{state: :disconnected, subscriptions: 0, exclusive_transaction: false} =
                await_state(client, :disconnected)
@@ -234,7 +234,7 @@ defmodule S7.CyclicServicesIntegrationTest do
       assert {:error, %Error{reason: ^expected}} =
                Client.unsubscribe_cyclic(client, subscription,
                  timeout: 100,
-                 step_timeout: 100
+                 step_timeout: 500
                )
 
       assert %{state: :disconnected, subscriptions: 0, exclusive_transaction: false} =

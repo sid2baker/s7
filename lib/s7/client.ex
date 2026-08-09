@@ -9,6 +9,10 @@ defmodule S7.Client do
 
   alias S7.{
     Address,
+    AlarmAcknowledgement,
+    AlarmEvent,
+    AlarmQuery,
+    AlarmSubscription,
     Block,
     BlockEntry,
     BlockImage,
@@ -32,7 +36,7 @@ defmodule S7.Client do
     VariableStatus
   }
 
-  alias S7.Connection.{BlockDownloader, BlockUploader, Controller, Cyclic}
+  alias S7.Connection.{Alarm, BlockDownloader, BlockUploader, Controller, Cyclic}
   alias S7.Connection.Programmer, as: ProgrammerRuntime
   alias S7.SZL.Metadata
 
@@ -435,6 +439,123 @@ defmodule S7.Client do
       call(
         fn -> Cyclic.unsubscribe(client, subscription, options) end,
         :unsubscribe_cyclic
+      )
+    end
+  end
+
+  @doc """
+  Starts a connection-scoped classic alarm-message subscription.
+
+  `alarm_type` must be `:alarm_s` for the S7-300-style alarm path or
+  `:alarm_8` for the S7-400-style path. Options are `:subscription_key`
+  (exactly eight bytes), `:queue_limit`, `:timeout`, and `:step_timeout`.
+
+  The returned handle belongs to the calling process and current S7 session.
+  Events are delivered in wire order without deduplication.
+  """
+  @spec subscribe_alarms(t(), AlarmSubscription.alarm_type(), keyword()) ::
+          {:ok, AlarmSubscription.t()} | {:error, Error.t()}
+  def subscribe_alarms(client, alarm_type, opts \\ []) do
+    with {:ok, options} <-
+           Alarm.validate_subscription_options(opts, :subscribe_alarms) do
+      call(fn -> Alarm.subscribe(client, alarm_type, options) end, :subscribe_alarms)
+    end
+  end
+
+  @doc """
+  Pulls the next bounded alarm or notification indication.
+
+  A timeout leaves the remote subscription active. The caller must be the
+  process that created the subscription handle.
+  """
+  @spec next_alarm(t(), AlarmSubscription.t(), pos_integer()) ::
+          {:ok, AlarmEvent.t()} | {:error, Error.t()}
+  def next_alarm(client, subscription, timeout \\ 5_000) do
+    call(fn -> Alarm.next(client, subscription, timeout) end, :next_alarm)
+  end
+
+  @doc """
+  Releases a remote alarm subscription and its bounded local queue.
+
+  A missing or malformed remote response invalidates the session because the
+  remote subscription state would otherwise be ambiguous.
+  """
+  @spec unsubscribe_alarms(t(), AlarmSubscription.t(), keyword()) ::
+          :ok | {:error, Error.t()}
+  def unsubscribe_alarms(client, subscription, opts \\ []) do
+    with {:ok, options} <- Alarm.validate_request_options(opts, :unsubscribe_alarms) do
+      call(
+        fn -> Alarm.unsubscribe(client, subscription, options) end,
+        :unsubscribe_alarms
+      )
+    end
+  end
+
+  @doc """
+  Queries the PLC's currently buffered alarms for one classic alarm family.
+
+  Query record headers are decoded while CPU-specific tails and complete wire
+  records remain available in `S7.AlarmQuery`.
+  """
+  @spec query_alarms(t(), AlarmSubscription.alarm_type()) ::
+          {:ok, AlarmQuery.t()} | {:error, Error.t()}
+  def query_alarms(client, alarm_type) do
+    call(
+      fn -> Alarm.query(client, {:alarm_type, alarm_type}) end,
+      :query_alarms
+    )
+  end
+
+  @doc """
+  Queries one classic alarm event ID.
+  """
+  @spec query_alarm(t(), 0..0xFFFFFFFF) :: {:ok, AlarmQuery.t()} | {:error, Error.t()}
+  def query_alarm(client, event_id) do
+    call(fn -> Alarm.query(client, {:event_id, event_id}, :query_alarm) end, :query_alarm)
+  end
+
+  @doc """
+  Explicitly acknowledges one alarm object or acknowledgment struct.
+
+  This operation changes PLC alarm state and is never replayed. A timeout or
+  malformed response after transmission returns an indeterminate outcome and
+  invalidates the session.
+  """
+  @spec acknowledge_alarm(
+          t(),
+          AlarmAcknowledgement.t() | AlarmEvent.Object.t(),
+          keyword()
+        ) :: :ok | {:error, Error.t()}
+  def acknowledge_alarm(client, acknowledgement, opts \\ []) do
+    with {:ok, options} <- Alarm.validate_request_options(opts, :acknowledge_alarm),
+         {:ok, results} <-
+           call(
+             fn ->
+               Alarm.acknowledge(client, acknowledgement, options, :acknowledge_alarm)
+             end,
+             :acknowledge_alarm
+           ) do
+      single_acknowledgement_result(results)
+    end
+  end
+
+  @doc """
+  Explicitly acknowledges every object in an alarm event or list.
+
+  Results preserve input order and report PLC item errors individually.
+  """
+  @spec acknowledge_alarms(
+          t(),
+          AlarmEvent.t() | [AlarmAcknowledgement.t() | AlarmEvent.Object.t()],
+          keyword()
+        ) :: {:ok, [AlarmAcknowledgement.Result.t()]} | {:error, Error.t()}
+  def acknowledge_alarms(client, acknowledgements, opts \\ []) do
+    with {:ok, options} <- Alarm.validate_request_options(opts, :acknowledge_alarms) do
+      call(
+        fn ->
+          Alarm.acknowledge(client, acknowledgements, options, :acknowledge_alarms)
+        end,
+        :acknowledge_alarms
       )
     end
   end
@@ -850,6 +971,19 @@ defmodule S7.Client do
 
   defp add_item_context(error, index),
     do: %{error | details: Map.put(error.details, :index, index)}
+
+  defp single_acknowledgement_result([
+         %AlarmAcknowledgement.Result{status: :ok}
+       ]),
+       do: :ok
+
+  defp single_acknowledgement_result([
+         %AlarmAcknowledgement.Result{status: :error, error: %Error{} = error}
+       ]),
+       do: {:error, %{error | operation: :acknowledge_alarm}}
+
+  defp single_acknowledgement_result(_results),
+    do: {:error, Error.new(:client, :acknowledge_alarm, :invalid_alarm_acknowledgement)}
 
   defp call(function, operation) do
     function.()

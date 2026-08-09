@@ -43,4 +43,23 @@ defmodule S7.Protocol.UserData.Parameter do
           last_data_unit: byte() | nil,
           error_code: 0..0xFFFF | nil
         }
+
+  @doc false
+  @spec final_unit?(t()) :: boolean()
+  def final_unit?(%__MODULE__{
+        data_unit_reference: nil,
+        last_data_unit: nil,
+        error_code: nil
+      }),
+      do: true
+
+  def final_unit?(%__MODULE__{
+        data_unit_reference: reference,
+        last_data_unit: 0,
+        error_code: 0
+      })
+      when reference in 0..0xFF,
+      do: true
+
+  def final_unit?(%__MODULE__{}), do: false
 end

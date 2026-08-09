@@ -15,12 +15,13 @@ defmodule S7.Connection.Subscription do
     queue: {[], []},
     queued_count: 0,
     queue_limit: 64,
-    session_bound: false
+    session_bound: false,
+    owner_down_operation: :userdata_subscription
   ]
 
   @type filter :: %{
           optional(:function_group) => UserData.Parameter.function_group() | :any,
-          optional(:subfunction) => byte() | :any,
+          optional(:subfunction) => byte() | {:one_of, [byte()]} | :any,
           optional(:sequence) => byte() | :any,
           optional(:type) => UserData.Parameter.function_type() | :any
         }
@@ -37,6 +38,7 @@ defmodule S7.Connection.Subscription do
           queue: :queue.queue(UserData.t()),
           queued_count: non_neg_integer(),
           queue_limit: pos_integer(),
-          session_bound: boolean()
+          session_bound: boolean(),
+          owner_down_operation: atom()
         }
 end

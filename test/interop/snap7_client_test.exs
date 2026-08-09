@@ -5,6 +5,7 @@ defmodule S7.Snap7ClientInteropTest do
 
   alias S7.{
     Address,
+    AlarmAcknowledgement,
     Block,
     BlockEntry,
     BlockImage,
@@ -179,6 +180,44 @@ defmodule S7.Snap7ClientInteropTest do
 
     assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
              Client.info(client)
+  end
+
+  test "rejects the pinned server's malformed alarm-subscription response", %{client: client} do
+    assert {:error, %Error{reason: :malformed_response}} =
+             Client.subscribe_alarms(client, :alarm_8, timeout: 200, step_timeout: 200)
+
+    assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
+             Client.info(client)
+  end
+
+  test "decodes the pinned server's alarm-query rejection", %{client: client} do
+    assert {:error, %Error{reason: :userdata_error, code: 0xD402}} =
+             Client.query_alarms(client, :alarm_8)
+
+    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} = Client.info(client)
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
+  end
+
+  test "decodes the pinned server's alarm acknowledgment rejection", %{client: client} do
+    acknowledgement = %AlarmAcknowledgement{
+      event_id: 0xAF,
+      ack_state_going: 0xFE,
+      ack_state_coming: 0xFE
+    }
+
+    assert {:error,
+            %Error{
+              reason: :userdata_error,
+              code: 0xD402,
+              details: %{outcome: :rejected}
+            }} =
+             Client.acknowledge_alarm(client, acknowledgement,
+               timeout: 200,
+               step_timeout: 200
+             )
+
+    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} = Client.info(client)
+    assert Client.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 
   test "decodes download protection and emits a PI block-control request", %{client: client} do

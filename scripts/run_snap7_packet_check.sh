@@ -51,6 +51,10 @@ MALFORMED="$({
       -Y _ws.malformed -T fields -e frame.number
 } 2>/dev/null)"
 
+if [[ -n "${S7_CAPTURE_FILE:-}" ]]; then
+  install -m 0644 "${PCAP}" "${S7_CAPTURE_FILE}"
+fi
+
 grep -q "Setup communication" <<<"${DECODED}"
 grep -q "Function:\[Read Var\]" <<<"${DECODED}"
 grep -q "Function:\[Write Var\]" <<<"${DECODED}"
@@ -70,11 +74,10 @@ grep -Fq 'PI-Service] -> _MODU("EP")' <<<"${DECODED}"
 grep -Fq 'PI-Service] -> _GARB()' <<<"${DECODED}"
 grep -Fq '[Programmer commands] -> [Variable status]' <<<"${DECODED}"
 grep -Fq '[Cyclic services] -> [Cyclic transfer]' <<<"${DECODED}"
+grep -Fq '[CPU functions] -> [Message service]' <<<"${DECODED}"
+grep -Fq '[CPU functions] -> [ALARM query]' <<<"${DECODED}"
+grep -Fq '[CPU functions] -> [ALARM ack]' <<<"${DECODED}"
 test -z "${MALFORMED}"
-
-if [[ -n "${S7_CAPTURE_FILE:-}" ]]; then
-  install -m 0644 "${PCAP}" "${S7_CAPTURE_FILE}"
-fi
 
 printf 'tshark decoded %s S7comm frames with no malformed packets\n' \
   "$(grep -c S7COMM <<<"${DECODED}")"

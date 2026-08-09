@@ -44,7 +44,7 @@ The complete scope and risk policy are defined in
 | Bounded unsolicited userdata routing | Implemented, internal typed-service boundary | Supported |
 | Programmer diagnostics and variable status | Raw-first, read-only, capture-backed implementation | Supported after device qualification |
 | Cyclic subscriptions | Typed fixed-cycle plus raw fixed/change-driven setup, modification, indications, and teardown | Supported after device qualification |
-| Alarms | Not implemented | Post-1.0 |
+| Classic alarms | `ALARM_S`/`ALARM_8` setup and abort, raw-preserving indications, query by family or event ID, explicit acknowledgment | Supported after device qualification |
 
 S7comm-plus, secure PG/HMI sessions, and symbolic access to optimized data
 blocks are outside this project's protocol boundary.
@@ -81,6 +81,13 @@ preserve complete S7ANY, DBREAD, and returned query records. Exact intervals
 range from 100 ms to 2,550,000 ms. Handles belong to one process and one S7
 session. Owner death closes that session to release the remote job, and
 reconnect requires explicit resubscription.
+
+Alarm subscriptions use the same monitored, bounded pull model but route the complete known CPU
+alarm-indication set. Events retain exact bytes and preserve duplicate event IDs and state changes
+in receive order. Queries decode stable record headers and retain CPU-specific tails. Explicit
+acknowledgments run as bounded, exclusive, no-replay transactions and return one result per alarm
+object. A remote subscription handle is owner- and session-bound; owner death, ambiguous setup, or
+unconfirmed teardown closes the session so the PLC cannot retain orphaned alarm state.
 
 ## Addressing And Values
 

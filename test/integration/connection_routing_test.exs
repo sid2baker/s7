@@ -110,7 +110,10 @@ defmodule S7.ConnectionRoutingIntegrationTest do
     client = connect(server)
 
     assert {:ok, subscription} =
-             Connection.subscribe_userdata(client, %{function_group: :cpu, subfunction: 3})
+             Connection.subscribe_userdata(client, %{
+               function_group: :cpu,
+               subfunction: {:one_of, [3, 5]}
+             })
 
     assert {:ok, request} = UserData.request(:cpu, 1, <<0x00, 0x11, 0x00, 0x00>>)
     assert {:ok, %UserData{}} = Connection.userdata(client, request)
@@ -302,6 +305,10 @@ defmodule S7.ConnectionRoutingIntegrationTest do
           %{unknown: 1},
           %{function_group: :unknown},
           %{subfunction: 256},
+          %{subfunction: {:one_of, []}},
+          %{subfunction: {:one_of, [1, 1]}},
+          %{subfunction: {:one_of, [1, 256]}},
+          %{subfunction: {:one_of, :invalid}},
           %{sequence: 256},
           %{type: :unknown}
         ] do
@@ -309,7 +316,12 @@ defmodule S7.ConnectionRoutingIntegrationTest do
                Connection.subscribe_userdata(client, filter)
     end
 
-    for opts <- [[:invalid], [unknown: 1], [queue_limit: 0]] do
+    for opts <- [
+          [:invalid],
+          [unknown: 1],
+          [queue_limit: 0],
+          [owner_down_operation: "invalid"]
+        ] do
       assert {:error, %Error{reason: reason}} =
                Connection.subscribe_userdata(client, %{}, opts)
 

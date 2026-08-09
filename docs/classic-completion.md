@@ -78,7 +78,7 @@ by the PLC during an exclusive transaction.
 | Programmer commands | `0x01` | Read-only block/variable status, stacks, and job inspection | Raw-first implementation complete; device qualification pending |
 | Cyclic services | `0x02` | Subscribe, transfer, change-driven transfer, modify, unsubscribe | Implemented; device qualification pending |
 | Block functions | `0x03` | List blocks, list by type, block information | Implemented; device qualification pending |
-| CPU functions | `0x04` | Read SZL, message service, diagnostics, alarm query/ack/indications | SZL implemented; remainder planned |
+| CPU functions | `0x04` | Read SZL, message service, diagnostics, alarm query/ack/indications | SZL and alarms implemented; device qualification pending |
 | Security | `0x05` | Session password login/logout | Implemented; device qualification pending |
 | PBC BSEND | `0x06` | Raw preservation only | Adapter scope |
 | Time | `0x07` | Read/set clock | Implemented; following variants evidence-gated |
@@ -95,6 +95,14 @@ also have raw variable-specification support. The change-driven and teardown
 fixtures are capture-derived. No fixed-transfer capture exists in the pinned
 corpus, so that layout is independently corroborated by PLC4X and Wireshark and
 remains subject to physical-device qualification.
+
+Alarm message setup/abort supports both `ALARM_S` and `ALARM_8`. Query supports alarm-family and
+event-ID selectors. Indications decode known object headers and validated `DATE_AND_TIME` values
+while preserving exact object, associated-value, query-record, and event bytes. Explicit
+acknowledgment is state-changing, never replayed, and reports per-object PLC results. The local
+capture corpus covers setup, abort, query, `ALARM_8`, and `NOTIFY`; acknowledgment bytes are
+independently corroborated by PLC4X and Wireshark and remain subject to physical-device
+qualification.
 
 ## Address And Value Target
 

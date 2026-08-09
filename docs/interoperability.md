@@ -10,7 +10,7 @@ security configuration.
 | --- | --- | --- | --- |
 | In-process fault server | TCP/COTP fragmentation, malformed frames, out-of-order responses, concurrency, timeout, reconnect, drain | Every commit | Passing |
 | Snap7 server | `valiot/snap7` commit `a1845454f5f16f3b127b987807f1cbc59205db70` | Every commit | Passing |
-| Wireshark/tshark | Pinned netshoot image; Setup, Read/Write Var, SZL, block directory/transfer/control, clock, security, programmer, and cyclic-service filters; zero malformed frames | Every commit | Passing |
+| Wireshark/tshark | Pinned netshoot image; Setup, Read/Write Var, SZL, block directory/transfer/control, clock, security, programmer, cyclic, and alarm-service filters; zero malformed frames | Every commit | Passing |
 | Request soak | 20,000 mixed concurrent reads/writes with bounded memory and empty final mailbox | Weekly/manual | Automated |
 
 The Snap7 gate negotiates four jobs, exercises concurrent reads, all supported
@@ -49,6 +49,18 @@ S7-400 WinCC captures qualify change-driven setup, modification, indication,
 and teardown. The fixed-transfer fixtures are derived independently from the
 pinned PLC4X grammar and Wireshark decoder because the local capture corpus has
 no `0x01` exchange. PLCSIM and physical-device cyclic execution remain pending.
+Exact WinCC S7-300 and S7-400 captures qualify alarm message setup/abort,
+family and event queries, `ALARM_8`, and `NOTIFY` indications. The local corpus
+has no acknowledgment exchange, so its request, response, and indication
+fixtures are independently constructed from the pinned PLC4X grammar and
+checked against the pinned Wireshark decoder. The fault server covers both
+alarm families, ordered duplicate delivery, queue overflow, owner death,
+queries, per-object acknowledgment errors, and ambiguous lifecycle outcomes.
+The pinned Snap7 server returns a malformed message-service response to alarm
+setup and explicit `0xD402` errors for alarm query and acknowledgment; the gate
+checks those exact connection effects and requires tshark to identify all
+three requests with no malformed frames. Successful alarm execution on PLCSIM
+and physical devices remains pending.
 
 ## Release Qualification Matrix
 

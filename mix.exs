@@ -121,6 +121,15 @@ defmodule S7.MixProject do
           S7,
           S7.Client,
           S7.Address,
+          S7.AlarmAcknowledgement,
+          S7.AlarmAcknowledgement.Result,
+          S7.AlarmEvent,
+          S7.AlarmEvent.Object,
+          S7.AlarmEvent.Object.AssociatedValue,
+          S7.AlarmQuery,
+          S7.AlarmQuery.Record,
+          S7.AlarmSubscription,
+          S7.AlarmTimestamp,
           S7.Block,
           S7.BlockEntry,
           S7.BlockInfo,
@@ -141,6 +150,7 @@ defmodule S7.MixProject do
           S7.VariableStatus.Item
         ],
         "S7 Protocol": [
+          S7.Protocol.Alarm,
           S7.Protocol.BlockDownload,
           S7.Protocol.BlockUpload,
           S7.Protocol.Blocks,

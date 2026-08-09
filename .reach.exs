@@ -7,6 +7,14 @@
     transport: "S7.Transport.*",
     model: [
       "S7.Address",
+      "S7.AlarmAcknowledgement",
+      "S7.AlarmAcknowledgement.*",
+      "S7.AlarmEvent",
+      "S7.AlarmEvent.*",
+      "S7.AlarmQuery",
+      "S7.AlarmQuery.*",
+      "S7.AlarmSubscription",
+      "S7.AlarmTimestamp",
       "S7.Block",
       "S7.BlockEntry",
       "S7.BlockInfo",
@@ -50,7 +58,7 @@
     forbidden: [
       {"S7.Protocol*", [":gen_tcp.*", ":gen_statem.*", "GenServer.*"]},
       {"S7.Transport.*", [":gen_tcp.*", ":gen_statem.*", "GenServer.*"]},
-      {["S7.Address", "S7.Block*", "S7.Data", "S7.Destructive", "S7.Error", "S7.Options",
+      {["S7.Address", "S7.Alarm*", "S7.Block*", "S7.Data", "S7.Destructive", "S7.Error", "S7.Options",
         "S7.PLCClock", "S7.Result", "S7.SessionPassword", "S7.TSAP"],
        [":gen_tcp.*", ":gen_statem.*", "GenServer.*"]}
     ]

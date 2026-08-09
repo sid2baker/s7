@@ -704,7 +704,7 @@ defmodule S7.Protocol.Cyclic do
          %UserData{parameter: %Parameter{method: @method_response} = parameter},
          operation
        ) do
-    if final_unit_metadata?(parameter), do: :ok, else: Protocol.malformed(operation)
+    if Parameter.final_unit?(parameter), do: :ok, else: Protocol.malformed(operation)
   end
 
   defp validate_response_method(_response, operation), do: Protocol.malformed(operation)
@@ -734,7 +734,7 @@ defmodule S7.Protocol.Cyclic do
       parameter.error_code not in [nil, 0] ->
         Protocol.error(operation, :userdata_error, code: parameter.error_code)
 
-      not final_unit_metadata?(parameter) ->
+      not Parameter.final_unit?(parameter) ->
         Protocol.malformed(operation, %{
           data_unit_reference: parameter.data_unit_reference,
           last_data_unit: parameter.last_data_unit,
@@ -745,23 +745,6 @@ defmodule S7.Protocol.Cyclic do
         :ok
     end
   end
-
-  defp final_unit_metadata?(%Parameter{
-         data_unit_reference: nil,
-         last_data_unit: nil,
-         error_code: nil
-       }),
-       do: true
-
-  defp final_unit_metadata?(%Parameter{
-         data_unit_reference: reference,
-         last_data_unit: 0,
-         error_code: 0
-       })
-       when reference in 0..0xFF,
-       do: true
-
-  defp final_unit_metadata?(_parameter), do: false
 
   defp validate_event_payload(
          %Payload{return_code: @success, transport_size: @octet_string},
