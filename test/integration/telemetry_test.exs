@@ -108,7 +108,7 @@ defmodule S7.TelemetryIntegrationTest do
     secret = "PRIVATE"
     server = start_server(session_password: secret)
     assert {:ok, client} = S7.connect({127, 0, 0, 1}, port: server.port)
-    assert S7.authenticate(client, secret) == :ok
+    assert S7.Session.authenticate(client, secret) == :ok
 
     for event <- [
           [:s7, :request, :queued],

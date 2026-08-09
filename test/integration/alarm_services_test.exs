@@ -24,7 +24,7 @@ defmodule S7.AlarmServicesIntegrationTest do
               alarm_type: :alarm_8,
               subscription_key: "HmiRtm  "
             } = subscription} =
-             S7.subscribe_alarms(client, :alarm_8, queue_limit: 4)
+             S7.Alarm.subscribe(client, :alarm_8, queue_limit: 4)
 
     assert_receive {:mock_plc_request, :alarm_subscribe, _reference}, 500
 
@@ -42,13 +42,13 @@ defmodule S7.AlarmServicesIntegrationTest do
                   associated_values: [%{data: <<0x04, 0xD2>>}]
                 } = first_object
               ]
-            }} = S7.next_alarm(client, subscription, 500)
+            }} = S7.Alarm.next(subscription, 500)
 
     assert {:ok, %Alarm.Event{objects: [%AlarmObject{event_id: 0xAF}]}} =
-             S7.next_alarm(client, subscription, 500)
+             S7.Alarm.next(subscription, 500)
 
     assert {:ok, %Alarm.Event{objects: [%AlarmObject{event_id: 0x2F}]}} =
-             S7.next_alarm(client, subscription, 500)
+             S7.Alarm.next(subscription, 500)
 
     assert {:ok,
             %Alarm.Query{
@@ -57,25 +57,25 @@ defmodule S7.AlarmServicesIntegrationTest do
                 %QueryRecord{event_id: 0xAF, alarm_type: :alarm_8},
                 %QueryRecord{event_id: 0x2F, alarm_type: :alarm_8}
               ]
-            }} = S7.query_alarms(client, :alarm_8)
+            }} = S7.Alarm.query(client, :alarm_8)
 
     assert {:ok,
             %Alarm.Query{
               selector: {:event_id, 0xAF},
               records: [%QueryRecord{event_id: 0xAF} | _]
-            }} = S7.query_alarm(client, 0xAF)
+            }} = S7.Alarm.query(client, 0xAF)
 
-    assert S7.acknowledge_alarm(client, first_object) == :ok
+    assert S7.Alarm.acknowledge(client, first_object) == :ok
     assert_receive {:mock_plc_request, :alarm_acknowledge, _reference}, 500
 
-    assert S7.unsubscribe_alarms(client, subscription) == :ok
+    assert S7.Alarm.unsubscribe(subscription) == :ok
     assert_receive {:mock_plc_request, :alarm_unsubscribe, _reference}, 500
 
     assert %{state: :ready, subscriptions: 0, exclusive_transaction: false} =
              S7.TestSupport.info!(client)
 
     assert {:error, %Error{reason: :invalid_subscription, operation: :next_alarm}} =
-             S7.next_alarm(client, subscription, 10)
+             S7.Alarm.next(subscription, 10)
 
     assert S7.close(client) == :ok
   end
@@ -85,23 +85,23 @@ defmodule S7.AlarmServicesIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:ok, %Alarm.Subscription{alarm_type: :alarm_s} = subscription} =
-             S7.subscribe_alarms(client, :alarm_s)
+             S7.Alarm.subscribe(client, :alarm_s)
 
     assert {:ok,
             %Alarm.Event{
               kind: :alarm_s,
               subfunction: 0x12,
               objects: [%AlarmObject{event_id: 0x0102_0304}]
-            }} = S7.next_alarm(client, subscription, 500)
+            }} = S7.Alarm.next(subscription, 500)
 
     assert {:ok,
             %Alarm.Query{
               selector: {:alarm_type, :alarm_s},
               return_code: 0x0A,
               records: []
-            }} = S7.query_alarms(client, :alarm_s)
+            }} = S7.Alarm.query(client, :alarm_s)
 
-    assert S7.unsubscribe_alarms(client, subscription) == :ok
+    assert S7.Alarm.unsubscribe(subscription) == :ok
     assert S7.close(client) == :ok
   end
 
@@ -110,7 +110,7 @@ defmodule S7.AlarmServicesIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:error, %Error{reason: :access_denied, code: 0xD241}} =
-             S7.subscribe_alarms(client, :alarm_8)
+             S7.Alarm.subscribe(client, :alarm_8)
 
     assert %{state: :ready, subscriptions: 0, exclusive_transaction: false} =
              S7.TestSupport.info!(client)
@@ -128,7 +128,7 @@ defmodule S7.AlarmServicesIntegrationTest do
       assert {:ok, client} = connect(server)
 
       assert {:error, %Error{reason: ^expected}} =
-               S7.subscribe_alarms(client, :alarm_8,
+               S7.Alarm.subscribe(client, :alarm_8,
                  timeout: 100,
                  step_timeout: 500
                )
@@ -154,12 +154,12 @@ defmodule S7.AlarmServicesIntegrationTest do
         )
 
       assert {:ok, client} = connect(server)
-      assert {:ok, subscription} = S7.subscribe_alarms(client, :alarm_8)
+      assert {:ok, subscription} = S7.Alarm.subscribe(client, :alarm_8)
 
       assert {:error, %Error{reason: ^expected}} =
-               S7.next_alarm(client, subscription, 250)
+               S7.Alarm.next(subscription, 250)
 
-      assert S7.unsubscribe_alarms(client, subscription) == :ok
+      assert S7.Alarm.unsubscribe(subscription) == :ok
       assert %{state: :ready, subscriptions: 0} = S7.TestSupport.info!(client)
       assert S7.close(client) == :ok
     end
@@ -173,14 +173,14 @@ defmodule S7.AlarmServicesIntegrationTest do
       )
 
     assert {:ok, client} = connect(server)
-    assert {:ok, subscription} = S7.subscribe_alarms(client, :alarm_8, queue_limit: 1)
+    assert {:ok, subscription} = S7.Alarm.subscribe(client, :alarm_8, queue_limit: 1)
 
     Process.sleep(150)
 
     assert {:error, %Error{reason: :subscription_overflow, details: %{limit: 1}}} =
-             S7.next_alarm(client, subscription, 100)
+             S7.Alarm.next(subscription, 100)
 
-    assert S7.unsubscribe_alarms(client, subscription) == :ok
+    assert S7.Alarm.unsubscribe(subscription) == :ok
     assert %{state: :ready, subscriptions: 0} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
@@ -193,10 +193,10 @@ defmodule S7.AlarmServicesIntegrationTest do
         ] do
       server = start_server(alarm_fault: fault, alarm_push_count: 0)
       assert {:ok, client} = connect(server)
-      assert {:ok, subscription} = S7.subscribe_alarms(client, :alarm_8)
+      assert {:ok, subscription} = S7.Alarm.subscribe(client, :alarm_8)
 
       assert {:error, %Error{reason: ^expected}} =
-               S7.unsubscribe_alarms(client, subscription,
+               S7.Alarm.unsubscribe(subscription,
                  timeout: 100,
                  step_timeout: 500
                )
@@ -225,7 +225,7 @@ defmodule S7.AlarmServicesIntegrationTest do
                 acknowledgement: %Alarm.Acknowledgement{event_id: 0x2F},
                 status: :ok
               }
-            ]} = S7.acknowledge_alarms(client, acknowledgements)
+            ]} = S7.Alarm.acknowledge_many(client, acknowledgements)
 
     assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
@@ -233,7 +233,7 @@ defmodule S7.AlarmServicesIntegrationTest do
     oversized = Enum.map(1..30, &acknowledgement/1)
 
     assert {:error, %Error{reason: :pdu_too_large, details: %{outcome: :not_attempted}}} =
-             S7.acknowledge_alarms(client, oversized)
+             S7.Alarm.acknowledge_many(client, oversized)
 
     assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
@@ -248,7 +248,7 @@ defmodule S7.AlarmServicesIntegrationTest do
               reason: :access_denied,
               operation: :acknowledge_alarm,
               details: %{outcome: :rejected}
-            }} = S7.acknowledge_alarm(rejected_client, acknowledgement(0xAF))
+            }} = S7.Alarm.acknowledge(rejected_client, acknowledgement(0xAF))
 
     assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(rejected_client)
     assert S7.close(rejected_client) == :ok
@@ -261,7 +261,7 @@ defmodule S7.AlarmServicesIntegrationTest do
       assert {:ok, client} = connect(server)
 
       assert {:error, %Error{reason: ^expected, details: %{outcome: :indeterminate}}} =
-               S7.acknowledge_alarm(client, acknowledgement(0xAF),
+               S7.Alarm.acknowledge(client, acknowledgement(0xAF),
                  timeout: 100,
                  step_timeout: 500
                )
@@ -280,7 +280,7 @@ defmodule S7.AlarmServicesIntegrationTest do
 
     owner =
       spawn(fn ->
-        result = S7.subscribe_alarms(client, :alarm_8)
+        result = S7.Alarm.subscribe(client, :alarm_8)
         send(parent, {:alarm_owner, self(), result})
         Process.sleep(:infinity)
       end)
@@ -298,40 +298,40 @@ defmodule S7.AlarmServicesIntegrationTest do
     assert {:ok, client} = connect(server)
 
     for operation <- [
-          fn -> S7.subscribe_alarms(client, :unknown) end,
-          fn -> S7.subscribe_alarms(client, :alarm_8, queue_limit: 0) end,
-          fn -> S7.subscribe_alarms(client, :alarm_8, subscription_key: "short") end,
-          fn -> S7.subscribe_alarms(client, :alarm_8, unknown: true) end,
-          fn -> S7.query_alarms(client, :scan) end
+          fn -> S7.Alarm.subscribe(client, :unknown) end,
+          fn -> S7.Alarm.subscribe(client, :alarm_8, queue_limit: 0) end,
+          fn -> S7.Alarm.subscribe(client, :alarm_8, subscription_key: "short") end,
+          fn -> S7.Alarm.subscribe(client, :alarm_8, unknown: true) end,
+          fn -> S7.Alarm.query(client, :scan) end
         ] do
       assert {:error, %Error{}} = operation.()
     end
 
-    assert {:error, %Error{operation: :query_alarm}} = S7.query_alarm(client, -1)
+    assert {:error, %Error{operation: :query_alarm}} = S7.Alarm.query(client, -1)
 
     assert {:error,
             %Error{
               operation: :acknowledge_alarm,
               details: %{outcome: :not_attempted}
-            }} = S7.acknowledge_alarm(client, :invalid)
+            }} = S7.Alarm.acknowledge(client, :invalid)
 
     assert {:error,
             %Error{
               operation: :acknowledge_alarms,
               details: %{outcome: :not_attempted}
-            }} = S7.acknowledge_alarms(client, [])
+            }} = S7.Alarm.acknowledge_many(client, [])
 
     refute_receive {:mock_plc_request, :alarm_subscribe, _reference}, 30
 
-    assert {:ok, subscription} = S7.subscribe_alarms(client, :alarm_8)
+    assert {:ok, subscription} = S7.Alarm.subscribe(client, :alarm_8)
 
-    non_owner = Task.async(fn -> S7.next_alarm(client, subscription, 10) end)
+    non_owner = Task.async(fn -> S7.Alarm.next(subscription, 10) end)
     assert {:error, %Error{reason: :invalid_subscription}} = Task.await(non_owner)
 
     assert {:error, %Error{reason: :invalid_alarm_subscription}} =
-             S7.unsubscribe_alarms(self(), subscription)
+             S7.Alarm.unsubscribe(:not_a_subscription)
 
-    assert S7.unsubscribe_alarms(client, subscription) == :ok
+    assert S7.Alarm.unsubscribe(subscription) == :ok
     assert S7.close(client) == :ok
   end
 

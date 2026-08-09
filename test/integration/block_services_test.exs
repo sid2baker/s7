@@ -11,16 +11,16 @@ defmodule S7.BlockServicesIntegrationTest do
     assert {:ok,
             %Block.Inventory{
               counts: %{ob: 1, fb: 1, fc: 0, db: 2, sdb: 8, sfc: 77, sfb: 15}
-            }} = S7.block_counts(client)
+            }} = S7.Blocks.counts(client)
 
     assert {:ok,
             [
               %Block.Entry{block: %Block{type: :db, number: 1}, language: :db},
               %Block.Entry{block: %Block{type: :db, number: 2}, language: :db}
-            ]} = S7.list_blocks(client, :db)
+            ]} = S7.Blocks.list(client, :db)
 
     assert {:ok, sfc_entries} =
-             S7.list_blocks(client, :sfc, max_bytes: 1_024, max_fragments: 16)
+             S7.Blocks.list(client, :sfc, max_bytes: 1_024, max_fragments: 16)
 
     assert Enum.count(sfc_entries) == 10
 
@@ -29,10 +29,10 @@ defmodule S7.BlockServicesIntegrationTest do
               block: %Block{type: :db, number: 1},
               author: "SIMATIC",
               name: "CTU"
-            }} = S7.block_info(client, :db, 1)
+            }} = S7.Blocks.info(client, :db, 1)
 
     assert {:ok, %Block.Info{block: %Block{type: :db, number: 1}}} =
-             S7.block_info(client, %Block{type: :db, number: 1})
+             S7.Blocks.info(client, %Block{type: :db, number: 1})
 
     assert %{state: :ready, in_flight_requests: 0} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
@@ -48,7 +48,7 @@ defmodule S7.BlockServicesIntegrationTest do
               operation: :block_info,
               reason: :userdata_error,
               code: 0xD209
-            }} = S7.block_info(client, :db, 2)
+            }} = S7.Blocks.info(client, :db, 2)
 
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert %{state: :ready} = S7.TestSupport.info!(client)
@@ -60,16 +60,16 @@ defmodule S7.BlockServicesIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:error, %Error{layer: :client, reason: :invalid_block}} =
-             S7.list_blocks(client, :invalid)
+             S7.Blocks.list(client, :invalid)
 
     assert {:error, %Error{layer: :client, reason: :invalid_option}} =
-             S7.list_blocks(client, :db, max_fragments: 0)
+             S7.Blocks.list(client, :db, max_fragments: 0)
 
     assert {:error, %Error{layer: :client, reason: :invalid_options}} =
-             S7.list_blocks(client, :db, :invalid)
+             S7.Blocks.list(client, :db, :invalid)
 
     assert {:error, %Error{layer: :client, reason: :invalid_block}} =
-             S7.block_info(client, :db, -1)
+             S7.Blocks.info(client, :db, -1)
 
     assert %{state: :ready, in_flight_requests: 0, queued_requests: 0} =
              S7.TestSupport.info!(client)
@@ -82,7 +82,7 @@ defmodule S7.BlockServicesIntegrationTest do
     assert {:ok, fragment_client} = connect(fragment_server)
 
     assert {:error, %Error{operation: :list_blocks, reason: :too_many_userdata_fragments}} =
-             S7.list_blocks(fragment_client, :db, max_fragments: 1)
+             S7.Blocks.list(fragment_client, :db, max_fragments: 1)
 
     assert %{state: :disconnected} = S7.TestSupport.info!(fragment_client)
     assert S7.close(fragment_client) == :ok
@@ -91,7 +91,7 @@ defmodule S7.BlockServicesIntegrationTest do
     assert {:ok, malformed_client} = connect(malformed_server)
 
     assert {:error, %Error{operation: :list_blocks, reason: :malformed_response}} =
-             S7.list_blocks(malformed_client, :db)
+             S7.Blocks.list(malformed_client, :db)
 
     assert Process.alive?(malformed_client)
     assert %{state: :disconnected} = S7.TestSupport.info!(malformed_client)

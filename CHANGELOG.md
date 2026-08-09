@@ -14,6 +14,10 @@ Changes currently targeted for `0.1.0` are listed below.
 
 ### Changed
 
+- Reduced `S7` to connection lifecycle and memory access, and grouped advanced
+  operations under `S7.PLC`, `S7.Blocks`, `S7.Cyclic`, `S7.Alarm`,
+  `S7.Programmer`, and `S7.Session`. Subscription handles now carry their own
+  connection for modification, delivery, and teardown calls.
 - Renamed multi-item memory operations to `S7.read_many/2`,
   `S7.read_many_raw/2`, `S7.write_many/2`, and `S7.write_many_raw/2`, and made
   `S7.info/1` consistently return an `{:ok, information}` tuple.

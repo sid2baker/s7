@@ -205,12 +205,12 @@ defmodule S7.PublicAPIIntegrationTest do
               record_length: 28,
               record_count: 1,
               records: [<<1::16, _rest::binary>>]
-            }} = S7.read_szl(client, 0x0011)
+            }} = S7.PLC.read_szl(client, 0x0011)
 
-    assert S7.list_szl(client) == {:ok, [0x0011, 0x001C, 0x0131, 0x0424]}
+    assert S7.PLC.list_szl(client) == {:ok, [0x0011, 0x001C, 0x0131, 0x0424]}
 
     assert {:ok, %PLC.OrderCode{code: "6ES7 315-2EH14-0AB0", version: {3, 2, 1}}} =
-             S7.order_code(client)
+             S7.PLC.order_code(client)
 
     assert {:ok,
             %PLC.CPUInfo{
@@ -218,10 +218,10 @@ defmodule S7.PublicAPIIntegrationTest do
               module_name: "CPU 315-2 PN/DP",
               serial_number: "S C-C2UR28922012",
               module_type_name: "CPU 315-2 PN/DP"
-            }} = S7.cpu_info(client)
+            }} = S7.PLC.cpu_info(client)
 
-    assert {:ok, %PLC.CPInfo{max_pdu_length: 480, max_connections: 8}} = S7.cp_info(client)
-    assert {:ok, %PLC.Status{state: :run, code: 8}} = S7.plc_status(client)
+    assert {:ok, %PLC.CPInfo{max_pdu_length: 480, max_connections: 8}} = S7.PLC.cp_info(client)
+    assert {:ok, %PLC.Status{state: :run, code: 8}} = S7.PLC.status(client)
     assert %{state: :ready, in_flight_requests: 0} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
@@ -238,7 +238,7 @@ defmodule S7.PublicAPIIntegrationTest do
       assert {:ok, client} = S7.connect({127, 0, 0, 1}, port: server.port)
 
       assert {:error, %Error{operation: :read_szl, reason: unquote(reason)}} =
-               S7.read_szl(client, 0x0011)
+               S7.PLC.read_szl(client, 0x0011)
 
       assert %{state: :disconnected} = S7.TestSupport.info!(client)
       assert S7.close(client) == :ok
@@ -250,7 +250,7 @@ defmodule S7.PublicAPIIntegrationTest do
     assert {:ok, fragment_client} = S7.connect({127, 0, 0, 1}, port: fragment_server.port)
 
     assert {:error, %Error{reason: :too_many_userdata_fragments}} =
-             S7.read_szl(fragment_client, 0x0011, max_fragments: 2)
+             S7.PLC.read_szl(fragment_client, 0x0011, max_fragments: 2)
 
     assert %{state: :disconnected} = S7.TestSupport.info!(fragment_client)
     assert S7.close(fragment_client) == :ok
@@ -259,7 +259,7 @@ defmodule S7.PublicAPIIntegrationTest do
     assert {:ok, size_client} = S7.connect({127, 0, 0, 1}, port: size_server.port)
 
     assert {:error, %Error{reason: :userdata_too_large}} =
-             S7.read_szl(size_client, 0x0011, max_bytes: 8)
+             S7.PLC.read_szl(size_client, 0x0011, max_bytes: 8)
 
     assert %{state: :disconnected} = S7.TestSupport.info!(size_client)
     assert S7.close(size_client) == :ok
@@ -270,7 +270,7 @@ defmodule S7.PublicAPIIntegrationTest do
     assert {:ok, client} = S7.connect({127, 0, 0, 1}, port: server.port)
 
     assert {:error, %Error{operation: :read_szl, reason: :userdata_error, code: 0xD041}} =
-             S7.read_szl(client, 0x0011)
+             S7.PLC.read_szl(client, 0x0011)
 
     assert %{state: :ready} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}

@@ -30,7 +30,7 @@ defmodule S7.ProgrammerServicesIntegrationTest do
                 %Item{value: 2, data: <<2>>, padding: <<0>>, error: nil}
               ],
               raw: raw
-            }} = S7.variable_status(client, [marker_bytes, "IB8"])
+            }} = S7.Programmer.variable_status(client, [marker_bytes, "IB8"])
 
     assert byte_size(raw) == 26
     assert_receive {:mock_plc_request, :programmer_setup, _reference}, 500
@@ -64,7 +64,7 @@ defmodule S7.ProgrammerServicesIntegrationTest do
               data: ^event_data,
               raw: <<4::16, 6::16, 1, 0, 0, 2, ^event_data::binary>>
             }} =
-             S7.programmer_diagnostic_raw(
+             S7.Programmer.diagnostic_raw(
                client,
                :block_status_v2,
                <<0::224>>,
@@ -82,7 +82,7 @@ defmodule S7.ProgrammerServicesIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:error, %Error{reason: :access_denied, code: 0xD241}} =
-             S7.variable_status(client, ["MB0"])
+             S7.Programmer.variable_status(client, ["MB0"])
 
     assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} =
              S7.TestSupport.info!(client)
@@ -101,7 +101,7 @@ defmodule S7.ProgrammerServicesIntegrationTest do
       assert {:ok, client} = connect(server)
 
       assert {:error, %Error{reason: ^expected_reason}} =
-               S7.variable_status(client, ["MB0"], step_timeout: 200)
+               S7.Programmer.variable_status(client, ["MB0"], step_timeout: 200)
 
       assert_receive {:mock_plc_request, :programmer_setup, _reference}, 500
       assert_receive {:mock_plc_request, :programmer_enable, _reference}, 500
@@ -124,7 +124,7 @@ defmodule S7.ProgrammerServicesIntegrationTest do
               reason: :access_denied,
               code: 0xD241,
               details: %{outcome: :sample_received_cleanup_failed}
-            }} = S7.variable_status(client, ["MB0"])
+            }} = S7.Programmer.variable_status(client, ["MB0"])
 
     assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
              await_state(client, :disconnected)
@@ -140,7 +140,7 @@ defmodule S7.ProgrammerServicesIntegrationTest do
       )
 
     assert {:ok, client} = connect(server)
-    status = Task.async(fn -> S7.variable_status(client, ["MB0"]) end)
+    status = Task.async(fn -> S7.Programmer.variable_status(client, ["MB0"]) end)
     assert_receive {:mock_plc_request, :programmer_enable, _reference}, 500
 
     read = Task.async(fn -> S7.read(client, "DB1.DBW0") end)
@@ -163,11 +163,11 @@ defmodule S7.ProgrammerServicesIntegrationTest do
           {:block_status, <<>>, <<>>, [timeout: 0]}
         ] do
       assert {:error, %Error{}} =
-               S7.programmer_diagnostic_raw(client, service, parameters, data, opts)
+               S7.Programmer.diagnostic_raw(client, service, parameters, data, opts)
     end
 
-    assert {:error, %Error{reason: :invalid_items}} = S7.variable_status(client, [])
-    assert {:error, %Error{}} = S7.variable_status(client, ["L0.0"])
+    assert {:error, %Error{reason: :invalid_items}} = S7.Programmer.variable_status(client, [])
+    assert {:error, %Error{}} = S7.Programmer.variable_status(client, ["L0.0"])
     refute_receive {:mock_plc_request, :programmer_setup, _reference}, 30
 
     assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)

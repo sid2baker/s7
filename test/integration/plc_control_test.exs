@@ -5,9 +5,9 @@ defmodule S7.PLCControlIntegrationTest do
   alias S7.Test.MockPLC
 
   @actions [
-    {:stop_cpu, :stop_cpu},
-    {:warm_start_cpu, :warm_start_cpu},
-    {:cold_start_cpu, :cold_start_cpu},
+    {:stop, :stop_cpu},
+    {:warm_start, :warm_start_cpu},
+    {:cold_start, :cold_start_cpu},
     {:copy_ram_to_rom, :copy_ram_to_rom},
     {:compress_memory, :compress_memory}
   ]
@@ -17,7 +17,7 @@ defmodule S7.PLCControlIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:error, %Error{reason: :destructive_operations_disabled}} =
-             S7.stop_cpu(client, confirm: :stop_cpu)
+             S7.PLC.stop(client, confirm: :stop_cpu)
 
     refute_receive {:mock_plc_request, :stop_cpu, _reference}, 30
     assert S7.close(client) == :ok
@@ -26,13 +26,13 @@ defmodule S7.PLCControlIntegrationTest do
     assert {:ok, enabled} = connect(enabled_server, allow_destructive: true)
 
     assert {:error, %Error{reason: :destructive_confirmation_required}} =
-             S7.stop_cpu(enabled)
+             S7.PLC.stop(enabled)
 
     assert {:error,
             %Error{
               reason: :destructive_confirmation_required,
               details: %{expected: :stop_cpu, received: :warm_start_cpu}
-            }} = S7.stop_cpu(enabled, confirm: :warm_start_cpu)
+            }} = S7.PLC.stop(enabled, confirm: :warm_start_cpu)
 
     refute_receive {:mock_plc_request, :stop_cpu, _reference}, 30
     assert S7.close(enabled) == :ok
@@ -43,7 +43,7 @@ defmodule S7.PLCControlIntegrationTest do
     assert {:ok, client} = connect(server, allow_destructive: true)
 
     for {function, action} <- @actions do
-      assert apply(S7, function, [client, [confirm: action]]) == :ok
+      assert apply(S7.PLC, function, [client, [confirm: action]]) == :ok
       assert_receive {:mock_plc_request, ^action, _reference}, 500
       assert_receive {:mock_plc_controlled, ^action}, 500
       assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
@@ -62,7 +62,7 @@ defmodule S7.PLCControlIntegrationTest do
               reason: :access_denied,
               code: 0xD241,
               details: %{outcome: :rejected, stage: :copy_ram_to_rom}
-            }} = S7.copy_ram_to_rom(client, confirm: :copy_ram_to_rom)
+            }} = S7.PLC.copy_ram_to_rom(client, confirm: :copy_ram_to_rom)
 
     assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
@@ -81,7 +81,7 @@ defmodule S7.PLCControlIntegrationTest do
 
       assert {:error,
               %Error{reason: reason, details: %{outcome: :indeterminate, stage: :stop_cpu}}} =
-               S7.stop_cpu(client, confirm: :stop_cpu, step_timeout: step_timeout)
+               S7.PLC.stop(client, confirm: :stop_cpu, step_timeout: step_timeout)
 
       if fault == :disconnect do
         assert reason in [:connection_closed, :remote_disconnect]
@@ -102,7 +102,7 @@ defmodule S7.PLCControlIntegrationTest do
 
     control =
       Task.async(fn ->
-        S7.compress_memory(client, confirm: :compress_memory)
+        S7.PLC.compress_memory(client, confirm: :compress_memory)
       end)
 
     assert_receive {:mock_plc_request, :compress_memory, _reference}, 500

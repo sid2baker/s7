@@ -17,8 +17,12 @@ with the public API and wire contracts documented in this repository.
 
 ## Architecture
 
-- Keep `S7` as the sole public facade and `S7.Connection` as the only owner and
-  operator of TCP sockets. Do not add a `S7.Client` compatibility module.
+- Keep lifecycle and memory access on `S7`. Group advanced operations under the
+  focused public service modules `S7.PLC`, `S7.Blocks`, `S7.Cyclic`, `S7.Alarm`,
+  `S7.Programmer`, and `S7.Session`. Do not add a `S7.Client` compatibility
+  module or duplicate these operations on `S7`.
+- Keep `S7.Connection` as the only owner and operator of TCP sockets. Public
+  service modules validate inputs and delegate to the connection runtime.
 - Keep `S7.Protocol.*` and `S7.Transport.*` codecs pure and independently usable.
   They must not depend on the connection runtime or telemetry.
 - Keep transport limited to RFC 1006/TPKT and COTP. Classic S7 service codecs belong
@@ -39,8 +43,9 @@ with the public API and wire contracts documented in this repository.
 - Give every source file a primary module matching its module path. Keep a
   tightly owned child record, such as `S7.Cyclic.Event.Item`, in its parent's
   file; do not create empty namespace modules or namespace-only bundle files.
-- Prefer the existing public facade and domain vocabulary over compatibility aliases,
-  pass-through wrappers, or speculative abstractions.
+- Prefer the existing public API and domain vocabulary over compatibility aliases
+  or speculative abstractions. A public service module must own a coherent user
+  workflow; do not add namespace-only or one-function wrapper modules.
 
 ## Protocol Work
 

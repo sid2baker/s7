@@ -58,7 +58,7 @@ and process state independently before and after each operation.
 
 ## Session Passwords
 
-`S7.authenticate/2` implements the classic protected-session exchange,
+`S7.Session.authenticate/2` implements the classic protected-session exchange,
 not a secure authentication protocol. Its wire transformation is reversible,
 so anyone who can observe the connection can recover the password. Use it only
 inside the protected network boundary described above.

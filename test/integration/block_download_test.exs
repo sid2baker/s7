@@ -11,7 +11,7 @@ defmodule S7.BlockDownloadIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:error, %Error{reason: :destructive_operations_disabled}} =
-             S7.download_block(client, image, confirm: :download_block)
+             S7.Blocks.download(client, image, confirm: :download_block)
 
     refute_receive {:mock_plc_request, :download_start, _reference}, 30
     assert S7.close(client) == :ok
@@ -20,10 +20,10 @@ defmodule S7.BlockDownloadIntegrationTest do
     assert {:ok, enabled} = connect(enabled_server, allow_destructive: true)
 
     assert {:error, %Error{reason: :destructive_confirmation_required}} =
-             S7.download_block(enabled, image)
+             S7.Blocks.download(enabled, image)
 
     assert {:error, %Error{reason: :destructive_confirmation_required}} =
-             S7.download_block(enabled, image, confirm: :replace_block)
+             S7.Blocks.download(enabled, image, confirm: :replace_block)
 
     refute_receive {:mock_plc_request, :download_start, _reference}, 30
     assert S7.close(enabled) == :ok
@@ -42,7 +42,7 @@ defmodule S7.BlockDownloadIntegrationTest do
 
     assert {:ok, client} = connect(server, allow_destructive: true, pdu_size: 100)
 
-    assert S7.download_block(client, image, confirm: :download_block) == :ok
+    assert S7.Blocks.download(client, image, confirm: :download_block) == :ok
     assert_receive {:mock_plc_downloaded, block, raw}, 500
     assert block == image.block
     assert raw == image.raw
@@ -65,13 +65,13 @@ defmodule S7.BlockDownloadIntegrationTest do
     replace_server = start_server(expected_download_image: image.raw)
     assert {:ok, replace_client} = connect(replace_server, allow_destructive: true)
 
-    assert S7.replace_block(replace_client, image, confirm: :replace_block) == :ok
+    assert S7.Blocks.replace(replace_client, image, confirm: :replace_block) == :ok
     assert S7.close(replace_client) == :ok
 
     raw_server = start_server(expected_download_image: image.raw)
     assert {:ok, raw_client} = connect(raw_server, allow_destructive: true)
 
-    assert S7.download_block_raw(
+    assert S7.Blocks.download_raw(
              raw_client,
              :db,
              1,
@@ -87,7 +87,7 @@ defmodule S7.BlockDownloadIntegrationTest do
     server = start_server(notify_requests: true)
     assert {:ok, client} = connect(server, allow_destructive: true)
 
-    assert S7.delete_block(client, block, confirm: :delete_block) == :ok
+    assert S7.Blocks.delete(client, block, confirm: :delete_block) == :ok
     assert_receive {:mock_plc_block_deleted, ^block}, 500
     assert_receive {:mock_plc_request, :delete_block, _reference}, 500
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
@@ -103,7 +103,7 @@ defmodule S7.BlockDownloadIntegrationTest do
     assert {:ok, start_client} = connect(start_server, allow_destructive: true)
 
     assert {:error, %Error{reason: :access_denied, code: 0xD241}} =
-             S7.download_block(start_client, image, confirm: :download_block)
+             S7.Blocks.download(start_client, image, confirm: :download_block)
 
     assert S7.read(start_client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(start_client) == :ok
@@ -114,7 +114,7 @@ defmodule S7.BlockDownloadIntegrationTest do
     assert {:ok, end_client} = connect(end_server, allow_destructive: true)
 
     assert {:error, %Error{reason: :block_download_rejected, code: 0xD241}} =
-             S7.download_block(end_client, image, confirm: :download_block)
+             S7.Blocks.download(end_client, image, confirm: :download_block)
 
     assert S7.read(end_client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(end_client) == :ok
@@ -128,7 +128,7 @@ defmodule S7.BlockDownloadIntegrationTest do
             %Error{
               reason: :access_denied,
               details: %{outcome: :downloaded_not_activated, stage: :activate_block}
-            }} = S7.download_block(insert_client, image, confirm: :download_block)
+            }} = S7.Blocks.download(insert_client, image, confirm: :download_block)
 
     assert S7.read(insert_client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(insert_client) == :ok
@@ -137,7 +137,7 @@ defmodule S7.BlockDownloadIntegrationTest do
     assert {:ok, delete_client} = connect(delete_server, allow_destructive: true)
 
     assert {:error, %Error{reason: :access_denied, details: %{outcome: :rejected}}} =
-             S7.delete_block(delete_client, :db, 1, confirm: :delete_block)
+             S7.Blocks.delete(delete_client, :db, 1, confirm: :delete_block)
 
     assert S7.read(delete_client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(delete_client) == :ok
@@ -160,7 +160,7 @@ defmodule S7.BlockDownloadIntegrationTest do
       step_timeout = if fault == :segment_silence, do: 30, else: 500
 
       assert {:error, %Error{reason: reason, details: %{outcome: :indeterminate}}} =
-               S7.download_block(client, image,
+               S7.Blocks.download(client, image,
                  confirm: :download_block,
                  step_timeout: step_timeout
                )
@@ -190,7 +190,7 @@ defmodule S7.BlockDownloadIntegrationTest do
 
     download =
       Task.async(fn ->
-        S7.download_block(queued_client, image, confirm: :download_block)
+        S7.Blocks.download(queued_client, image, confirm: :download_block)
       end)
 
     assert_receive {:mock_plc_request, :download_pull, _reference}, 500
@@ -211,7 +211,7 @@ defmodule S7.BlockDownloadIntegrationTest do
 
     owner =
       spawn(fn ->
-        S7.download_block(owner_client, image, confirm: :download_block)
+        S7.Blocks.download(owner_client, image, confirm: :download_block)
       end)
 
     assert_receive {:mock_plc_request, :download_pull, _reference}, 500
@@ -228,7 +228,7 @@ defmodule S7.BlockDownloadIntegrationTest do
     malformed = :binary.replace(image.raw, <<0x70, 0x70>>, <<0, 0>>, [:global])
 
     assert {:error, %Error{reason: :malformed_block_image}} =
-             S7.download_block_raw(client, image.block, malformed, confirm: :download_block)
+             S7.Blocks.download_raw(client, image.block, malformed, confirm: :download_block)
 
     refute_receive {:mock_plc_request, :download_start, _reference}, 30
     assert S7.close(client) == :ok

@@ -7,7 +7,7 @@ function.
 ## Layers
 
 ```text
-S7
+S7 + focused service modules
     |
 S7.Connection
     |
@@ -34,9 +34,22 @@ instead of standalone modules.
 `S7.Telemetry` is a one-way observability boundary used by the runtime. Protocol,
 transport, and model modules cannot depend on it, so wire codecs remain pure.
 
+The public API is deliberately small and grouped by workflow:
+
+```text
+S7              lifecycle and memory access
+S7.PLC          metadata, clock, status, and CPU maintenance
+S7.Blocks       block inventory and transfer
+S7.Cyclic       cyclic subscriptions
+S7.Alarm        alarm subscriptions, queries, and acknowledgments
+S7.Programmer   read-only programmer services
+S7.Session      classic session authorization
+```
+
 The following dependency rules are enforced by Reach through `.reach.exs`:
 
-- `S7` is the sole public facade and delegates lifecycle work to the runtime.
+- Public API modules validate user input and delegate lifecycle work to the
+  runtime. Advanced operations are not duplicated on `S7`.
 - `S7.Connection` is the only layer allowed to own or operate a TCP socket.
 - `S7.Protocol.*` may use value and address models but never the runtime.
 - `S7.Transport.*` knows only RFC 1006 and COTP wire structures.

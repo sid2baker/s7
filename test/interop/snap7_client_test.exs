@@ -99,25 +99,25 @@ defmodule S7.Snap7ClientInteropTest do
 
   test "reads raw and typed classic SZL metadata", %{client: client} do
     assert {:ok, %SZL{id: 0x0011, record_length: 28, record_count: count}} =
-             S7.read_szl(client, 0x0011)
+             S7.PLC.read_szl(client, 0x0011)
 
     assert count > 0
-    assert {:ok, ids} = S7.list_szl(client)
+    assert {:ok, ids} = S7.PLC.list_szl(client)
     assert 0x0011 in ids
     assert 0x001C in ids
 
-    assert {:ok, %PLC.OrderCode{code: code}} = S7.order_code(client)
+    assert {:ok, %PLC.OrderCode{code: code}} = S7.PLC.order_code(client)
     assert code != ""
-    assert {:ok, %PLC.CPUInfo{module_type_name: module_type}} = S7.cpu_info(client)
+    assert {:ok, %PLC.CPUInfo{module_type_name: module_type}} = S7.PLC.cpu_info(client)
     assert is_binary(module_type)
-    assert {:ok, %PLC.CPInfo{max_pdu_length: max_pdu}} = S7.cp_info(client)
+    assert {:ok, %PLC.CPInfo{max_pdu_length: max_pdu}} = S7.PLC.cp_info(client)
     assert max_pdu > 0
-    assert {:ok, %PLC.Status{state: state}} = S7.plc_status(client)
+    assert {:ok, %PLC.Status{state: state}} = S7.PLC.status(client)
     assert state in [:run, :stop, :unknown]
   end
 
   test "reads the classic block directory and DB metadata", %{client: client} do
-    assert {:ok, %Block.Inventory{counts: %{db: 1}}} = S7.block_counts(client)
+    assert {:ok, %Block.Inventory{counts: %{db: 1}}} = S7.Blocks.counts(client)
 
     assert {:ok,
             [
@@ -126,7 +126,7 @@ defmodule S7.Snap7ClientInteropTest do
                 language: :db,
                 flags: 0x22
               }
-            ]} = S7.list_blocks(client, :db)
+            ]} = S7.Blocks.list(client, :db)
 
     assert {:ok,
             %Block.Info{
@@ -135,16 +135,16 @@ defmodule S7.Snap7ClientInteropTest do
               linked?: true,
               mc7_size: 512,
               load_memory_size: 604
-            }} = S7.block_info(client, :db, 1)
+            }} = S7.Blocks.info(client, :db, 1)
   end
 
   test "sets the classic clock and changes session authorization", %{client: client} do
-    assert S7.set_clock(client, ~N[2024-08-09 12:34:56.000]) == :ok
+    assert S7.PLC.set_clock(client, ~N[2024-08-09 12:34:56.000]) == :ok
 
     assert %{authenticated: false} = S7.TestSupport.info!(client)
-    assert S7.authenticate(client, "TESTONLY") == :ok
+    assert S7.Session.authenticate(client, "TESTONLY") == :ok
     assert %{authenticated: true} = S7.TestSupport.info!(client)
-    assert S7.logout(client) == :ok
+    assert S7.Session.logout(client) == :ok
     assert %{authenticated: false} = S7.TestSupport.info!(client)
   end
 
@@ -152,7 +152,7 @@ defmodule S7.Snap7ClientInteropTest do
     client: client
   } do
     assert {:error, %Error{reason: :access_denied, code: 0xD241}} =
-             S7.upload_block(client, :db, 1)
+             S7.Blocks.upload(client, :db, 1)
 
     assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
@@ -160,7 +160,7 @@ defmodule S7.Snap7ClientInteropTest do
 
   test "bounds the pinned server's silent programmer-service drop", %{client: client} do
     assert {:error, %Error{reason: :transaction_timeout}} =
-             S7.variable_status(client, ["MB0"], timeout: 200, step_timeout: 200)
+             S7.Programmer.variable_status(client, ["MB0"], timeout: 200, step_timeout: 200)
 
     assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
              S7.TestSupport.info!(client)
@@ -168,7 +168,7 @@ defmodule S7.Snap7ClientInteropTest do
 
   test "bounds the pinned server's silent cyclic-service drop", %{client: client} do
     assert {:error, %Error{reason: :transaction_timeout}} =
-             S7.subscribe_cyclic(client, ["MB0"], timeout: 200, step_timeout: 200)
+             S7.Cyclic.subscribe(client, ["MB0"], timeout: 200, step_timeout: 200)
 
     assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
              S7.TestSupport.info!(client)
@@ -176,7 +176,7 @@ defmodule S7.Snap7ClientInteropTest do
 
   test "rejects the pinned server's malformed alarm-subscription response", %{client: client} do
     assert {:error, %Error{reason: :malformed_response}} =
-             S7.subscribe_alarms(client, :alarm_8, timeout: 200, step_timeout: 200)
+             S7.Alarm.subscribe(client, :alarm_8, timeout: 200, step_timeout: 200)
 
     assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
              S7.TestSupport.info!(client)
@@ -184,7 +184,7 @@ defmodule S7.Snap7ClientInteropTest do
 
   test "decodes the pinned server's alarm-query rejection", %{client: client} do
     assert {:error, %Error{reason: :userdata_error, code: 0xD402}} =
-             S7.query_alarms(client, :alarm_8)
+             S7.Alarm.query(client, :alarm_8)
 
     assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} =
              S7.TestSupport.info!(client)
@@ -205,7 +205,7 @@ defmodule S7.Snap7ClientInteropTest do
               code: 0xD402,
               details: %{outcome: :rejected}
             }} =
-             S7.acknowledge_alarm(client, acknowledgement,
+             S7.Alarm.acknowledge(client, acknowledgement,
                timeout: 200,
                step_timeout: 200
              )
@@ -224,9 +224,9 @@ defmodule S7.Snap7ClientInteropTest do
               reason: :access_denied,
               code: 0xD241,
               details: %{outcome: :rejected, stage: :request_download}
-            }} = S7.download_block(client, image, confirm: :download_block)
+            }} = S7.Blocks.download(client, image, confirm: :download_block)
 
-    assert S7.delete_block(client, :db, 65_000, confirm: :delete_block) == :ok
+    assert S7.Blocks.delete(client, :db, 65_000, confirm: :delete_block) == :ok
     assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
   end
@@ -234,19 +234,19 @@ defmodule S7.Snap7ClientInteropTest do
   test "controls the disposable server CPU and runs bounded maintenance services", %{
     client: client
   } do
-    assert S7.stop_cpu(client, confirm: :stop_cpu) == :ok
-    assert {:ok, %PLC.Status{state: :stop}} = S7.plc_status(client)
+    assert S7.PLC.stop(client, confirm: :stop_cpu) == :ok
+    assert {:ok, %PLC.Status{state: :stop}} = S7.PLC.status(client)
 
-    assert S7.warm_start_cpu(client, confirm: :warm_start_cpu) == :ok
-    assert {:ok, %PLC.Status{state: :run}} = S7.plc_status(client)
+    assert S7.PLC.warm_start(client, confirm: :warm_start_cpu) == :ok
+    assert {:ok, %PLC.Status{state: :run}} = S7.PLC.status(client)
 
-    assert S7.stop_cpu(client, confirm: :stop_cpu) == :ok
-    assert S7.cold_start_cpu(client, confirm: :cold_start_cpu) == :ok
-    assert {:ok, %PLC.Status{state: :run}} = S7.plc_status(client)
+    assert S7.PLC.stop(client, confirm: :stop_cpu) == :ok
+    assert S7.PLC.cold_start(client, confirm: :cold_start_cpu) == :ok
+    assert {:ok, %PLC.Status{state: :run}} = S7.PLC.status(client)
 
-    assert S7.stop_cpu(client, confirm: :stop_cpu) == :ok
-    assert S7.copy_ram_to_rom(client, confirm: :copy_ram_to_rom) == :ok
-    assert S7.compress_memory(client, confirm: :compress_memory) == :ok
+    assert S7.PLC.stop(client, confirm: :stop_cpu) == :ok
+    assert S7.PLC.copy_ram_to_rom(client, confirm: :copy_ram_to_rom) == :ok
+    assert S7.PLC.compress_memory(client, confirm: :compress_memory) == :ok
 
     assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}

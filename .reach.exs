@@ -19,7 +19,16 @@ models = [
 
 [
   layers: [
-    public: "S7",
+    public: [
+      "S7",
+      "S7.API",
+      "S7.Alarm",
+      "S7.Blocks",
+      "S7.Cyclic",
+      "S7.PLC",
+      "S7.Programmer",
+      "S7.Session"
+    ],
     runtime: ["S7.Connection", "S7.Connection.*"],
     observability: "S7.Telemetry",
     protocol: ["S7.Protocol", "S7.Protocol.*"],

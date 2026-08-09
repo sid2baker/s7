@@ -43,15 +43,15 @@ the [examples guide](examples/usage.md).
 {:ok, current} = S7.read(client, "DB1.DBW0")
 :ok = S7.write(client, "DB1.DBW0", current + 1)
 {:ok, raw} = S7.read_raw(client, "DB1.DBW0")
-{:ok, %S7.PLC.OrderCode{code: order_code}} = S7.order_code(client)
-{:ok, dbs} = S7.list_blocks(client, :db)
-{:ok, %S7.PLC.Clock{datetime: plc_time}} = S7.read_clock(client)
+{:ok, %S7.PLC.OrderCode{code: order_code}} = S7.PLC.order_code(client)
+{:ok, dbs} = S7.Blocks.list(client, :db)
+{:ok, %S7.PLC.Clock{datetime: plc_time}} = S7.PLC.read_clock(client)
 {:ok, %S7.Programmer.VariableStatus{items: status_items}} =
-  S7.variable_status(client, ["MB0", "DB1.DBW0"])
-{:ok, cyclic} = S7.subscribe_cyclic(client, ["DB1.DBW0"], interval: 1_000)
+  S7.Programmer.variable_status(client, ["MB0", "DB1.DBW0"])
+{:ok, cyclic} = S7.Cyclic.subscribe(client, ["DB1.DBW0"], interval: 1_000)
 {:ok, %S7.Cyclic.Event{items: [%S7.Cyclic.Event.Item{value: next_value}]}} =
-  S7.next_cyclic(client, cyclic)
-:ok = S7.unsubscribe_cyclic(client, cyclic)
+  S7.Cyclic.next(cyclic)
+:ok = S7.Cyclic.unsubscribe(cyclic)
 :ok = S7.close(client)
 ```
 
@@ -207,20 +207,21 @@ Raw SZL reads preserve record boundaries and bytes while validating the PLC's de
 
 ```elixir
 {:ok, %S7.SZL{record_length: length, records: records}} =
-  S7.read_szl(client, 0x0011, 0,
+  S7.PLC.read_szl(client, 0x0011,
+    index: 0,
     max_bytes: 1_048_576,
     max_fragments: 64
   )
 
-{:ok, ids} = S7.list_szl(client)
-{:ok, %S7.PLC.CPUInfo{} = cpu} = S7.cpu_info(client)
-{:ok, %S7.PLC.CPInfo{} = communication} = S7.cp_info(client)
-{:ok, %S7.PLC.Status{state: :run}} = S7.plc_status(client)
+{:ok, ids} = S7.PLC.list_szl(client)
+{:ok, %S7.PLC.CPUInfo{} = cpu} = S7.PLC.cpu_info(client)
+{:ok, %S7.PLC.CPInfo{} = communication} = S7.PLC.cp_info(client)
+{:ok, %S7.PLC.Status{state: :run}} = S7.PLC.status(client)
 ```
 
 The order-code, component-identification, communication-limit, and status helpers decode known
 Siemens layouts. Every typed result retains either its source record or the complete component
-map; use `read_szl/4` for CPU-specific and firmware-specific records.
+map; use `S7.PLC.read_szl/3` for CPU-specific and firmware-specific records.
 
 ## Block Directory
 
@@ -229,19 +230,19 @@ block images:
 
 ```elixir
 {:ok, %S7.Block.Inventory{counts: %{db: db_count}}} =
-  S7.block_counts(client)
+  S7.Blocks.counts(client)
 
 {:ok, [%S7.Block.Entry{} | _] = dbs} =
-  S7.list_blocks(client, :db,
+  S7.Blocks.list(client, :db,
     max_bytes: 1_048_576,
     max_fragments: 64
   )
 
 {:ok, %S7.Block.Info{name: name, mc7_size: size}} =
-  S7.block_info(client, :db, 1)
+  S7.Blocks.info(client, :db, 1)
 ```
 
-`list_blocks/3` assembles the PLC's continuation sequence under aggregate byte and fragment
+`S7.Blocks.list/3` assembles the PLC's continuation sequence under aggregate byte and fragment
 limits. Directory entries and detailed metadata retain raw bytes and preserve unknown language,
 type, and security codes. Block upload and download use different stateful Job services and are
 not aliases for Read Var, Write Var, or these directory calls.
@@ -253,13 +254,13 @@ Classic block upload retrieves one complete load-memory image through an exclusi
 
 ```elixir
 {:ok, %S7.Block.Image{} = image} =
-  S7.upload_block(client, :db, 1,
+  S7.Blocks.upload(client, :db, 1,
     max_bytes: 1_048_576,
     max_fragments: 64,
     timeout: 30_000
   )
 
-{:ok, raw_image} = S7.upload_block_raw(client, %S7.Block{type: :db, number: 1})
+{:ok, raw_image} = S7.Blocks.upload_raw(client, %S7.Block{type: :db, number: 1})
 ```
 
 The parsed image retains every original byte, validates the requested block identity and declared
@@ -287,22 +288,22 @@ default. Both the connection capability and the operation-specific confirmation 
   )
 
 :ok =
-  S7.download_block(maintenance_client, image,
+  S7.Blocks.download(maintenance_client, image,
     confirm: :download_block
   )
 
 :ok =
-  S7.replace_block(maintenance_client, replacement,
+  S7.Blocks.replace(maintenance_client, replacement,
     confirm: :replace_block
   )
 
 :ok =
-  S7.delete_block(maintenance_client, :db, 1,
+  S7.Blocks.delete(maintenance_client, :db, 1,
     confirm: :delete_block
   )
 ```
 
-`download_block_raw/4` and `replace_block_raw/4` validate the complete image and requested block
+`S7.Blocks.download_raw/4` and `S7.Blocks.replace_raw/4` validate the complete image and requested block
 identity before sending. Download reserves the connection for Request Download, every
 PLC-initiated Download Block job, Download Ended, and `_INSE` activation. Responses are split
 against the negotiated PDU size. A complete PLC rejection leaves the connection usable; timeout,
@@ -312,7 +313,7 @@ returns `details.outcome: :indeterminate`. No destructive operation is replayed 
 The exact successful transfer is capture- and fault-server-qualified. The pinned Snap7 server
 deliberately rejects Request Download, so successful PLCSIM and physical-PLC qualification remains
 a release gate. Whether `_INSE` creates or replaces an existing block is PLC-dependent;
-`replace_block/3` records explicit caller intent but uses the same classic wire service.
+`S7.Blocks.replace/3` records explicit caller intent but uses the same classic wire service.
 
 ## Destructive CPU Control
 
@@ -320,13 +321,13 @@ CPU control uses a short exclusive transaction and the same two-level policy as 
 Each action has a distinct confirmation atom:
 
 ```elixir
-:ok = S7.stop_cpu(maintenance_client, confirm: :stop_cpu)
-:ok = S7.warm_start_cpu(maintenance_client, confirm: :warm_start_cpu)
-:ok = S7.cold_start_cpu(maintenance_client, confirm: :cold_start_cpu)
+:ok = S7.PLC.stop(maintenance_client, confirm: :stop_cpu)
+:ok = S7.PLC.warm_start(maintenance_client, confirm: :warm_start_cpu)
+:ok = S7.PLC.cold_start(maintenance_client, confirm: :cold_start_cpu)
 
 # These operations commonly require the CPU to be in STOP.
-:ok = S7.copy_ram_to_rom(maintenance_client, confirm: :copy_ram_to_rom)
-:ok = S7.compress_memory(maintenance_client, confirm: :compress_memory)
+:ok = S7.PLC.copy_ram_to_rom(maintenance_client, confirm: :copy_ram_to_rom)
+:ok = S7.PLC.compress_memory(maintenance_client, confirm: :compress_memory)
 ```
 
 All calls accept bounded `:timeout` and `:step_timeout` options. A complete PLC rejection returns
@@ -339,8 +340,8 @@ session. The client never replays CPU control after reconnect.
 Classic PLC clock values are timezone-free local civil time:
 
 ```elixir
-{:ok, %S7.PLC.Clock{datetime: current}} = S7.read_clock(client)
-:ok = S7.set_clock(client, ~N[2030-02-03 04:05:06.789])
+{:ok, %S7.PLC.Clock{datetime: current}} = S7.PLC.read_clock(client)
+:ok = S7.PLC.set_clock(client, ~N[2030-02-03 04:05:06.789])
 ```
 
 `set_clock/2` is state-changing and is never replayed after an ambiguous outcome. The returned
@@ -351,8 +352,8 @@ Classic protected-session login changes authorization for the current connection
 
 ```elixir
 password = System.fetch_env!("S7_PASSWORD")
-:ok = S7.authenticate(client, password)
-:ok = S7.logout(client)
+:ok = S7.Session.authenticate(client, password)
+:ok = S7.Session.logout(client)
 ```
 
 Passwords are one to eight printable ASCII bytes. Authentication is an ordering barrier: earlier
@@ -367,14 +368,14 @@ Read Var:
 
 ```elixir
 {:ok, subscription} =
-  S7.subscribe_cyclic(client, ["MW10", "DB1.DBD20"],
+  S7.Cyclic.subscribe(client, ["MW10", "DB1.DBD20"],
     interval: 1_000,
     queue_limit: 32
   )
 
 initial_snapshot = subscription.initial
-{:ok, %S7.Cyclic.Event{items: items}} = S7.next_cyclic(client, subscription)
-:ok = S7.unsubscribe_cyclic(client, subscription)
+{:ok, %S7.Cyclic.Event{items: items}} = S7.Cyclic.next(subscription)
+:ok = S7.Cyclic.unsubscribe(subscription)
 ```
 
 Intervals must be represented exactly by the classic 100 ms, 1 s, or 10 s wire bases; the client
@@ -394,19 +395,19 @@ wire record and CPU-specific associated value:
 
 ```elixir
 {:ok, alarms} =
-  S7.subscribe_alarms(client, :alarm_8,
+  S7.Alarm.subscribe(client, :alarm_8,
     queue_limit: 64
   )
 
 {:ok, %S7.Alarm.Event{objects: [object | _]} = event} =
-  S7.next_alarm(client, alarms)
+  S7.Alarm.next(alarms)
 
 {:ok, %S7.Alarm.Query{records: records}} =
-  S7.query_alarms(client, :alarm_8)
+  S7.Alarm.query(client, :alarm_8)
 
-:ok = S7.acknowledge_alarm(client, object)
-{:ok, results} = S7.acknowledge_alarms(client, event)
-:ok = S7.unsubscribe_alarms(client, alarms)
+:ok = S7.Alarm.acknowledge(client, object)
+{:ok, results} = S7.Alarm.acknowledge_many(client, event)
+:ok = S7.Alarm.unsubscribe(alarms)
 ```
 
 Use `:alarm_s` for the S7-300-style path and `:alarm_8` for the S7-400-style path. Events are

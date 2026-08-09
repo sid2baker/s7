@@ -21,12 +21,12 @@ case S7.connect(host, port: port, rack: rack, slot: slot, timeout: timeout) do
   {:ok, client} ->
     try do
       show.("connection", S7.info(client))
-      show.("order code", S7.order_code(client))
-      show.("CPU information", S7.cpu_info(client))
-      show.("communication processor", S7.cp_info(client))
-      show.("PLC status", S7.plc_status(client))
-      show.("PLC clock", S7.read_clock(client))
-      show.("block counts", S7.block_counts(client))
+      show.("order code", S7.PLC.order_code(client))
+      show.("CPU information", S7.PLC.cpu_info(client))
+      show.("communication processor", S7.PLC.cp_info(client))
+      show.("PLC status", S7.PLC.status(client))
+      show.("PLC clock", S7.PLC.read_clock(client))
+      show.("block counts", S7.Blocks.counts(client))
     after
       _ = S7.close(client)
     end

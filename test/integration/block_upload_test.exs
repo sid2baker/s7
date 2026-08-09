@@ -11,9 +11,9 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:ok, %Block.Image{block: %Block{type: :sdb, number: 0}, raw: ^raw}} =
-             S7.upload_block(client, block(), max_fragments: 8)
+             S7.Blocks.upload(client, block(), max_fragments: 8)
 
-    assert S7.upload_block_raw(client, :sdb, 0, max_fragments: 8) == {:ok, raw}
+    assert S7.Blocks.upload_raw(client, :sdb, 0, max_fragments: 8) == {:ok, raw}
 
     assert %{state: :ready, exclusive_transaction: false, in_flight_requests: 0} =
              S7.TestSupport.info!(client)
@@ -31,7 +31,7 @@ defmodule S7.BlockUploadIntegrationTest do
       )
 
     assert {:ok, client} = connect(server, queue_limit: 1)
-    upload = Task.async(fn -> S7.upload_block(client, block()) end)
+    upload = Task.async(fn -> S7.Blocks.upload(client, block()) end)
     assert_receive {:mock_plc_request, :upload_segment, _reference}, 500
 
     read = Task.async(fn -> S7.read(client, "DB1.DBW0") end)
@@ -59,7 +59,7 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:error, %Error{reason: :access_denied, code: 0xD241}} =
-             S7.upload_block(client, block())
+             S7.Blocks.upload(client, block())
 
     assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
@@ -80,7 +80,7 @@ defmodule S7.BlockUploadIntegrationTest do
             %Error{
               reason: :block_upload_too_large,
               details: %{size: 216, limit: 100}
-            }} = S7.upload_block(size_client, block(), max_bytes: 100)
+            }} = S7.Blocks.upload(size_client, block(), max_bytes: 100)
 
     assert_receive {:mock_plc_request, :upload_start, _reference}, 500
     assert_receive {:mock_plc_request, :upload_end, _reference}, 500
@@ -99,7 +99,7 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:ok, fragment_client} = connect(fragment_server)
 
     assert {:error, %Error{reason: :too_many_upload_fragments, details: %{limit: 1}}} =
-             S7.upload_block(fragment_client, block(), max_fragments: 1)
+             S7.Blocks.upload(fragment_client, block(), max_fragments: 1)
 
     assert_receive {:mock_plc_request, :upload_segment, _reference}, 500
     assert_receive {:mock_plc_request, :upload_end, _reference}, 500
@@ -118,7 +118,7 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:ok, malformed_client} = connect(malformed_server)
 
     assert {:error, %Error{reason: :malformed_response}} =
-             S7.upload_block(malformed_client, block())
+             S7.Blocks.upload(malformed_client, block())
 
     assert %{state: :disconnected, exclusive_transaction: false} =
              S7.TestSupport.info!(malformed_client)
@@ -134,7 +134,7 @@ defmodule S7.BlockUploadIntegrationTest do
 
     assert {:ok, disconnected_client} = connect(disconnected_server)
 
-    assert {:error, %Error{reason: reason}} = S7.upload_block(disconnected_client, block())
+    assert {:error, %Error{reason: reason}} = S7.Blocks.upload(disconnected_client, block())
     assert reason in [:connection_closed, :remote_disconnect]
 
     assert %{state: :disconnected, exclusive_transaction: false} =
@@ -157,7 +157,7 @@ defmodule S7.BlockUploadIntegrationTest do
       step_timeout = if fault == :segment_silence, do: 20, else: 200
 
       assert {:error, %Error{reason: reason}} =
-               S7.upload_block(client, block(), step_timeout: step_timeout)
+               S7.Blocks.upload(client, block(), step_timeout: step_timeout)
 
       expected_reason = if fault == :segment_silence, do: :timeout, else: :malformed_response
       assert reason == expected_reason
@@ -172,10 +172,10 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:ok, client} = connect(server)
 
     assert {:error, %Error{reason: :malformed_block_image}} =
-             S7.upload_block(client, block())
+             S7.Blocks.upload(client, block())
 
     assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
-    assert S7.upload_block_raw(client, block()) == {:ok, raw}
+    assert S7.Blocks.upload_raw(client, block()) == {:ok, raw}
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(client) == :ok
   end
@@ -190,7 +190,7 @@ defmodule S7.BlockUploadIntegrationTest do
       )
 
     assert {:ok, client} = connect(server)
-    caller = spawn(fn -> S7.upload_block(client, block()) end)
+    caller = spawn(fn -> S7.Blocks.upload(client, block()) end)
     assert_receive {:mock_plc_request, :upload_segment, _reference}, 500
     Process.exit(caller, :kill)
 
@@ -204,10 +204,10 @@ defmodule S7.BlockUploadIntegrationTest do
     server = start_server()
     assert {:ok, client} = connect(server)
 
-    assert {:error, %Error{reason: :invalid_block}} = S7.upload_block(client, :invalid, 1)
+    assert {:error, %Error{reason: :invalid_block}} = S7.Blocks.upload(client, :invalid, 1)
 
     assert {:error, %Error{reason: :invalid_option}} =
-             S7.upload_block(client, block(), max_bytes: 0)
+             S7.Blocks.upload(client, block(), max_bytes: 0)
 
     assert %{state: :ready, exclusive_transaction: false, queued_requests: 0} =
              S7.TestSupport.info!(client)
