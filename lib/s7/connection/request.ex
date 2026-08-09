@@ -26,9 +26,9 @@ defmodule S7.Connection.Request do
 
   @type kind ::
           :read
-          | :read_multi
+          | :read_many
           | :write
-          | :write_multi
+          | :write_many
           | :userdata
           | :szl
           | :blocks

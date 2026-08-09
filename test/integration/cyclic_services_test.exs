@@ -49,7 +49,7 @@ defmodule S7.CyclicServicesIntegrationTest do
     assert_receive {:mock_plc_request, :cyclic_subscribe, _reference}, 500
 
     assert %{state: :ready, subscriptions: 1, exclusive_transaction: false} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
 
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
 
@@ -63,7 +63,7 @@ defmodule S7.CyclicServicesIntegrationTest do
     assert_receive {:mock_plc_request, :cyclic_unsubscribe, _reference}, 500
 
     assert %{state: :ready, subscriptions: 0, exclusive_transaction: false} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
 
     assert {:error, %Error{reason: :invalid_subscription, operation: :next_cyclic}} =
              S7.next_cyclic(client, subscription, 10)
@@ -117,7 +117,7 @@ defmodule S7.CyclicServicesIntegrationTest do
              S7.subscribe_cyclic(client, ["MW10"])
 
     assert %{state: :ready, subscriptions: 0, exclusive_transaction: false} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
 
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(client) == :ok
@@ -133,7 +133,7 @@ defmodule S7.CyclicServicesIntegrationTest do
     refute_receive {:mock_plc_request, :cyclic_subscribe, _reference}, 30
 
     assert %{state: :ready, subscriptions: 0, exclusive_transaction: false} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
 
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(client) == :ok
@@ -166,7 +166,7 @@ defmodule S7.CyclicServicesIntegrationTest do
              S7.modify_cyclic_raw(client, subscription, [@dbread_modified])
 
     assert %{state: :ready, subscriptions: 1, exclusive_transaction: false} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
 
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.unsubscribe_cyclic(client, subscription) == :ok
@@ -186,7 +186,7 @@ defmodule S7.CyclicServicesIntegrationTest do
                S7.next_cyclic(client, subscription, 100)
 
       assert S7.unsubscribe_cyclic(client, subscription) == :ok
-      assert %{state: :ready, subscriptions: 0} = S7.info(client)
+      assert %{state: :ready, subscriptions: 0} = S7.TestSupport.info!(client)
       assert S7.close(client) == :ok
     end
   end
@@ -204,7 +204,7 @@ defmodule S7.CyclicServicesIntegrationTest do
              S7.next_cyclic(client, subscription, 100)
 
     assert S7.unsubscribe_cyclic(client, subscription) == :ok
-    assert %{state: :ready, subscriptions: 0} = S7.info(client)
+    assert %{state: :ready, subscriptions: 0} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -257,7 +257,7 @@ defmodule S7.CyclicServicesIntegrationTest do
       end)
 
     assert_receive {:cyclic_owner, ^owner, {:ok, %Cyclic.Subscription{}}}, 500
-    assert %{subscriptions: 1} = S7.info(client)
+    assert %{subscriptions: 1} = S7.TestSupport.info!(client)
     Process.exit(owner, :kill)
 
     assert %{state: :disconnected, subscriptions: 0} = await_state(client, :disconnected)
@@ -308,10 +308,10 @@ defmodule S7.CyclicServicesIntegrationTest do
   end
 
   defp await_state(client, expected, attempts \\ 50)
-  defp await_state(client, _expected, 0), do: S7.info(client)
+  defp await_state(client, _expected, 0), do: S7.TestSupport.info!(client)
 
   defp await_state(client, expected, attempts) do
-    case S7.info(client) do
+    case S7.TestSupport.info!(client) do
       %{state: ^expected} = info ->
         info
 

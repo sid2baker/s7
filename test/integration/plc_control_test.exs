@@ -46,7 +46,7 @@ defmodule S7.PLCControlIntegrationTest do
       assert apply(S7, function, [client, [confirm: action]]) == :ok
       assert_receive {:mock_plc_request, ^action, _reference}, 500
       assert_receive {:mock_plc_controlled, ^action}, 500
-      assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+      assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     end
 
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
@@ -64,7 +64,7 @@ defmodule S7.PLCControlIntegrationTest do
               details: %{outcome: :rejected, stage: :copy_ram_to_rom}
             }} = S7.copy_ram_to_rom(client, confirm: :copy_ram_to_rom)
 
-    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(client) == :ok
   end
@@ -128,10 +128,10 @@ defmodule S7.PLCControlIntegrationTest do
   end
 
   defp await_queue(client, attempts \\ 50)
-  defp await_queue(client, 0), do: S7.info(client)
+  defp await_queue(client, 0), do: S7.TestSupport.info!(client)
 
   defp await_queue(client, attempts) do
-    case S7.info(client) do
+    case S7.TestSupport.info!(client) do
       %{queued_requests: 1} = info ->
         info
 
@@ -142,10 +142,10 @@ defmodule S7.PLCControlIntegrationTest do
   end
 
   defp await_state(client, expected, attempts \\ 50)
-  defp await_state(client, _expected, 0), do: S7.info(client)
+  defp await_state(client, _expected, 0), do: S7.TestSupport.info!(client)
 
   defp await_state(client, expected, attempts) do
-    case S7.info(client) do
+    case S7.TestSupport.info!(client) do
       %{state: ^expected} = info ->
         info
 

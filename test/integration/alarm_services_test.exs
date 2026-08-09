@@ -29,7 +29,7 @@ defmodule S7.AlarmServicesIntegrationTest do
     assert_receive {:mock_plc_request, :alarm_subscribe, _reference}, 500
 
     assert %{state: :ready, subscriptions: 1, exclusive_transaction: false} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
 
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
 
@@ -72,7 +72,7 @@ defmodule S7.AlarmServicesIntegrationTest do
     assert_receive {:mock_plc_request, :alarm_unsubscribe, _reference}, 500
 
     assert %{state: :ready, subscriptions: 0, exclusive_transaction: false} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
 
     assert {:error, %Error{reason: :invalid_subscription, operation: :next_alarm}} =
              S7.next_alarm(client, subscription, 10)
@@ -113,7 +113,7 @@ defmodule S7.AlarmServicesIntegrationTest do
              S7.subscribe_alarms(client, :alarm_8)
 
     assert %{state: :ready, subscriptions: 0, exclusive_transaction: false} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
 
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(client) == :ok
@@ -160,7 +160,7 @@ defmodule S7.AlarmServicesIntegrationTest do
                S7.next_alarm(client, subscription, 250)
 
       assert S7.unsubscribe_alarms(client, subscription) == :ok
-      assert %{state: :ready, subscriptions: 0} = S7.info(client)
+      assert %{state: :ready, subscriptions: 0} = S7.TestSupport.info!(client)
       assert S7.close(client) == :ok
     end
   end
@@ -181,7 +181,7 @@ defmodule S7.AlarmServicesIntegrationTest do
              S7.next_alarm(client, subscription, 100)
 
     assert S7.unsubscribe_alarms(client, subscription) == :ok
-    assert %{state: :ready, subscriptions: 0} = S7.info(client)
+    assert %{state: :ready, subscriptions: 0} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -227,7 +227,7 @@ defmodule S7.AlarmServicesIntegrationTest do
               }
             ]} = S7.acknowledge_alarms(client, acknowledgements)
 
-    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
 
     oversized = Enum.map(1..30, &acknowledgement/1)
@@ -235,7 +235,7 @@ defmodule S7.AlarmServicesIntegrationTest do
     assert {:error, %Error{reason: :pdu_too_large, details: %{outcome: :not_attempted}}} =
              S7.acknowledge_alarms(client, oversized)
 
-    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -250,7 +250,7 @@ defmodule S7.AlarmServicesIntegrationTest do
               details: %{outcome: :rejected}
             }} = S7.acknowledge_alarm(rejected_client, acknowledgement(0xAF))
 
-    assert %{state: :ready, exclusive_transaction: false} = S7.info(rejected_client)
+    assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(rejected_client)
     assert S7.close(rejected_client) == :ok
 
     for {fault, expected} <- [
@@ -286,7 +286,7 @@ defmodule S7.AlarmServicesIntegrationTest do
       end)
 
     assert_receive {:alarm_owner, ^owner, {:ok, %Alarm.Subscription{}}}, 500
-    assert %{subscriptions: 1} = S7.info(client)
+    assert %{subscriptions: 1} = S7.TestSupport.info!(client)
     Process.exit(owner, :kill)
 
     assert %{state: :disconnected, subscriptions: 0} = await_state(client, :disconnected)
@@ -354,10 +354,10 @@ defmodule S7.AlarmServicesIntegrationTest do
   end
 
   defp await_state(client, expected, attempts \\ 50)
-  defp await_state(client, _expected, 0), do: S7.info(client)
+  defp await_state(client, _expected, 0), do: S7.TestSupport.info!(client)
 
   defp await_state(client, expected, attempts) do
-    case S7.info(client) do
+    case S7.TestSupport.info!(client) do
       %{state: ^expected} = info ->
         info
 

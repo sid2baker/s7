@@ -150,10 +150,10 @@ defmodule S7.Connection do
   end
 
   @doc false
-  @spec read_multi(pid(), [Address.t()], boolean()) ::
+  @spec read_many(pid(), [Address.t()], boolean()) ::
           {:ok, [Result.t()]} | {:error, Error.t(), [Result.t()]}
-  def read_multi(connection, addresses, raw?) do
-    :gen_statem.call(connection, {:read_multi, addresses, raw?}, :infinity)
+  def read_many(connection, addresses, raw?) do
+    :gen_statem.call(connection, {:read_many, addresses, raw?}, :infinity)
   end
 
   @doc false
@@ -163,10 +163,10 @@ defmodule S7.Connection do
   end
 
   @doc false
-  @spec write_multi(pid(), [{Address.t(), binary()}]) ::
+  @spec write_many(pid(), [{Address.t(), binary()}]) ::
           {:ok, [Result.t()]} | {:error, Error.t(), [Result.t()]}
-  def write_multi(connection, items) do
-    :gen_statem.call(connection, {:write_multi, items}, :infinity)
+  def write_many(connection, items) do
+    :gen_statem.call(connection, {:write_many, items}, :infinity)
   end
 
   @doc false
@@ -429,10 +429,10 @@ defmodule S7.Connection do
   def handle_event({:call, from}, {:write, _address, _value} = operation, :ready, data),
     do: submit_request(from, operation, data)
 
-  def handle_event({:call, from}, {:read_multi, _addresses, _raw?} = operation, :ready, data),
+  def handle_event({:call, from}, {:read_many, _addresses, _raw?} = operation, :ready, data),
     do: submit_request(from, operation, data)
 
-  def handle_event({:call, from}, {:write_multi, _items} = operation, :ready, data),
+  def handle_event({:call, from}, {:write_many, _items} = operation, :ready, data),
     do: submit_request(from, operation, data)
 
   def handle_event(
@@ -2421,9 +2421,9 @@ defmodule S7.Connection do
     end
   end
 
-  defp build_request(from, {:read_multi, addresses, raw?}, data) do
+  defp build_request(from, {:read_many, addresses, raw?}, data) do
     with {:ok, batches} <- plan_read(addresses, data) do
-      {:ok, new_request(from, :read_multi, :read_multi, batches, raw?)}
+      {:ok, new_request(from, :read_many, :read_many, batches, raw?)}
     end
   end
 
@@ -2433,9 +2433,9 @@ defmodule S7.Connection do
     end
   end
 
-  defp build_request(from, {:write_multi, items}, data) do
+  defp build_request(from, {:write_many, items}, data) do
     with {:ok, batches} <- plan_write(items, data) do
-      {:ok, new_request(from, :write_multi, :write_multi, batches)}
+      {:ok, new_request(from, :write_many, :write_many, batches)}
     end
   end
 
@@ -2715,11 +2715,11 @@ defmodule S7.Connection do
   end
 
   defp encode_batch(%Request{kind: kind}, batch, reference)
-       when kind in [:read, :read_multi],
+       when kind in [:read, :read_many],
        do: ReadVar.request_many(batch, reference)
 
   defp encode_batch(%Request{kind: kind}, batch, reference)
-       when kind in [:write, :write_multi],
+       when kind in [:write, :write_many],
        do: WriteVar.request_many(batch, reference)
 
   defp encode_batch(%Request{kind: :userdata}, [%UserData{} = message], reference),
@@ -2957,13 +2957,13 @@ defmodule S7.Connection do
   end
 
   defp decode_batch_response(%Request{kind: kind, raw?: raw?} = request, pdu)
-       when kind in [:read, :read_multi] do
+       when kind in [:read, :read_many] do
     decoder = if raw?, do: &ReadVar.decode_raw_responses/3, else: &ReadVar.decode_responses/3
     decoder.(pdu, request.current_batch, request.reference)
   end
 
   defp decode_batch_response(%Request{kind: kind} = request, pdu)
-       when kind in [:write, :write_multi] do
+       when kind in [:write, :write_many] do
     WriteVar.decode_responses(pdu, Enum.count(request.current_batch), request.reference)
   end
 
@@ -3117,12 +3117,12 @@ defmodule S7.Connection do
     enqueue_priority_request(data, request)
   end
 
-  defp handle_active_batch_results(data, %Request{kind: :read_multi} = request, item_results) do
+  defp handle_active_batch_results(data, %Request{kind: :read_many} = request, item_results) do
     results = prepend_results(read_results(request.current_batch, item_results), request.results)
     continue_or_finish(data, %{request | results: results})
   end
 
-  defp handle_active_batch_results(data, %Request{kind: :write_multi} = request, item_results) do
+  defp handle_active_batch_results(data, %Request{kind: :write_many} = request, item_results) do
     results = prepend_results(write_results(request.current_batch, item_results), request.results)
     continue_or_finish(data, %{request | results: results})
   end
@@ -3147,13 +3147,13 @@ defmodule S7.Connection do
        when kind in [:read, :write, :userdata, :szl, :blocks, :clock, :security, :transaction],
        do: {:error, with_operation(error, operation)}
 
-  defp request_failure_reply(%Request{kind: :read_multi} = request, error, send_state) do
+  defp request_failure_reply(%Request{kind: :read_many} = request, error, send_state) do
     error = with_operation(error, request.operation)
     results = failed_multi_results(request, error, send_state, :error)
     {:error, error, results}
   end
 
-  defp request_failure_reply(%Request{kind: :write_multi} = request, error, send_state) do
+  defp request_failure_reply(%Request{kind: :write_many} = request, error, send_state) do
     error = with_operation(error, request.operation)
     results = failed_multi_results(request, error, send_state, :indeterminate)
     {:error, error, results}
@@ -3181,10 +3181,10 @@ defmodule S7.Connection do
     completed ++ current ++ remaining
   end
 
-  defp failed_batch(kind, items, status, error) when kind in [:read, :read_multi],
+  defp failed_batch(kind, items, status, error) when kind in [:read, :read_many],
     do: failed_results(items, status, error)
 
-  defp failed_batch(kind, items, status, error) when kind in [:write, :write_multi],
+  defp failed_batch(kind, items, status, error) when kind in [:write, :write_many],
     do: failed_write_results(items, error, status)
 
   defp finish_request(request, reply) do
@@ -3369,7 +3369,7 @@ defmodule S7.Connection do
     cond do
       not caller_alive?(request) or request.cancelled -> :cancelled
       item_error_count(item_results) == 0 -> :ok
-      request.kind in [:read_multi, :write_multi] -> :partial
+      request.kind in [:read_many, :write_many] -> :partial
       true -> :error
     end
   end
@@ -3753,7 +3753,7 @@ defmodule S7.Connection do
   defp operation_name({:next_userdata, _subscription, _timeout}), do: :next_userdata
 
   defp operation_name({operation, _address, _value}), do: operation
-  defp operation_name({operation, _items}) when operation in [:write_multi], do: operation
+  defp operation_name({operation, _items}) when operation in [:write_many], do: operation
   defp operation_name(operation) when is_atom(operation), do: operation
   defp operation_name(_operation), do: :request
 end

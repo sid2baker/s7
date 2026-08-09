@@ -54,7 +54,7 @@ defmodule S7.BlockDownloadIntegrationTest do
     refute_receive {:mock_plc_request, :download_segment, _reference}, 30
 
     assert %{state: :ready, destructive_operations: true, exclusive_transaction: false} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
 
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(client) == :ok
@@ -171,7 +171,7 @@ defmodule S7.BlockDownloadIntegrationTest do
         assert reason == expected_reason
       end
 
-      assert %{state: :disconnected, exclusive_transaction: false} = S7.info(client)
+      assert %{state: :disconnected, exclusive_transaction: false} = S7.TestSupport.info!(client)
       assert S7.close(client) == :ok
     end
   end
@@ -257,10 +257,10 @@ defmodule S7.BlockDownloadIntegrationTest do
   end
 
   defp await_queue(client, attempts \\ 50)
-  defp await_queue(client, 0), do: S7.info(client)
+  defp await_queue(client, 0), do: S7.TestSupport.info!(client)
 
   defp await_queue(client, attempts) do
-    case S7.info(client) do
+    case S7.TestSupport.info!(client) do
       %{queued_requests: 1} = info ->
         info
 
@@ -271,10 +271,10 @@ defmodule S7.BlockDownloadIntegrationTest do
   end
 
   defp await_state(client, expected, attempts \\ 50)
-  defp await_state(client, _expected, 0), do: S7.info(client)
+  defp await_state(client, _expected, 0), do: S7.TestSupport.info!(client)
 
   defp await_state(client, expected, attempts) do
-    case S7.info(client) do
+    case S7.TestSupport.info!(client) do
       %{state: ^expected} = info ->
         info
 

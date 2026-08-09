@@ -34,7 +34,7 @@ The script connects, performs a typed read, closes the connection in an
 
 ## Read Multiple Values
 
-`S7.read_multi/2` retains one `%S7.Result{}` per input. The example prints each
+`S7.read_many/2` retains one `%S7.Result{}` per input. The example prints each
 item independently, including PLC item errors and indeterminate or
 not-attempted statuses.
 

@@ -13,7 +13,10 @@ children = [
 case Supervisor.start_link(children, strategy: :one_for_one) do
   {:ok, supervisor} ->
     try do
-      IO.inspect(S7.info(name), label: "connection")
+      case S7.info(name) do
+        {:ok, info} -> IO.inspect(info, label: "connection")
+        {:error, error} -> raise error
+      end
 
       case S7.read(name, address) do
         {:ok, value} ->

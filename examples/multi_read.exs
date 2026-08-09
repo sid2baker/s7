@@ -15,7 +15,7 @@ result =
   case S7.connect(host, port: port, rack: rack, slot: slot, timeout: timeout) do
     {:ok, client} ->
       try do
-        S7.read_multi(client, addresses)
+        S7.read_many(client, addresses)
       after
         _ = S7.close(client)
       end

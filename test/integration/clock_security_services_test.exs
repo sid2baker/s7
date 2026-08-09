@@ -22,14 +22,14 @@ defmodule S7.ClockSecurityServicesIntegrationTest do
     assert {:error, %Error{layer: :client, reason: :invalid_clock_value}} =
              S7.set_clock(client, ~N[2030-02-03 04:05:06.000001])
 
-    assert %{state: :ready, in_flight_requests: 0} = S7.info(client)
+    assert %{state: :ready, in_flight_requests: 0} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
   test "authenticates and logs out without retaining a password in public state or errors" do
     server = start_server(session_password: "TESTONLY")
     assert {:ok, client} = connect(server)
-    assert %{authenticated: false} = S7.info(client)
+    assert %{authenticated: false} = S7.TestSupport.info!(client)
 
     secret = "PRIVATE"
 
@@ -42,18 +42,18 @@ defmodule S7.ClockSecurityServicesIntegrationTest do
             } = error} = S7.authenticate(client, secret)
 
     refute inspect(error) =~ secret
-    assert %{state: :ready, authenticated: false} = S7.info(client)
+    assert %{state: :ready, authenticated: false} = S7.TestSupport.info!(client)
 
     assert S7.authenticate(client, "TESTONLY") == :ok
-    assert %{state: :ready, authenticated: true} = S7.info(client)
+    assert %{state: :ready, authenticated: true} = S7.TestSupport.info!(client)
 
     assert S7.logout(client) == :ok
-    assert %{state: :ready, authenticated: false} = S7.info(client)
+    assert %{state: :ready, authenticated: false} = S7.TestSupport.info!(client)
 
     assert {:error, %Error{reason: :not_authenticated, code: 0xD604}} =
              S7.logout(client)
 
-    assert %{state: :ready} = S7.info(client)
+    assert %{state: :ready} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -85,7 +85,10 @@ defmodule S7.ClockSecurityServicesIntegrationTest do
     assert Task.await(authentication) == :ok
     assert_receive {:mock_plc_request, :read, _reference}, 500
     assert Task.await(second_read) == {:ok, 1234}
-    assert %{authenticated: true, queued_requests: 0, in_flight_requests: 0} = S7.info(client)
+
+    assert %{authenticated: true, queued_requests: 0, in_flight_requests: 0} =
+             S7.TestSupport.info!(client)
+
     assert S7.close(client) == :ok
   end
 
@@ -111,7 +114,10 @@ defmodule S7.ClockSecurityServicesIntegrationTest do
 
     assert Task.await(first_read) == {:ok, 1234}
     assert Task.await(authentication) == :ok
-    assert %{authenticated: true, queued_requests: 0, in_flight_requests: 0} = S7.info(client)
+
+    assert %{authenticated: true, queued_requests: 0, in_flight_requests: 0} =
+             S7.TestSupport.info!(client)
+
     assert S7.close(client) == :ok
   end
 
@@ -140,18 +146,18 @@ defmodule S7.ClockSecurityServicesIntegrationTest do
     assert {:error, %Error{operation: :read_clock, reason: :malformed_response}} =
              S7.read_clock(clock_client)
 
-    assert %{state: :disconnected} = S7.info(clock_client)
+    assert %{state: :disconnected} = S7.TestSupport.info!(clock_client)
     assert S7.close(clock_client) == :ok
 
     security_server = start_server(read_fault: :remote_disconnect, session_password: "TESTONLY")
     assert {:ok, security_client} = connect(security_server)
     assert S7.authenticate(security_client, "TESTONLY") == :ok
-    assert %{authenticated: true} = S7.info(security_client)
+    assert %{authenticated: true} = S7.TestSupport.info!(security_client)
 
     assert {:error, %Error{reason: :remote_disconnect}} =
              S7.read(security_client, "DB1.DBW0")
 
-    assert %{state: :disconnected, authenticated: false} = S7.info(security_client)
+    assert %{state: :disconnected, authenticated: false} = S7.TestSupport.info!(security_client)
     assert S7.close(security_client) == :ok
   end
 
@@ -165,7 +171,7 @@ defmodule S7.ClockSecurityServicesIntegrationTest do
     end
 
     assert %{state: :ready, authenticated: false, queued_requests: 0, in_flight_requests: 0} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
 
     assert S7.close(client) == :ok
   end
@@ -186,22 +192,22 @@ defmodule S7.ClockSecurityServicesIntegrationTest do
   defp await_queue(client, expected, attempts \\ 100)
 
   defp await_queue(client, expected, attempts) when attempts > 0 do
-    case S7.info(client) do
+    case S7.TestSupport.info!(client) do
       %{queued_requests: ^expected} = info -> info
       _other -> Process.sleep(5) && await_queue(client, expected, attempts - 1)
     end
   end
 
-  defp await_queue(client, _expected, 0), do: S7.info(client)
+  defp await_queue(client, _expected, 0), do: S7.TestSupport.info!(client)
 
   defp await_authenticated(client, expected, attempts \\ 100)
 
   defp await_authenticated(client, expected, attempts) when attempts > 0 do
-    case S7.info(client) do
+    case S7.TestSupport.info!(client) do
       %{authenticated: ^expected} = info -> info
       _other -> Process.sleep(5) && await_authenticated(client, expected, attempts - 1)
     end
   end
 
-  defp await_authenticated(client, _expected, 0), do: S7.info(client)
+  defp await_authenticated(client, _expected, 0), do: S7.TestSupport.info!(client)
 end

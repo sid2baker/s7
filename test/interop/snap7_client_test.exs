@@ -33,7 +33,7 @@ defmodule S7.Snap7ClientInteropTest do
   end
 
   test "negotiates and reads and writes every v0.1 area and scalar type", %{client: client} do
-    assert %{state: :ready, pdu_size: 480, max_jobs: 4} = S7.info(client)
+    assert %{state: :ready, pdu_size: 480, max_jobs: 4} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.read(client, "I0.7") == {:ok, true}
 
@@ -89,11 +89,11 @@ defmodule S7.Snap7ClientInteropTest do
         {address, rem(offset, 256)}
       end
 
-    assert {:ok, write_results} = S7.write_multi(client, writes)
+    assert {:ok, write_results} = S7.write_many(client, writes)
     assert Enum.all?(write_results, &match?(%Result{status: :ok}, &1))
 
     addresses = Enum.map(writes, &elem(&1, 0))
-    assert {:ok, read_results} = S7.read_multi(client, addresses)
+    assert {:ok, read_results} = S7.read_many(client, addresses)
     assert Enum.map(read_results, & &1.value) == Enum.map(writes, &elem(&1, 1))
   end
 
@@ -141,11 +141,11 @@ defmodule S7.Snap7ClientInteropTest do
   test "sets the classic clock and changes session authorization", %{client: client} do
     assert S7.set_clock(client, ~N[2024-08-09 12:34:56.000]) == :ok
 
-    assert %{authenticated: false} = S7.info(client)
+    assert %{authenticated: false} = S7.TestSupport.info!(client)
     assert S7.authenticate(client, "TESTONLY") == :ok
-    assert %{authenticated: true} = S7.info(client)
+    assert %{authenticated: true} = S7.TestSupport.info!(client)
     assert S7.logout(client) == :ok
-    assert %{authenticated: false} = S7.info(client)
+    assert %{authenticated: false} = S7.TestSupport.info!(client)
   end
 
   test "reports the pinned server's explicit upload protection without losing the session", %{
@@ -154,7 +154,7 @@ defmodule S7.Snap7ClientInteropTest do
     assert {:error, %Error{reason: :access_denied, code: 0xD241}} =
              S7.upload_block(client, :db, 1)
 
-    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 
@@ -163,7 +163,7 @@ defmodule S7.Snap7ClientInteropTest do
              S7.variable_status(client, ["MB0"], timeout: 200, step_timeout: 200)
 
     assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
   end
 
   test "bounds the pinned server's silent cyclic-service drop", %{client: client} do
@@ -171,7 +171,7 @@ defmodule S7.Snap7ClientInteropTest do
              S7.subscribe_cyclic(client, ["MB0"], timeout: 200, step_timeout: 200)
 
     assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
   end
 
   test "rejects the pinned server's malformed alarm-subscription response", %{client: client} do
@@ -179,14 +179,16 @@ defmodule S7.Snap7ClientInteropTest do
              S7.subscribe_alarms(client, :alarm_8, timeout: 200, step_timeout: 200)
 
     assert %{state: :disconnected, exclusive_transaction: false, subscriptions: 0} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
   end
 
   test "decodes the pinned server's alarm-query rejection", %{client: client} do
     assert {:error, %Error{reason: :userdata_error, code: 0xD402}} =
              S7.query_alarms(client, :alarm_8)
 
-    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} =
+             S7.TestSupport.info!(client)
+
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 
@@ -208,7 +210,9 @@ defmodule S7.Snap7ClientInteropTest do
                step_timeout: 200
              )
 
-    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} =
+             S7.TestSupport.info!(client)
+
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 
@@ -223,7 +227,7 @@ defmodule S7.Snap7ClientInteropTest do
             }} = S7.download_block(client, image, confirm: :download_block)
 
     assert S7.delete_block(client, :db, 65_000, confirm: :delete_block) == :ok
-    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 
@@ -244,7 +248,7 @@ defmodule S7.Snap7ClientInteropTest do
     assert S7.copy_ram_to_rom(client, confirm: :copy_ram_to_rom) == :ok
     assert S7.compress_memory(client, confirm: :compress_memory) == :ok
 
-    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
   end
 

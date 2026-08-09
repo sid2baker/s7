@@ -16,7 +16,7 @@ defmodule S7.BlockUploadIntegrationTest do
     assert S7.upload_block_raw(client, :sdb, 0, max_fragments: 8) == {:ok, raw}
 
     assert %{state: :ready, exclusive_transaction: false, in_flight_requests: 0} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
 
     assert S7.close(client) == :ok
   end
@@ -61,7 +61,7 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:error, %Error{reason: :access_denied, code: 0xD241}} =
              S7.upload_block(client, block())
 
-    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(client) == :ok
   end
@@ -120,7 +120,9 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:error, %Error{reason: :malformed_response}} =
              S7.upload_block(malformed_client, block())
 
-    assert %{state: :disconnected, exclusive_transaction: false} = S7.info(malformed_client)
+    assert %{state: :disconnected, exclusive_transaction: false} =
+             S7.TestSupport.info!(malformed_client)
+
     assert S7.close(malformed_client) == :ok
 
     disconnected_server =
@@ -136,7 +138,7 @@ defmodule S7.BlockUploadIntegrationTest do
     assert reason in [:connection_closed, :remote_disconnect]
 
     assert %{state: :disconnected, exclusive_transaction: false} =
-             S7.info(disconnected_client)
+             S7.TestSupport.info!(disconnected_client)
 
     assert S7.close(disconnected_client) == :ok
   end
@@ -159,7 +161,7 @@ defmodule S7.BlockUploadIntegrationTest do
 
       expected_reason = if fault == :segment_silence, do: :timeout, else: :malformed_response
       assert reason == expected_reason
-      assert %{state: :disconnected, exclusive_transaction: false} = S7.info(client)
+      assert %{state: :disconnected, exclusive_transaction: false} = S7.TestSupport.info!(client)
       assert S7.close(client) == :ok
     end
   end
@@ -172,7 +174,7 @@ defmodule S7.BlockUploadIntegrationTest do
     assert {:error, %Error{reason: :malformed_block_image}} =
              S7.upload_block(client, block())
 
-    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.upload_block_raw(client, block()) == {:ok, raw}
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(client) == :ok
@@ -208,7 +210,7 @@ defmodule S7.BlockUploadIntegrationTest do
              S7.upload_block(client, block(), max_bytes: 0)
 
     assert %{state: :ready, exclusive_transaction: false, queued_requests: 0} =
-             S7.info(client)
+             S7.TestSupport.info!(client)
 
     assert S7.close(client) == :ok
   end
@@ -247,7 +249,7 @@ defmodule S7.BlockUploadIntegrationTest do
   defp await_info(client, predicate, attempts \\ 100)
 
   defp await_info(client, predicate, attempts) when attempts > 0 do
-    info = S7.info(client)
+    info = S7.TestSupport.info!(client)
 
     if predicate.(info) do
       info
@@ -257,5 +259,5 @@ defmodule S7.BlockUploadIntegrationTest do
     end
   end
 
-  defp await_info(client, _predicate, 0), do: S7.info(client)
+  defp await_info(client, _predicate, 0), do: S7.TestSupport.info!(client)
 end

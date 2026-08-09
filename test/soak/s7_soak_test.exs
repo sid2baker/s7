@@ -38,7 +38,9 @@ defmodule S7.SoakTest do
       |> Enum.frequencies()
 
     assert results == %{{:ok, :ok} => iterations}
-    assert %{in_flight_requests: 0, queued_requests: 0, state: :ready} = S7.info(client)
+
+    assert %{in_flight_requests: 0, queued_requests: 0, state: :ready} =
+             S7.TestSupport.info!(client)
 
     :erlang.garbage_collect(client)
     assert process_memory(client) <= baseline_memory + 1_000_000

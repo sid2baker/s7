@@ -37,7 +37,9 @@ defmodule S7.ProgrammerServicesIntegrationTest do
     assert_receive {:mock_plc_request, :programmer_enable, _reference}, 500
     assert_receive {:mock_plc_request, :programmer_delete, _reference}, 500
 
-    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} =
+             S7.TestSupport.info!(client)
+
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(client) == :ok
   end
@@ -69,7 +71,9 @@ defmodule S7.ProgrammerServicesIntegrationTest do
                <<0::224>>
              )
 
-    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} =
+             S7.TestSupport.info!(client)
+
     assert S7.close(client) == :ok
   end
 
@@ -80,7 +84,9 @@ defmodule S7.ProgrammerServicesIntegrationTest do
     assert {:error, %Error{reason: :access_denied, code: 0xD241}} =
              S7.variable_status(client, ["MB0"])
 
-    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} =
+             S7.TestSupport.info!(client)
+
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(client) == :ok
   end
@@ -102,7 +108,7 @@ defmodule S7.ProgrammerServicesIntegrationTest do
       assert_receive {:mock_plc_request, :programmer_delete, _reference}, 500
 
       assert %{state: :ready, exclusive_transaction: false, subscriptions: 0} =
-               S7.info(client)
+               S7.TestSupport.info!(client)
 
       assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
       assert S7.close(client) == :ok
@@ -164,7 +170,7 @@ defmodule S7.ProgrammerServicesIntegrationTest do
     assert {:error, %Error{}} = S7.variable_status(client, ["L0.0"])
     refute_receive {:mock_plc_request, :programmer_setup, _reference}, 30
 
-    assert %{state: :ready, exclusive_transaction: false} = S7.info(client)
+    assert %{state: :ready, exclusive_transaction: false} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -179,10 +185,10 @@ defmodule S7.ProgrammerServicesIntegrationTest do
   end
 
   defp await_queue(client, attempts \\ 50)
-  defp await_queue(client, 0), do: S7.info(client)
+  defp await_queue(client, 0), do: S7.TestSupport.info!(client)
 
   defp await_queue(client, attempts) do
-    case S7.info(client) do
+    case S7.TestSupport.info!(client) do
       %{queued_requests: 1} = info ->
         info
 
@@ -193,10 +199,10 @@ defmodule S7.ProgrammerServicesIntegrationTest do
   end
 
   defp await_state(client, expected, attempts \\ 50)
-  defp await_state(client, _expected, 0), do: S7.info(client)
+  defp await_state(client, _expected, 0), do: S7.TestSupport.info!(client)
 
   defp await_state(client, expected, attempts) do
-    case S7.info(client) do
+    case S7.TestSupport.info!(client) do
       %{state: ^expected} = info ->
         info
 

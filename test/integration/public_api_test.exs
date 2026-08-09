@@ -20,12 +20,13 @@ defmodule S7.PublicAPIIntegrationTest do
     assert {:ok, client} =
              S7.connect({127, 0, 0, 1}, port: server.port, rack: 0, slot: 2, timeout: 1_000)
 
-    assert %{
-             state: :ready,
-             pdu_size: 240,
-             max_jobs: 1,
-             tpdu_size: 1024
-           } = S7.info(client)
+    assert {:ok,
+            %{
+              state: :ready,
+              pdu_size: 240,
+              max_jobs: 1,
+              tpdu_size: 1024
+            }} = S7.info(client)
 
     assert S7.read(client, "DB1.DBX0.0") == {:ok, true}
     assert S7.read(client, "DB1.DBB1") == {:ok, 0xA5}
@@ -123,7 +124,7 @@ defmodule S7.PublicAPIIntegrationTest do
                     %DisconnectConfirm{destination_reference: 1, source_reference: 1}},
                    500
 
-    assert %{state: :disconnected} = S7.info(client)
+    assert %{state: :disconnected} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -138,7 +139,7 @@ defmodule S7.PublicAPIIntegrationTest do
       assert {:error, %Error{layer: :cotp, reason: ^reason, code: ^code}} =
                S7.read(client, "DB1.DBW0")
 
-      assert %{state: :disconnected} = S7.info(client)
+      assert %{state: :disconnected} = S7.TestSupport.info!(client)
       assert S7.close(client) == :ok
     end
   end
@@ -151,7 +152,7 @@ defmodule S7.PublicAPIIntegrationTest do
              S7.read(client, "DB1.DBW0")
 
     assert Process.alive?(client)
-    assert %{state: :disconnected} = S7.info(client)
+    assert %{state: :disconnected} = S7.TestSupport.info!(client)
     assert {:error, %Error{reason: :not_connected}} = S7.read(client, "DB1.DBW0")
     assert S7.close(client) == :ok
   end
@@ -164,7 +165,7 @@ defmodule S7.PublicAPIIntegrationTest do
     assert {:ok, %UserData{payload: %{data: <<0x00, 0x11, 0x00, 0x00>>}}} =
              Connection.userdata(client, request)
 
-    assert %{state: :ready, in_flight_requests: 0} = S7.info(client)
+    assert %{state: :ready, in_flight_requests: 0} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(client) == :ok
   end
@@ -177,7 +178,7 @@ defmodule S7.PublicAPIIntegrationTest do
     assert {:error, %Error{operation: :read_szl, reason: :userdata_error, code: 0xD041}} =
              Connection.userdata(client, request, :read_szl)
 
-    assert %{state: :ready} = S7.info(client)
+    assert %{state: :ready} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(client) == :ok
   end
@@ -190,7 +191,7 @@ defmodule S7.PublicAPIIntegrationTest do
     assert {:error, %Error{reason: :unexpected_userdata_service}} =
              Connection.userdata(client, request)
 
-    assert %{state: :disconnected} = S7.info(client)
+    assert %{state: :disconnected} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -221,7 +222,7 @@ defmodule S7.PublicAPIIntegrationTest do
 
     assert {:ok, %PLC.CPInfo{max_pdu_length: 480, max_connections: 8}} = S7.cp_info(client)
     assert {:ok, %PLC.Status{state: :run, code: 8}} = S7.plc_status(client)
-    assert %{state: :ready, in_flight_requests: 0} = S7.info(client)
+    assert %{state: :ready, in_flight_requests: 0} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -239,7 +240,7 @@ defmodule S7.PublicAPIIntegrationTest do
       assert {:error, %Error{operation: :read_szl, reason: unquote(reason)}} =
                S7.read_szl(client, 0x0011)
 
-      assert %{state: :disconnected} = S7.info(client)
+      assert %{state: :disconnected} = S7.TestSupport.info!(client)
       assert S7.close(client) == :ok
     end
   end
@@ -251,7 +252,7 @@ defmodule S7.PublicAPIIntegrationTest do
     assert {:error, %Error{reason: :too_many_userdata_fragments}} =
              S7.read_szl(fragment_client, 0x0011, max_fragments: 2)
 
-    assert %{state: :disconnected} = S7.info(fragment_client)
+    assert %{state: :disconnected} = S7.TestSupport.info!(fragment_client)
     assert S7.close(fragment_client) == :ok
 
     size_server = start_server(szl_fragment_size: 7)
@@ -260,7 +261,7 @@ defmodule S7.PublicAPIIntegrationTest do
     assert {:error, %Error{reason: :userdata_too_large}} =
              S7.read_szl(size_client, 0x0011, max_bytes: 8)
 
-    assert %{state: :disconnected} = S7.info(size_client)
+    assert %{state: :disconnected} = S7.TestSupport.info!(size_client)
     assert S7.close(size_client) == :ok
   end
 
@@ -271,7 +272,7 @@ defmodule S7.PublicAPIIntegrationTest do
     assert {:error, %Error{operation: :read_szl, reason: :userdata_error, code: 0xD041}} =
              S7.read_szl(client, 0x0011)
 
-    assert %{state: :ready} = S7.info(client)
+    assert %{state: :ready} = S7.TestSupport.info!(client)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(client) == :ok
   end
@@ -284,7 +285,7 @@ defmodule S7.PublicAPIIntegrationTest do
              S7.read(client, "DB1.DBW0")
 
     assert Process.alive?(client)
-    assert %{state: :disconnected} = S7.info(client)
+    assert %{state: :disconnected} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -305,7 +306,7 @@ defmodule S7.PublicAPIIntegrationTest do
 
     assert {:error, %Error{layer: :tcp, reason: :timeout}} = S7.read(client, "DB1.DBW0")
     assert Process.alive?(client)
-    assert %{state: :disconnected} = S7.info(client)
+    assert %{state: :disconnected} = S7.TestSupport.info!(client)
     assert {:error, %Error{reason: :not_connected}} = S7.read(client, "DB1.DBW0")
     assert S7.close(client) == :ok
   end
@@ -410,7 +411,7 @@ defmodule S7.PublicAPIIntegrationTest do
          ]}
       )
 
-    assert %{state: :reconnecting, reconnect: true} = S7.info(client)
+    assert %{state: :reconnecting, reconnect: true} = S7.TestSupport.info!(client)
     _server = start_server(port: port)
     assert %{state: :ready, reconnect_attempts: 0} = await_state(client, :ready)
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
@@ -478,7 +479,7 @@ defmodule S7.PublicAPIIntegrationTest do
              S7.start_link(host: {127, 0, 0, 1}, port: server.port, name: name)
 
     monitor = Process.monitor(client)
-    assert %{state: :ready} = S7.info(name)
+    assert %{state: :ready} = S7.TestSupport.info!(name)
     assert S7.read(name, "DB1.DBW0") == {:ok, 1234}
     assert S7.close(name) == :ok
     assert_normal_exit(client, monitor)
@@ -510,7 +511,7 @@ defmodule S7.PublicAPIIntegrationTest do
              in_flight_requests: 0,
              queued_requests: 0,
              socket_mode: :active_once
-           } = S7.info(client)
+           } = S7.TestSupport.info!(client)
 
     assert S7.close(client) == :ok
   end
@@ -608,7 +609,10 @@ defmodule S7.PublicAPIIntegrationTest do
     assert_receive {:DOWN, ^monitor, :process, ^caller, :killed}, 500
 
     assert S7.read(client, "DB1.DBB1") == {:ok, 0xA5}
-    assert %{state: :ready, in_flight_requests: 0, queued_requests: 0} = S7.info(client)
+
+    assert %{state: :ready, in_flight_requests: 0, queued_requests: 0} =
+             S7.TestSupport.info!(client)
+
     assert S7.close(client) == :ok
   end
 
@@ -654,7 +658,7 @@ defmodule S7.PublicAPIIntegrationTest do
     assert {:error, %Error{layer: :data, reason: :value_out_of_range}} =
              S7.write(client, "DB1.DBW0", -1)
 
-    assert %{state: :ready} = S7.info(client)
+    assert %{state: :ready} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -675,7 +679,7 @@ defmodule S7.PublicAPIIntegrationTest do
     assert {:error, %Error{layer: :data, reason: :raw_size_mismatch}} =
              S7.write_raw(client, bytes, <<1, 2>>)
 
-    assert %{state: :ready} = S7.info(client)
+    assert %{state: :ready} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -712,14 +716,14 @@ defmodule S7.PublicAPIIntegrationTest do
               %Result{status: :ok, value: 1234},
               %Result{status: :error, error: %Error{reason: :object_not_found}},
               %Result{status: :ok, value: 0x33}
-            ]} = S7.read_multi(client, addresses)
+            ]} = S7.read_many(client, addresses)
 
     assert {:ok,
             [
               %Result{status: :ok, value: <<0x04, 0xD2>>},
               %Result{status: :error},
               %Result{status: :ok, value: <<0x33>>}
-            ]} = S7.read_multi_raw(client, addresses)
+            ]} = S7.read_many_raw(client, addresses)
 
     assert S7.close(client) == :ok
   end
@@ -732,15 +736,15 @@ defmodule S7.PublicAPIIntegrationTest do
     byte = %Address{area: :markers, byte_offset: 30, data_type: :byte}
 
     assert {:ok, [%Result{status: :ok}, %Result{status: :ok}]} =
-             S7.write_multi(client, [{words, [1, 2]}, {byte, 0xA5}])
+             S7.write_many(client, [{words, [1, 2]}, {byte, 0xA5}])
 
     assert {:ok, [%Result{value: [1, 2]}, %Result{value: 0xA5}]} =
-             S7.read_multi(client, [words, byte])
+             S7.read_many(client, [words, byte])
 
     raw = %Address{area: :db, db_number: 1, byte_offset: 220, data_type: :byte, count: 3}
 
     assert {:ok, [%Result{status: :ok}]} =
-             S7.write_multi_raw(client, [{raw, <<1, 2, 3>>}])
+             S7.write_many_raw(client, [{raw, <<1, 2, 3>>}])
 
     assert S7.read_raw(client, raw) == {:ok, <<1, 2, 3>>}
     assert S7.close(client) == :ok
@@ -756,14 +760,14 @@ defmodule S7.PublicAPIIntegrationTest do
         {address, offset - 299}
       end
 
-    assert {:ok, write_results} = S7.write_multi(client, writes)
+    assert {:ok, write_results} = S7.write_many(client, writes)
     assert Enum.map(write_results, & &1.status) == List.duplicate(:ok, 5)
 
     addresses = Enum.map(writes, &elem(&1, 0))
-    assert {:ok, read_results} = S7.read_multi(client, addresses)
+    assert {:ok, read_results} = S7.read_many(client, addresses)
     assert Enum.map(read_results, & &1.value) == [1, 2, 3, 4, 5]
     assert Enum.map(read_results, & &1.address) == addresses
-    assert %{next_reference: 7} = S7.info(client)
+    assert %{next_reference: 7} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -779,11 +783,11 @@ defmodule S7.PublicAPIIntegrationTest do
         {address, offset}
       end
 
-    assert {:ok, results} = S7.write_multi(client, writes)
+    assert {:ok, results} = S7.write_many(client, writes)
     assert Enum.map(results, & &1.status) == List.duplicate(:ok, 8)
 
     addresses = Enum.map(writes, &elem(&1, 0))
-    assert {:ok, read_results} = S7.read_multi(client, addresses)
+    assert {:ok, read_results} = S7.read_many(client, addresses)
     assert Enum.map(read_results, & &1.value) == Enum.to_list(400..407)
     assert S7.close(client) == :ok
   end
@@ -804,7 +808,7 @@ defmodule S7.PublicAPIIntegrationTest do
              )
 
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
-    assert %{state: :ready, pdu_size: 0xFFFF, tpdu_size: 128} = S7.info(client)
+    assert %{state: :ready, pdu_size: 0xFFFF, tpdu_size: 128} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -817,9 +821,9 @@ defmodule S7.PublicAPIIntegrationTest do
         %Address{area: :db, db_number: 1, byte_offset: offset, data_type: :byte}
       end
 
-    assert {:error, %Error{reason: :timeout}, results} = S7.read_multi(client, addresses)
+    assert {:error, %Error{reason: :timeout}, results} = S7.read_many(client, addresses)
     assert Enum.map(results, & &1.status) == [:error, :error, :error, :error, :not_attempted]
-    assert %{state: :disconnected} = S7.info(client)
+    assert %{state: :disconnected} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -832,7 +836,7 @@ defmodule S7.PublicAPIIntegrationTest do
         {%Address{area: :db, db_number: 1, byte_offset: offset, data_type: :byte}, offset}
       end
 
-    assert {:error, %Error{reason: :timeout}, results} = S7.write_multi(client, writes)
+    assert {:error, %Error{reason: :timeout}, results} = S7.write_many(client, writes)
 
     assert Enum.map(results, & &1.status) == [
              :indeterminate,
@@ -842,7 +846,7 @@ defmodule S7.PublicAPIIntegrationTest do
              :not_attempted
            ]
 
-    assert %{state: :disconnected} = S7.info(client)
+    assert %{state: :disconnected} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -850,20 +854,20 @@ defmodule S7.PublicAPIIntegrationTest do
     server = start_server(write_fault: :second_item_error)
     assert {:ok, client} = S7.connect({127, 0, 0, 1}, port: server.port)
 
-    assert {:error, %Error{reason: :invalid_items}} = S7.read_multi(client, [])
+    assert {:error, %Error{reason: :invalid_items}} = S7.read_many(client, [])
 
     assert {:error, %Error{reason: :invalid_address, details: %{index: 1}}} =
-             S7.read_multi(client, ["DB1.DBW0", :invalid])
+             S7.read_many(client, ["DB1.DBW0", :invalid])
 
-    assert {:error, %Error{reason: :invalid_item}} = S7.write_multi(client, [:invalid])
+    assert {:error, %Error{reason: :invalid_item}} = S7.write_many(client, [:invalid])
 
     assert {:error, %Error{reason: :value_out_of_range, details: %{index: 1}}} =
-             S7.write_multi(client, [{"DB1.DBW0", 1}, {"DB1.DBW2", -1}])
+             S7.write_many(client, [{"DB1.DBW0", 1}, {"DB1.DBW2", -1}])
 
     assert {:ok, [%Result{status: :ok}, %Result{status: :error}]} =
-             S7.write_multi(client, [{"DB1.DBW0", 1}, {"DB1.DBW2", 2}])
+             S7.write_many(client, [{"DB1.DBW0", 1}, {"DB1.DBW2", 2}])
 
-    assert %{state: :ready} = S7.info(client)
+    assert %{state: :ready} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -913,7 +917,7 @@ defmodule S7.PublicAPIIntegrationTest do
                S7.read(client, "DB1.DBW0")
 
       assert Process.alive?(client)
-      assert %{state: :disconnected} = S7.info(client)
+      assert %{state: :disconnected} = S7.TestSupport.info!(client)
       assert S7.close(client) == :ok
     end
   end
@@ -925,7 +929,7 @@ defmodule S7.PublicAPIIntegrationTest do
     assert {:error, %Error{reason: :address_out_of_range, code: 0x05}} =
              S7.write(client, "DB1.DBW0", 1)
 
-    assert %{state: :ready} = S7.info(client)
+    assert %{state: :ready} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -940,7 +944,7 @@ defmodule S7.PublicAPIIntegrationTest do
       assert {:error, %Error{layer: :s7, reason: unquote(reason)}} =
                S7.write(client, "DB1.DBW0", 1)
 
-      assert %{state: :disconnected} = S7.info(client)
+      assert %{state: :disconnected} = S7.TestSupport.info!(client)
       assert S7.close(client) == :ok
     end
   end
@@ -954,7 +958,7 @@ defmodule S7.PublicAPIIntegrationTest do
   defp await_queue(client, expected, attempts \\ 50)
 
   defp await_queue(client, expected, attempts) when attempts > 0 do
-    case S7.info(client) do
+    case S7.TestSupport.info!(client) do
       %{queued_requests: ^expected} = info ->
         info
 
@@ -964,12 +968,12 @@ defmodule S7.PublicAPIIntegrationTest do
     end
   end
 
-  defp await_queue(client, _expected, 0), do: S7.info(client)
+  defp await_queue(client, _expected, 0), do: S7.TestSupport.info!(client)
 
   defp await_state(client, expected, attempts \\ 100)
 
   defp await_state(client, expected, attempts) when attempts > 0 do
-    case S7.info(client) do
+    case S7.TestSupport.info!(client) do
       %{state: ^expected} = info ->
         info
 
@@ -979,7 +983,7 @@ defmodule S7.PublicAPIIntegrationTest do
     end
   end
 
-  defp await_state(client, _expected, 0), do: S7.info(client)
+  defp await_state(client, _expected, 0), do: S7.TestSupport.info!(client)
 
   defp assert_normal_exit(client, monitor) do
     assert_receive {:DOWN, ^monitor, :process, ^client, :normal}, 1_000

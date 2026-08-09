@@ -320,7 +320,7 @@ defmodule S7.ClassicDeviceQualificationTest do
 
   setup %{config: config} do
     assert {:ok, client} = Qualification.connect(config)
-    info = S7.info(client)
+    info = S7.TestSupport.info!(client)
     Qualification.write_session_metadata!(config, info)
     on_exit(fn -> S7.close(client) end)
     {:ok, client: client, info: info}
@@ -356,10 +356,10 @@ defmodule S7.ClassicDeviceQualificationTest do
       {Qualification.scratch(config, :real, 14), 12.5}
     ]
 
-    assert {:ok, write_results} = S7.write_multi(client, typed)
+    assert {:ok, write_results} = S7.write_many(client, typed)
     assert Enum.all?(write_results, &match?(%Result{status: :ok}, &1))
 
-    assert {:ok, read_results} = S7.read_multi(client, Enum.map(typed, &elem(&1, 0)))
+    assert {:ok, read_results} = S7.read_many(client, Enum.map(typed, &elem(&1, 0)))
     assert Enum.map(read_results, & &1.value) == Enum.map(typed, &elem(&1, 1))
 
     split_items =
@@ -367,11 +367,11 @@ defmodule S7.ClassicDeviceQualificationTest do
         {Qualification.scratch(config, :byte, 32 + relative_offset), relative_offset + 1}
       end
 
-    assert {:ok, split_writes} = S7.write_multi(client, split_items)
+    assert {:ok, split_writes} = S7.write_many(client, split_items)
     assert Enum.all?(split_writes, &match?(%Result{status: :ok}, &1))
 
     assert {:ok, split_reads} =
-             S7.read_multi(client, Enum.map(split_items, &elem(&1, 0)))
+             S7.read_many(client, Enum.map(split_items, &elem(&1, 0)))
 
     assert Enum.map(split_reads, & &1.value) == Enum.map(split_items, &elem(&1, 1))
   end
@@ -444,9 +444,9 @@ defmodule S7.ClassicDeviceQualificationTest do
   test "changes and clears classic session authorization", %{client: client} do
     assert S7.authenticate(client, Qualification.password!()) == :ok
     on_exit(fn -> S7.logout(client) end)
-    assert %{authenticated: true} = S7.info(client)
+    assert %{authenticated: true} = S7.TestSupport.info!(client)
     assert S7.logout(client) == :ok
-    assert %{authenticated: false} = S7.info(client)
+    assert %{authenticated: false} = S7.TestSupport.info!(client)
   end
 
   @tag skip:

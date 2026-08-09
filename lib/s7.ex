@@ -123,14 +123,14 @@ defmodule S7 do
   Reads multiple addresses, automatically splitting them against the
   negotiated PDU size. Results preserve input order and PLC item errors.
   """
-  @spec read_multi(t(), [address()]) :: multi_reply()
-  def read_multi(client, addresses), do: read_many(client, addresses, false, :read_multi)
+  @spec read_many(t(), [address()]) :: multi_reply()
+  def read_many(client, addresses), do: read_many(client, addresses, false, :read_many)
 
   @doc """
   Reads multiple addresses without typed payload conversion.
   """
-  @spec read_multi_raw(t(), [address()]) :: multi_reply()
-  def read_multi_raw(client, addresses), do: read_many(client, addresses, true, :read_multi)
+  @spec read_many_raw(t(), [address()]) :: multi_reply()
+  def read_many_raw(client, addresses), do: read_many(client, addresses, true, :read_many)
 
   @doc """
   Encodes and writes one scalar value.
@@ -160,14 +160,14 @@ defmodule S7 do
   negotiated PDU size. A transport failure returns completed, indeterminate,
   and not-attempted item states in a three-element error tuple.
   """
-  @spec write_multi(t(), [{address(), Data.value()}]) :: multi_reply()
-  def write_multi(client, items), do: write_many(client, items, :typed)
+  @spec write_many(t(), [{address(), Data.value()}]) :: multi_reply()
+  def write_many(client, items), do: write_many(client, items, :typed)
 
   @doc """
   Writes multiple already encoded payloads after exact size validation.
   """
-  @spec write_multi_raw(t(), [{address(), binary()}]) :: multi_reply()
-  def write_multi_raw(client, items), do: write_many(client, items, :raw)
+  @spec write_many_raw(t(), [{address(), binary()}]) :: multi_reply()
+  def write_many_raw(client, items), do: write_many(client, items, :raw)
 
   @doc """
   Reads one raw System Status List (SZL/SSL) and assembles bounded userdata
@@ -797,8 +797,13 @@ defmodule S7 do
   @doc """
   Returns negotiated connection information.
   """
-  @spec info(t()) :: map() | {:error, Error.t()}
-  def info(client), do: call(fn -> Connection.info(client) end, :info)
+  @spec info(t()) :: {:ok, map()} | {:error, Error.t()}
+  def info(client) do
+    case call(fn -> Connection.info(client) end, :info) do
+      %{} = info -> {:ok, info}
+      {:error, %Error{}} = error -> error
+    end
+  end
 
   @doc """
   Starts a fresh session on a disconnected long-lived client.
@@ -864,13 +869,13 @@ defmodule S7 do
 
   defp read_many(client, addresses, raw?, operation) do
     with {:ok, addresses} <- normalize_addresses(addresses, operation) do
-      call(fn -> Connection.read_multi(client, addresses, raw?) end, operation)
+      call(fn -> Connection.read_many(client, addresses, raw?) end, operation)
     end
   end
 
   defp write_many(client, items, mode) do
     with {:ok, items} <- normalize_write_items(items, mode) do
-      call(fn -> Connection.write_multi(client, items) end, :write_multi)
+      call(fn -> Connection.write_many(client, items) end, :write_many)
     end
   end
 
@@ -939,7 +944,7 @@ defmodule S7 do
 
       {item, index}, _accumulator ->
         error =
-          Error.new(:client, :write_multi, :invalid_item, details: %{index: index, item: item})
+          Error.new(:client, :write_many, :invalid_item, details: %{index: index, item: item})
 
         {:halt, {:error, error}}
     end)
@@ -947,7 +952,7 @@ defmodule S7 do
   end
 
   defp normalize_write_items(items, _mode) do
-    {:error, Error.new(:client, :write_multi, :invalid_items, details: %{items: items})}
+    {:error, Error.new(:client, :write_many, :invalid_items, details: %{items: items})}
   end
 
   defp encode_write_value(address, value, :typed),

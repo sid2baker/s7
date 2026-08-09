@@ -34,7 +34,7 @@ defmodule S7.BlockServicesIntegrationTest do
     assert {:ok, %Block.Info{block: %Block{type: :db, number: 1}}} =
              S7.block_info(client, %Block{type: :db, number: 1})
 
-    assert %{state: :ready, in_flight_requests: 0} = S7.info(client)
+    assert %{state: :ready, in_flight_requests: 0} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -51,7 +51,7 @@ defmodule S7.BlockServicesIntegrationTest do
             }} = S7.block_info(client, :db, 2)
 
     assert S7.read(client, "DB1.DBW0") == {:ok, 1234}
-    assert %{state: :ready} = S7.info(client)
+    assert %{state: :ready} = S7.TestSupport.info!(client)
     assert S7.close(client) == :ok
   end
 
@@ -71,7 +71,9 @@ defmodule S7.BlockServicesIntegrationTest do
     assert {:error, %Error{layer: :client, reason: :invalid_block}} =
              S7.block_info(client, :db, -1)
 
-    assert %{state: :ready, in_flight_requests: 0, queued_requests: 0} = S7.info(client)
+    assert %{state: :ready, in_flight_requests: 0, queued_requests: 0} =
+             S7.TestSupport.info!(client)
+
     assert S7.close(client) == :ok
   end
 
@@ -82,7 +84,7 @@ defmodule S7.BlockServicesIntegrationTest do
     assert {:error, %Error{operation: :list_blocks, reason: :too_many_userdata_fragments}} =
              S7.list_blocks(fragment_client, :db, max_fragments: 1)
 
-    assert %{state: :disconnected} = S7.info(fragment_client)
+    assert %{state: :disconnected} = S7.TestSupport.info!(fragment_client)
     assert S7.close(fragment_client) == :ok
 
     malformed_server = start_server(block_fault: :malformed_geometry)
@@ -92,7 +94,7 @@ defmodule S7.BlockServicesIntegrationTest do
              S7.list_blocks(malformed_client, :db)
 
     assert Process.alive?(malformed_client)
-    assert %{state: :disconnected} = S7.info(malformed_client)
+    assert %{state: :disconnected} = S7.TestSupport.info!(malformed_client)
     assert S7.close(malformed_client) == :ok
   end
 

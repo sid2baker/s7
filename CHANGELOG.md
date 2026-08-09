@@ -14,6 +14,9 @@ Changes currently targeted for `0.1.0` are listed below.
 
 ### Changed
 
+- Renamed multi-item memory operations to `S7.read_many/2`,
+  `S7.read_many_raw/2`, `S7.write_many/2`, and `S7.write_many_raw/2`, and made
+  `S7.info/1` consistently return an `{:ok, information}` tuple.
 - Extended the supported BEAM matrix through Elixir 1.20.3 and Erlang/OTP
   29.0.5, and moved quality, release, and soak CI to that toolchain.
 - Aligned public model, connection-state, and protocol-core modules with source

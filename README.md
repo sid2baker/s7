@@ -101,9 +101,10 @@ The client returned by `connect/2` is the PID that owns the socket. All public f
 | `:subscription_limit` | `16` | Maximum session-local userdata indication subscriptions |
 | `:allow_destructive` | `false` | Enables destructive APIs; every call still requires its exact confirmation atom |
 
-The PLC may negotiate smaller PDU or job limits. `S7.info/1` reports negotiated limits,
-the next reference, and current queue/in-flight counts. The default remains one job for broad PLC
-compatibility; opt into concurrency with `max_jobs: n` only when the peer supports it.
+The PLC may negotiate smaller PDU or job limits. `S7.info/1` returns
+`{:ok, information}` with negotiated limits, the next reference, and current
+queue/in-flight counts. The default remains one job for broad PLC compatibility;
+opt into concurrency with `max_jobs: n` only when the peer supports it.
 
 ### Supervision And Recovery
 
@@ -187,11 +188,11 @@ type and count. Raw access does not bypass address validation or negotiated PDU 
 Multi-item operations preserve input order and split automatically:
 
 ```elixir
-{:ok, results} = S7.read_multi(client, ["DB1.DBW0", "MW10", "IW0"])
+{:ok, results} = S7.read_many(client, ["DB1.DBW0", "MW10", "IW0"])
 values = Enum.map(results, &{&1.status, &1.value})
 
 {:ok, results} =
-  S7.write_multi(client, [
+  S7.write_many(client, [
     {"DB1.DBW0", 123},
     {"MW10", 456}
   ])
