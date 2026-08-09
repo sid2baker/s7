@@ -40,6 +40,7 @@ Changes currently targeted for `0.1.0` are listed below.
 - Raw-first read-only programmer diagnostics and variable-status sampling with capture-derived job setup, sequence-scoped indications, bounded exclusive execution, and deterministic remote-job deletion.
 - Typed fixed-cycle and raw change-driven cyclic subscriptions with exact interval encoding, PLC-assigned job correlation, bounded owner-monitored queues, modification and remote teardown, capture-derived fixtures, and Snap7/PCAP qualification.
 - Classic `ALARM_S` and `ALARM_8` setup, teardown, query, indication, and explicit acknowledgment with raw-preserving models, bounded owner-monitored queues, capture-derived fixtures, structured no-replay outcomes, and Snap7/PCAP qualification.
+- A safety-gated cross-family qualification harness with exact CPU identity checks, scratch-range restoration, capability-specific tests, packet capture validation, and reproducible evidence reports.
 
 The date remains unset until the external release qualification in
 `docs/interoperability.md` is complete.

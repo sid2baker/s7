@@ -1,1 +1,1 @@
-ExUnit.start(exclude: [:external, :soak])
+ExUnit.start(exclude: [:external, :qualification, :soak])

@@ -71,6 +71,15 @@ and physical devices remains pending.
 | S7-1200 family | Full suite on named CPU/firmware and clean PCAP | Unverified |
 | S7-1500 family | Full suite on named CPU/firmware and clean PCAP | Unverified |
 
+The executable procedure is documented in
+[`qualification.md`](qualification.md). Its core suite verifies negotiation,
+exact target identity, typed/raw/multi/split process-data access, restoration of
+the reserved scratch range, and a clean tshark decode. Capability-gated tests
+cover SZLs, areas, blocks, upload, clock, session authorization, programmer
+status, cyclic jobs, and alarms without pretending every CPU project exposes
+every service. Destructive services use the separate dedicated-hardware
+procedure in that guide.
+
 For each physical or simulated target, record CPU order number, firmware,
 security/access configuration, rack/slot, negotiated PDU and AMQ values,
 supported address areas, test revision, capture hash, and date. Packet captures
@@ -83,6 +92,8 @@ mix ci
 bash scripts/run_snap7_integration.sh
 bash scripts/run_snap7_packet_check.sh
 S7_SOAK_ITERATIONS=20000 mix soak
+# With the required S7_QUAL_* environment and reserved scratch DB:
+bash scripts/run_device_qualification.sh
 ```
 
 PLCSIM and physical PLC qualification remain explicit release gates rather

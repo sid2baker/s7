@@ -110,6 +110,35 @@ defmodule S7.SZLTest do
             }} = Metadata.cpu_info(cpu_szl)
   end
 
+  test "rejects malformed metadata and retains unknown status codes" do
+    assert {:ok, wrong_list} = encoded_szl(0x0001, 2, [<<0x0011::16>>])
+    assert {:error, %Error{reason: :malformed_response}} = Metadata.available_ids(wrong_list)
+    assert {:error, %Error{reason: :malformed_response}} = Metadata.order_code(wrong_list)
+    assert {:error, %Error{reason: :malformed_response}} = Metadata.cp_info(wrong_list)
+    assert {:error, %Error{reason: :malformed_response}} = Metadata.plc_status(wrong_list)
+
+    assert {:ok, short_order} = encoded_szl(0x0011, 2, [<<1::16>>])
+    assert {:error, %Error{reason: :malformed_response}} = Metadata.order_code(short_order)
+
+    assert {:ok, missing_order} = encoded_szl(0x0011, 2, [<<2::16>>])
+    assert {:error, %Error{reason: :malformed_response}} = Metadata.order_code(missing_order)
+
+    assert {:ok, short_cpu} = encoded_szl(0x001C, 2, [<<1::16>>])
+    assert {:error, %Error{reason: :malformed_response}} = Metadata.cpu_info(short_cpu)
+
+    assert {:ok, short_cp} = encoded_szl(0x0131, 2, [<<1::16>>], 1)
+    assert {:error, %Error{reason: :malformed_response}} = Metadata.cp_info(short_cp)
+
+    assert {:ok, empty_status} = encoded_szl(0x0424, 4, [])
+    assert {:error, %Error{reason: :malformed_response}} = Metadata.plc_status(empty_status)
+
+    for {code, expected} <- [{0x03, :stop}, {0x04, :stop}, {0xFF, :unknown}] do
+      record = <<0::16, 0, code>>
+      assert {:ok, status} = encoded_szl(0x0424, 4, [record])
+      assert {:ok, %PLCStatus{state: ^expected, code: ^code}} = Metadata.plc_status(status)
+    end
+  end
+
   defp encoded_szl(id, length, records, index \\ 0) do
     raw = IO.iodata_to_binary([<<length::16, length(records)::16>>, records])
     SZL.decode(id, index, raw)

@@ -41,7 +41,7 @@ The exact scope and evidence rules are defined in
 | 21 | Raw-first programmer diagnostics and variable status | Complete |
 | 22 | Cyclic subscriptions | Complete |
 | 23 | Alarm subscription, query, and acknowledgment | Complete |
-| 24 | Cross-family qualification and classic `1.0.0` release | Planned |
+| 24 | Cross-family qualification and classic `1.0.0` release | In progress; harness ready, device evidence pending |
 
 Every milestone is committed independently after its local and repository-wide
 quality gates pass. Destructive operations additionally require dedicated test

@@ -436,6 +436,7 @@ The tracked design contract is documented in:
 - [Telemetry](docs/telemetry.md)
 - [Compatibility](docs/compatibility.md)
 - [Interoperability evidence](docs/interoperability.md)
+- [Device qualification](docs/qualification.md)
 - [Release process](docs/releasing.md)
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
@@ -473,6 +474,11 @@ bash scripts/run_snap7_packet_check.sh
 ```
 
 CI runs the packet check and retains its PCAP artifact for seven days.
+
+Named PLCSIM Advanced and physical PLC runs use the safety-gated device harness.
+It restores a reserved scratch DB range and produces an ExUnit log, tshark
+decode, report, and hashed PCAP. Read [Device qualification](docs/qualification.md)
+before setting the required `S7_QUAL_*` environment or enabling writes.
 
 Run the scheduled long-form qualification locally with:
 

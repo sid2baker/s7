@@ -106,6 +106,7 @@ defmodule S7.MixProject do
         "docs/error-and-retry-semantics.md",
         "docs/interoperability.md",
         "docs/protocol-support.md",
+        "docs/qualification.md",
         "docs/releasing.md",
         "docs/roadmap.md",
         "docs/telemetry.md"
@@ -113,7 +114,8 @@ defmodule S7.MixProject do
       groups_for_extras: [
         Guides:
           ~r{docs/(architecture|classic-completion|error-and-retry-semantics|protocol-support|telemetry)\.md},
-        Qualification: ~r{docs/(compatibility|interoperability|releasing|roadmap)\.md},
+        Qualification:
+          ~r{docs/(compatibility|interoperability|qualification|releasing|roadmap)\.md},
         Project: ["CHANGELOG.md", "SECURITY.md"]
       ],
       groups_for_modules: [
