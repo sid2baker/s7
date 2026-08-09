@@ -504,10 +504,15 @@ defmodule S7.Test.MockPLC do
         <<0x1C, 0, error_code::16, 0::32, 9, filename::binary>>
       end
 
-    :ok = send_pdu(state, PDU.new(:job, reference, parameters))
-    state = notify_request(state, :download_end, %{header: %{pdu_reference: reference}})
-    pending = %{pending | outstanding_reference: reference, stage: :download_ended}
-    %{state | download_pending: pending}
+    case send_pdu(state, PDU.new(:job, reference, parameters)) do
+      :ok ->
+        state = notify_request(state, :download_end, %{header: %{pdu_reference: reference}})
+        pending = %{pending | outstanding_reference: reference, stage: :download_ended}
+        %{state | download_pending: pending}
+
+      {:error, :closed} ->
+        state
+    end
   end
 
   defp handle_download_end_response(%{download_pending: pending} = state, response) do
