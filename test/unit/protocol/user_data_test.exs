@@ -190,5 +190,23 @@ defmodule S7.Protocol.UserDataTest do
                request,
                @reference
              )
+
+    null_success = %Payload{return_code: 0x0A, transport_size: 0, data: <<>>}
+
+    assert {:ok, %UserData{payload: ^null_success}} =
+             UserData.decode_response(
+               response.(base_parameter, null_success),
+               request,
+               @reference,
+               allow_null_success: true
+             )
+
+    assert {:error, %Error{reason: :invalid_option}} =
+             UserData.decode_response(
+               response.(base_parameter, null_success),
+               request,
+               @reference,
+               unknown: true
+             )
   end
 end

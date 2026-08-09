@@ -1,8 +1,8 @@
 defmodule S7.Test.MockPLC do
   @moduledoc false
 
-  alias S7.{Block, Connection}
-  alias S7.Protocol.{DataItem, Item, PDU, SetupCommunication, UserData}
+  alias S7.{Block, Connection, SessionPassword}
+  alias S7.Protocol.{Clock, DataItem, Item, PDU, Security, SetupCommunication, UserData}
   alias S7.Protocol.UserData.{Parameter, Payload}
   alias S7.Transport.{COTP, TPKT}
 
@@ -47,6 +47,9 @@ defmodule S7.Test.MockPLC do
     {:ok, socket} = :gen_tcp.accept(listener, 2_000)
     :ok = :gen_tcp.close(listener)
 
+    {:ok, security_password} =
+      opts |> Keyword.get(:session_password, "TESTONLY") |> SessionPassword.new()
+
     state = %{
       socket: socket,
       owner: owner,
@@ -56,6 +59,10 @@ defmodule S7.Test.MockPLC do
       userdata_fault: Keyword.get(opts, :userdata_fault),
       szl_fault: Keyword.get(opts, :szl_fault),
       block_fault: Keyword.get(opts, :block_fault),
+      clock_fault: Keyword.get(opts, :clock_fault),
+      clock: Keyword.get(opts, :clock, ~N[2024-08-09 12:34:56.123]),
+      security_password: Security.encode_password(security_password),
+      authenticated: false,
       szl_pending: nil,
       block_pending: nil,
       deferred_reads: [],
@@ -335,6 +342,93 @@ defmodule S7.Test.MockPLC do
     send_userdata_response(%{state | userdata_fault: nil}, request_pdu, request,
       subfunction: request.parameter.subfunction + 1
     )
+  end
+
+  defp handle_userdata(
+         %{clock_fault: :malformed_timestamp} = state,
+         request_pdu,
+         %UserData{parameter: %Parameter{function_group: :time, subfunction: 1}} = request
+       ) do
+    state = notify_request(%{state | clock_fault: nil}, :read_clock, request_pdu)
+    send_userdata_response(state, request_pdu, request, data: <<0::80>>)
+  end
+
+  defp handle_userdata(
+         state,
+         request_pdu,
+         %UserData{parameter: %Parameter{function_group: :time, subfunction: 1}} = request
+       ) do
+    {:ok, timestamp} = Clock.encode_timestamp(state.clock)
+    state = notify_request(state, :read_clock, request_pdu)
+    send_userdata_response(state, request_pdu, request, data: timestamp)
+  end
+
+  defp handle_userdata(
+         state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{function_group: :time, subfunction: 2},
+           payload: %Payload{data: timestamp}
+         } = request
+       ) do
+    {:ok, clock} = Clock.decode_timestamp(timestamp)
+    state = notify_request(%{state | clock: clock.datetime}, :set_clock, request_pdu)
+
+    send_userdata_response(state, request_pdu, request,
+      return_code: 0x0A,
+      transport_size: 0,
+      data: <<>>
+    )
+  end
+
+  defp handle_userdata(
+         state,
+         request_pdu,
+         %UserData{
+           parameter: %Parameter{function_group: :security, subfunction: 1},
+           payload: %Payload{data: encoded_password}
+         } = request
+       ) do
+    state = notify_request(state, :authenticate, request_pdu)
+    Process.sleep(Keyword.get(state.options, :security_response_delay, 0))
+
+    if encoded_password == state.security_password do
+      send_userdata_response(%{state | authenticated: true}, request_pdu, request,
+        return_code: 0x0A,
+        transport_size: 0,
+        data: <<>>
+      )
+    else
+      send_userdata_response(%{state | authenticated: false}, request_pdu, request,
+        error_code: 0xD602,
+        return_code: 0x0A,
+        transport_size: 0,
+        data: <<>>
+      )
+    end
+  end
+
+  defp handle_userdata(
+         state,
+         request_pdu,
+         %UserData{parameter: %Parameter{function_group: :security, subfunction: 2}} = request
+       ) do
+    state = notify_request(state, :logout, request_pdu)
+
+    if state.authenticated do
+      send_userdata_response(%{state | authenticated: false}, request_pdu, request,
+        return_code: 0x0A,
+        transport_size: 0,
+        data: <<>>
+      )
+    else
+      send_userdata_response(state, request_pdu, request,
+        error_code: 0xD604,
+        return_code: 0x0A,
+        transport_size: 0,
+        data: <<>>
+      )
+    end
   end
 
   defp handle_userdata(
@@ -716,7 +810,11 @@ defmodule S7.Test.MockPLC do
         last_data_unit: 0,
         error_code: Keyword.get(opts, :error_code, 0)
       },
-      payload: %Payload{data: request.payload.data}
+      payload: %Payload{
+        return_code: Keyword.get(opts, :return_code, 0xFF),
+        transport_size: Keyword.get(opts, :transport_size, 0x09),
+        data: Keyword.get(opts, :data, request.payload.data)
+      }
     }
 
     {:ok, response_pdu} = UserData.to_pdu(response, request_pdu.header.pdu_reference)

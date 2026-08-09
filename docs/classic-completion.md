@@ -79,9 +79,9 @@ by the PLC during an exclusive transaction.
 | Cyclic services | `0x02` | Subscribe, transfer, change-driven transfer, modify, unsubscribe | Planned |
 | Block functions | `0x03` | List blocks, list by type, block information | Implemented; device qualification pending |
 | CPU functions | `0x04` | Read SZL, message service, diagnostics, alarm query/ack/indications | SZL implemented; remainder planned |
-| Security | `0x05` | Session password login/logout | Planned |
+| Security | `0x05` | Session password login/logout | Implemented; device qualification pending |
 | PBC BSEND | `0x06` | Raw preservation only | Adapter scope |
-| Time | `0x07` | Read/set clock and following variants | Planned |
+| Time | `0x07` | Read/set clock | Implemented; following variants evidence-gated |
 | Data Record Routing | `0x20` | Raw preservation only | Adapter scope |
 | NC programming | `0x3F` | Raw preservation only | Excluded |
 

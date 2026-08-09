@@ -19,8 +19,10 @@ defmodule S7.Client do
     Data,
     Error,
     OrderCode,
+    PLCClock,
     PLCStatus,
     Result,
+    SessionPassword,
     SZL
   }
 
@@ -233,6 +235,48 @@ defmodule S7.Client do
       Metadata.plc_status(szl)
     end
   end
+
+  @doc """
+  Reads the PLC's timezone-free local civil time.
+
+  Classic clock values contain no UTC offset. The returned `S7.PLCClock`
+  retains the complete ten-byte timestamp and the unreliable century hint.
+  """
+  @spec read_clock(t()) :: {:ok, PLCClock.t()} | {:error, Error.t()}
+  def read_clock(client), do: call(fn -> Connection.read_clock(client) end, :read_clock)
+
+  @doc """
+  Sets the PLC's timezone-free local civil time.
+
+  This changes PLC state and is never retried automatically after an ambiguous
+  timeout or disconnect.
+  """
+  @spec set_clock(t(), NaiveDateTime.t()) :: :ok | {:error, Error.t()}
+  def set_clock(client, datetime) do
+    call(fn -> Connection.set_clock(client, datetime) end, :set_clock)
+  end
+
+  @doc """
+  Authenticates the current classic S7 session with its configured password.
+
+  The exchange changes authorization only; it is neither encrypted nor peer
+  authenticated. Passwords must contain one to eight printable ASCII bytes.
+  They are redacted from inspection and telemetry, are not retained for
+  reconnect, and cannot be securely zeroed by the BEAM's immutable binary
+  representation.
+  """
+  @spec authenticate(t(), binary()) :: :ok | {:error, Error.t()}
+  def authenticate(client, password) do
+    with {:ok, password} <- SessionPassword.new(password) do
+      call(fn -> Connection.authenticate(client, password) end, :authenticate)
+    end
+  end
+
+  @doc """
+  Clears authorization established for the current classic S7 session.
+  """
+  @spec logout(t()) :: :ok | {:error, Error.t()}
+  def logout(client), do: call(fn -> Connection.logout(client) end, :logout)
 
   @doc """
   Returns the number of blocks in each directory type advertised by the PLC.

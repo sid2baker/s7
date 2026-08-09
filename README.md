@@ -3,7 +3,8 @@
 An Elixir client for classic S7comm over RFC 1006. The protocol surface includes COTP connection
 setup, S7 Setup Communication, single- or multi-item Read Var and Write Var jobs, bounded
 userdata-backed System Status List (SZL/SSL) reads, and classic block directory and metadata
-queries. One S7ANY item may represent either a scalar or a fixed-count range.
+queries. PLC clock access and classic session-password authorization are also supported. One
+S7ANY item may represent either a scalar or a fixed-count range.
 
 The implementation keeps protocol codecs pure and gives the TCP socket to one `:gen_statem`
 process. Its `active: :once` request engine correlates responses by PDU reference, bounds queued
@@ -16,10 +17,10 @@ reads and writes. CI also builds a server from a pinned Snap7 revision and verif
 splitting and read-after-write for every supported area and value type. PLCSIM Advanced and
 physical Siemens hardware remain external release gates, so `0.1.0` remains a release candidate.
 
-S7comm-plus, symbolic addressing, optimized/protected DB access, block upload/download, PLC
-control, alarms, and programmer diagnostics are not supported. The common classic userdata
-envelope is implemented for SZL and block-directory requests plus safe handling of unsolicited
-indications.
+S7comm-plus, symbolic addressing, optimized DB access, block upload/download, PLC control,
+alarms, and programmer diagnostics are not supported. The common classic userdata envelope is
+implemented for SZL, block-directory, clock, and protected-session requests plus safe handling of
+unsolicited indications.
 
 ## Usage
 
@@ -35,6 +36,7 @@ indications.
 {:ok, raw} = S7.Client.read_raw(client, "DB1.DBW0")
 {:ok, %S7.OrderCode{code: order_code}} = S7.Client.order_code(client)
 {:ok, dbs} = S7.Client.list_blocks(client, :db)
+{:ok, %S7.PLCClock{datetime: plc_time}} = S7.Client.read_clock(client)
 :ok = S7.Client.close(client)
 ```
 
@@ -227,13 +229,39 @@ limits. Directory entries and detailed metadata retain raw bytes and preserve un
 type, and security codes. Block upload and download use different stateful Job services and are
 not aliases for Read Var, Write Var, or these directory calls.
 
+## PLC Clock And Session Authorization
+
+Classic PLC clock values are timezone-free local civil time:
+
+```elixir
+{:ok, %S7.PLCClock{datetime: current}} = S7.Client.read_clock(client)
+:ok = S7.Client.set_clock(client, ~N[2030-02-03 04:05:06.789])
+```
+
+`set_clock/2` is state-changing and is never replayed after an ambiguous outcome. The returned
+clock struct retains the complete wire timestamp because observed PLCs do not use its century hint
+consistently.
+
+Classic protected-session login changes authorization for the current connection only:
+
+```elixir
+password = System.fetch_env!("S7_PASSWORD")
+:ok = S7.Client.authenticate(client, password)
+:ok = S7.Client.logout(client)
+```
+
+Passwords are one to eight printable ASCII bytes. Authentication is an ordering barrier: earlier
+jobs complete before login/logout and later jobs wait behind it. Authorization is cleared by
+logout or session loss and is never restored automatically after reconnect. This legacy exchange
+provides no encryption, integrity, or peer authentication; see [Security policy](SECURITY.md).
+
 ## Architecture
 
 ```text
 S7.Client
   -> S7.Connection (:gen_statem, active-once :gen_tcp owner)
     -> bounded queue / PDU-reference correlation / request timers / reconnect backoff
-    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL, Blocks}
+    -> S7.Protocol.{SetupCommunication, ReadVar, WriteVar, UserData, SZL, Blocks, Clock, Security}
       -> S7.Protocol.PDU / Header / Item / DataItem
         -> S7.Transport.COTP
           -> S7.Transport.TPKT
@@ -280,7 +308,8 @@ The script uses the ignored local Snap7 reference when present and otherwise che
 revision into a temporary directory.
 
 With Docker available, capture the same exchange and require tshark to identify Setup, Read Var,
-Write Var, SZL, and block-directory services without malformed packets:
+Write Var, SZL, block-directory, set-clock, and session-password services without malformed
+packets:
 
 ```bash
 bash scripts/run_snap7_packet_check.sh

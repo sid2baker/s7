@@ -146,16 +146,24 @@ defmodule S7.Protocol.UserData do
   @doc """
   Validates and decodes a response for a previously encoded userdata request.
   """
-  @spec decode_response(PDU.t(), t(), 0..0xFFFF) :: {:ok, t()} | {:error, Error.t()}
-  def decode_response(%PDU{} = pdu, %__MODULE__{} = request, expected_reference) do
-    with :ok <- validate_reference(pdu, expected_reference),
+  @spec decode_response(PDU.t(), t(), 0..0xFFFF, keyword()) ::
+          {:ok, t()} | {:error, Error.t()}
+  def decode_response(pdu, request, expected_reference, opts \\ [])
+
+  def decode_response(%PDU{} = pdu, %__MODULE__{} = request, expected_reference, opts)
+      when is_list(opts) do
+    with :ok <- validate_response_options(opts),
+         :ok <- validate_reference(pdu, expected_reference),
          {:ok, response} <- from_pdu(pdu),
          :ok <- validate_response_identity(response, request),
          :ok <- validate_parameter_error(response.parameter),
-         :ok <- validate_return_code(response.payload.return_code) do
+         :ok <- validate_return_code(response.payload, opts) do
       {:ok, response}
     end
   end
+
+  def decode_response(_pdu, _request, _expected_reference, _opts),
+    do: Protocol.error(:userdata, :invalid_userdata)
 
   @doc """
   Encodes the fixed userdata parameter envelope.
@@ -388,7 +396,29 @@ defmodule S7.Protocol.UserData do
   defp validate_parameter_error(%Parameter{error_code: error_code}),
     do: Protocol.error(:userdata, :userdata_error, code: error_code)
 
-  defp validate_return_code(return_code), do: Protocol.item_result(:userdata, return_code)
+  defp validate_response_options(opts) do
+    if Keyword.keyword?(opts) and
+         Enum.all?(Keyword.keys(opts), &(&1 == :allow_null_success)) and
+         is_boolean(Keyword.get(opts, :allow_null_success, false)) do
+      :ok
+    else
+      Protocol.error(:userdata, :invalid_option)
+    end
+  end
+
+  defp validate_return_code(
+         %Payload{return_code: 0x0A, transport_size: 0, data: <<>>},
+         opts
+       ) do
+    if Keyword.get(opts, :allow_null_success, false) do
+      :ok
+    else
+      Protocol.item_result(:userdata, 0x0A)
+    end
+  end
+
+  defp validate_return_code(%Payload{return_code: return_code}, _opts),
+    do: Protocol.item_result(:userdata, return_code)
 
   defp validate_byte(value) when value in 0..0xFF, do: :ok
   defp validate_byte(_value), do: {:error, :invalid_userdata_parameter}

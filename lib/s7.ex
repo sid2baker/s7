@@ -7,7 +7,8 @@ defmodule S7 do
 
   S7comm-plus, symbolic addressing, block transfer, PLC control, alarms, and
   programmer diagnostics are outside the current scope. The classic userdata
-  envelope currently supports bounded SZL reads, typed CPU metadata, and block
-  directory and information queries.
+  envelope currently supports bounded SZL reads, typed CPU metadata, block
+  directory and information queries, PLC clock access, and protected-session
+  authorization.
   """
 end

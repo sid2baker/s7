@@ -104,8 +104,28 @@ defmodule S7.TelemetryIntegrationTest do
     assert :payload in Telemetry.excluded_metadata()
   end
 
-  defp start_server do
-    {:ok, server} = MockPLC.start_link()
+  test "never publishes session credentials in request telemetry" do
+    secret = "PRIVATE"
+    server = start_server(session_password: secret)
+    assert {:ok, client} = Client.connect({127, 0, 0, 1}, port: server.port)
+    assert Client.authenticate(client, secret) == :ok
+
+    for event <- [
+          [:s7, :request, :queued],
+          [:s7, :request, :start],
+          [:s7, :request, :stop]
+        ] do
+      assert_receive {:s7_telemetry, ^event, measurements,
+                      %{connection: ^client, operation: :authenticate} = metadata}
+
+      refute inspect({measurements, metadata}) =~ secret
+    end
+
+    assert Client.close(client) == :ok
+  end
+
+  defp start_server(opts \\ []) do
+    {:ok, server} = MockPLC.start_link(opts)
     on_exit(fn -> MockPLC.stop(server) end)
     server
   end

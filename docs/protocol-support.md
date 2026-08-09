@@ -32,6 +32,8 @@ The complete scope and risk policy are defined in
 | Raw SZL reads and bounded continuation | Implemented | Supported after device qualification |
 | Order code, CPU/CP info, and PLC status | Implemented | Supported after device qualification |
 | Block counts, list by type, and block information | Implemented with bounded continuation | Supported after device qualification |
+| Read/set PLC clock | Implemented; timezone-free wire value retained | Supported after device qualification |
+| Protected-session login/logout | Implemented with credential redaction and queue barriers | Supported after device qualification |
 | Common userdata envelope and request routing | Implemented | Supported |
 | Exclusive bidirectional service transactions | Implemented, internal typed-service boundary | Supported |
 | Bounded unsolicited userdata routing | Implemented, internal typed-service boundary | Supported |
@@ -54,7 +56,9 @@ socket errors retain distinct structured reasons. Reconnect creates a new COTP
 and S7 session and never replays work from the failed session. Stateful
 services can reserve the connection for a bounded bidirectional transaction;
 unsolicited userdata indications are isolated from reference correlation and
-routed to bounded monitored subscriptions.
+routed to bounded monitored subscriptions. Session login/logout is serialized
+as a queue barrier: earlier jobs complete first and later jobs cannot overtake
+the authorization change.
 
 ## Addressing And Values
 
@@ -89,6 +93,17 @@ fragment bounds. Detailed block information validates the requested identity,
 fixed response geometry, and Siemens timestamps while preserving its complete
 raw payload. These read-only userdata services do not implement block image
 upload, download, replacement, or deletion.
+
+Clock reads return a timezone-free `S7.PLCClock` with the complete ten-byte
+timestamp. Clock writes accept millisecond-precision `NaiveDateTime` values.
+The century hint is preserved but does not override the validated Siemens
+two-digit-year pivot because observed devices encode the hint inconsistently.
+
+Classic protected-session login accepts one to eight printable ASCII bytes.
+It changes authorization only for the current S7 session and does not provide
+encryption, integrity, or PLC authentication. Logout and every session loss
+clear the client's authenticated state; reconnect never retains or replays a
+password.
 
 ## PLC Requirements
 

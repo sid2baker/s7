@@ -131,4 +131,14 @@ defmodule S7.Snap7ClientInteropTest do
               load_memory_size: 604
             }} = Client.block_info(client, :db, 1)
   end
+
+  test "sets the classic clock and changes session authorization", %{client: client} do
+    assert Client.set_clock(client, ~N[2024-08-09 12:34:56.000]) == :ok
+
+    assert %{authenticated: false} = Client.info(client)
+    assert Client.authenticate(client, "TESTONLY") == :ok
+    assert %{authenticated: true} = Client.info(client)
+    assert Client.logout(client) == :ok
+    assert %{authenticated: false} = Client.info(client)
+  end
 end

@@ -56,6 +56,13 @@ callers may run concurrently up to the conservative minimum of the requested
 and peer-returned AMQ limits. The default request remains one concurrent job.
 Callers above that limit enter a bounded FIFO queue.
 
+Protected-session login and logout are queue barriers. They wait for every
+earlier correlated job, run alone, and prevent later work from overtaking the
+authorization transition. Queue admission remains bounded while the barrier
+is waiting or in flight. The runtime stores only the last confirmed
+authenticated state; session loss clears it and reconnect never reuses a
+credential.
+
 Stateful services reserve the connection through an internal exclusive
 transaction boundary. Existing ordinary jobs finish before ownership is
 granted; later jobs remain queued until ownership is released. The owner may

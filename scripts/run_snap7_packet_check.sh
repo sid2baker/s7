@@ -58,6 +58,8 @@ grep -q "Read SZL" <<<"${DECODED}"
 grep -Fq "[Block functions] -> [List blocks]" <<<"${DECODED}"
 grep -Fq "[Block functions] -> [List blocks of type]" <<<"${DECODED}"
 grep -Fq "[Block functions] -> [Get block info]" <<<"${DECODED}"
+grep -Fq "[Time functions] -> [Set clock]" <<<"${DECODED}"
+grep -Fq "[Security] -> [PLC password]" <<<"${DECODED}"
 test -z "${MALFORMED}"
 
 if [[ -n "${S7_CAPTURE_FILE:-}" ]]; then

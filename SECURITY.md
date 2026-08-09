@@ -36,6 +36,21 @@ adding those fields in application handlers, logs, exception reports, or packet
 captures. PCAP files contain process traffic and must be handled as sensitive
 operational data.
 
+## Session Passwords
+
+`S7.Client.authenticate/2` implements the classic protected-session exchange,
+not a secure authentication protocol. Its wire transformation is reversible,
+so anyone who can observe the connection can recover the password. Use it only
+inside the protected network boundary described above.
+
+Passwords are validated before queueing, redacted from Elixir inspection,
+errors, and telemetry, and never stored for reconnect. Credential-bearing
+requests are deliberately excluded from committed golden fixtures. The BEAM
+uses immutable binaries, so neither the caller's password nor its transformed
+request can be reliably zeroed in memory. Load credentials at runtime, keep
+their lifetime short, and do not hard-code them in source, tests, logs, crash
+reports, or packet captures.
+
 ## Reporting A Vulnerability
 
 Report vulnerabilities privately through GitHub Security Advisories for the

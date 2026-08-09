@@ -33,6 +33,7 @@ Changes currently targeted for `0.1.0` are listed below.
 - Exclusive bidirectional transactions with deterministic ownership, traffic bounds, queued-work isolation, and drain integration.
 - Bounded monitored routing for unsolicited userdata indications without weakening PDU-reference correlation.
 - Bounded classic block inventory, list-by-type continuation, and detailed block metadata with capture-derived golden packets and Snap7/PCAP qualification.
+- Timezone-free PLC clock read/set services and classic protected-session login/logout with strict queue barriers, credential redaction, and Snap7/PCAP qualification.
 
 The date remains unset until the external release qualification in
 `docs/interoperability.md` is complete.

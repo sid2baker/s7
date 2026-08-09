@@ -32,6 +32,8 @@ defmodule S7.Connection.Request do
           | :userdata
           | :szl
           | :blocks
+          | :clock
+          | :security
           | :transaction
 
   @type t :: %__MODULE__{

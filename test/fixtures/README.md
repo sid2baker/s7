@@ -19,6 +19,11 @@ The block directory fixtures are S7 PDU bytes from frames 87-100 and 135-136 of 
 `tia_s300_goOnline.pcapng` capture. They include count-by-type, DB listing, a real two-fragment SFC
 listing, and a successful DB1 metadata response.
 
+Clock fixtures are S7 PDU bytes from frames 45-48 of the pinned
+`snap7_s300_everything.pcapng` capture. The credential-free security response is frame 4 of
+`step7_s300_AuthPassword.pcapng`. Password-bearing request bytes are intentionally not committed;
+the transform is tested with a non-secret test value instead.
+
 ```text
 fixture -> decode -> expected struct
 expected struct -> encode -> fixture

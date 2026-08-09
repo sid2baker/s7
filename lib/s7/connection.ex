@@ -9,7 +9,7 @@ defmodule S7.Connection do
 
   @behaviour :gen_statem
 
-  alias S7.{Address, Error, Result, Telemetry, TSAP}
+  alias S7.{Address, Error, Result, SessionPassword, Telemetry, TSAP}
 
   alias S7.Connection.{
     Close,
@@ -17,13 +17,16 @@ defmodule S7.Connection do
     Exclusive,
     Reconnect,
     Request,
+    Session,
     Stream,
     Subscription,
     SubscriptionRegistry
   }
 
   alias S7.Protocol.Blocks, as: BlocksProtocol
+  alias S7.Protocol.Clock, as: ClockProtocol
   alias S7.Protocol.{PDU, PDUPlanner, ReadVar, SetupCommunication, UserData, WriteVar}
+  alias S7.Protocol.Security, as: SecurityProtocol
   alias S7.Protocol.SZL, as: SZLProtocol
   alias S7.Transport.{COTP, TPKT}
 
@@ -89,8 +92,6 @@ defmodule S7.Connection do
     :dst_tsap,
     :requested_tpdu_size,
     :tpdu_size,
-    :local_reference,
-    :remote_reference,
     :requested_setup,
     :negotiated_setup,
     :pdu_size,
@@ -111,7 +112,8 @@ defmodule S7.Connection do
     queue: {[], []},
     queued_count: 0,
     pending: %{},
-    request_index: %{}
+    request_index: %{},
+    session: %Session{}
   ]
 
   @type state_name ::
@@ -200,6 +202,26 @@ defmodule S7.Connection do
   def block_info(connection, block) do
     :gen_statem.call(connection, {:blocks, :info, block}, :infinity)
   end
+
+  @doc false
+  @spec read_clock(pid()) :: {:ok, S7.PLCClock.t()} | {:error, Error.t()}
+  def read_clock(connection), do: :gen_statem.call(connection, {:clock, :read}, :infinity)
+
+  @doc false
+  @spec set_clock(pid(), NaiveDateTime.t()) :: :ok | {:error, Error.t()}
+  def set_clock(connection, datetime) do
+    :gen_statem.call(connection, {:clock, :set, datetime}, :infinity)
+  end
+
+  @doc false
+  @spec authenticate(pid(), SessionPassword.t()) :: :ok | {:error, Error.t()}
+  def authenticate(connection, password) do
+    :gen_statem.call(connection, {:security, :login, password}, :infinity)
+  end
+
+  @doc false
+  @spec logout(pid()) :: :ok | {:error, Error.t()}
+  def logout(connection), do: :gen_statem.call(connection, {:security, :logout}, :infinity)
 
   @doc false
   @spec begin_transaction(pid(), atom(), keyword()) ::
@@ -422,6 +444,18 @@ defmodule S7.Connection do
   def handle_event({:call, from}, {:blocks, :info, _block} = operation, :ready, data),
     do: submit_request(from, operation, data)
 
+  def handle_event({:call, from}, {:clock, :read} = operation, :ready, data),
+    do: submit_request(from, operation, data)
+
+  def handle_event({:call, from}, {:clock, :set, _datetime} = operation, :ready, data),
+    do: submit_request(from, operation, data)
+
+  def handle_event({:call, from}, {:security, :login, _password} = operation, :ready, data),
+    do: submit_request(from, operation, data)
+
+  def handle_event({:call, from}, {:security, :logout} = operation, :ready, data),
+    do: submit_request(from, operation, data)
+
   def handle_event(
         {:call, from},
         {:begin_transaction, operation, opts},
@@ -545,7 +579,8 @@ defmodule S7.Connection do
       reconnect_delay: data.reconnect.delay,
       exclusive_transaction: not is_nil(data.exclusive),
       transaction_waiting: not is_nil(data.exclusive_waiter),
-      subscriptions: map_size(data.subscription_registry.entries)
+      subscriptions: map_size(data.subscription_registry.entries),
+      authenticated: data.session.authenticated
     }
 
     {:keep_state_and_data, [{:reply, from, info}]}
@@ -1223,8 +1258,8 @@ defmodule S7.Connection do
 
   defp start_cotp_disconnect(from, data, timeout) do
     request = %DisconnectRequest{
-      destination_reference: data.remote_reference,
-      source_reference: data.local_reference,
+      destination_reference: data.session.remote_reference,
+      source_reference: data.session.local_reference,
       reason: 0x80
     }
 
@@ -1272,7 +1307,8 @@ defmodule S7.Connection do
   end
 
   defp cotp_connected?(data) do
-    data.socket != nil and is_integer(data.local_reference) and is_integer(data.remote_reference)
+    data.socket != nil and is_integer(data.session.local_reference) and
+      is_integer(data.session.remote_reference)
   end
 
   defp rearm_disconnect(data) do
@@ -1353,12 +1389,17 @@ defmodule S7.Connection do
          :ok <- validate_confirm(confirm, request) do
       tpdu_size = min(data.requested_tpdu_size, confirm.tpdu_size || data.requested_tpdu_size)
 
+      session = %{
+        data.session
+        | local_reference: request.source_reference,
+          remote_reference: confirm.source_reference
+      }
+
       {:ok,
        %{
          data
          | tpdu_size: tpdu_size,
-           local_reference: request.source_reference,
-           remote_reference: confirm.source_reference
+           session: session
        }}
     else
       {:error, %Error{} = error, data} -> {:error, error, data}
@@ -2228,11 +2269,56 @@ defmodule S7.Connection do
     build_blocks_request(from, BlocksProtocol.start_info(block), :block_info)
   end
 
+  defp build_request(from, {:clock, :read}, _data) do
+    build_userdata_service_request(from, ClockProtocol.read_request(), :clock, :read_clock, :read)
+  end
+
+  defp build_request(from, {:clock, :set, datetime}, _data) do
+    build_userdata_service_request(
+      from,
+      ClockProtocol.set_request(datetime),
+      :clock,
+      :set_clock,
+      :set
+    )
+  end
+
+  defp build_request(from, {:security, :login, password}, _data) do
+    build_userdata_service_request(
+      from,
+      SecurityProtocol.login_request(password),
+      :security,
+      :authenticate,
+      :login
+    )
+  end
+
+  defp build_request(from, {:security, :logout}, _data) do
+    build_userdata_service_request(
+      from,
+      SecurityProtocol.logout_request(),
+      :security,
+      :logout,
+      :logout
+    )
+  end
+
   defp build_blocks_request(from, result, operation) do
     case result do
       {:ok, message, transaction} ->
         request = new_request(from, :blocks, operation, [[message]])
         {:ok, %{request | context: transaction}}
+
+      {:error, %Error{} = error} ->
+        {:error, %{error | operation: operation}}
+    end
+  end
+
+  defp build_userdata_service_request(from, result, kind, operation, action) do
+    case result do
+      {:ok, message} ->
+        request = new_request(from, kind, operation, [[message]])
+        {:ok, %{request | context: action}}
 
       {:error, %Error{} = error} ->
         {:error, %{error | operation: operation}}
@@ -2261,7 +2347,8 @@ defmodule S7.Connection do
   end
 
   defp admit_request(data, request) do
-    if map_size(data.pending) >= data.max_jobs and data.queued_count >= data.max_queue_size do
+    if data.queued_count >= data.max_queue_size and
+         not request_dispatchable_now?(data, request) do
       telemetry_request_rejected(request, data, :queue_full)
 
       {:error,
@@ -2269,6 +2356,15 @@ defmodule S7.Connection do
     else
       :ok
     end
+  end
+
+  defp request_dispatchable_now?(%{exclusive: %Exclusive{}}, _request), do: false
+  defp request_dispatchable_now?(%{exclusive_waiter: %Exclusive{}}, _request), do: false
+
+  defp request_dispatchable_now?(data, request) do
+    data.queued_count == 0 and map_size(data.pending) < data.max_jobs and
+      not security_pending?(data) and
+      (request.kind != :security or map_size(data.pending) == 0)
   end
 
   defp monitor_request(%Request{from: {pid, _tag}} = request) do
@@ -2314,11 +2410,29 @@ defmodule S7.Connection do
 
   defp schedule_requests(%{exclusive_waiter: %Exclusive{}} = data), do: {:ok, data}
 
-  defp schedule_requests(data)
+  defp schedule_requests(data) do
+    if security_pending?(data) do
+      {:ok, data}
+    else
+      schedule_available_requests(data)
+    end
+  end
+
+  defp schedule_available_requests(data)
        when map_size(data.pending) >= data.max_jobs or data.queued_count == 0,
        do: {:ok, data}
 
-  defp schedule_requests(data) do
+  defp schedule_available_requests(data) do
+    {:value, request} = :queue.peek(data.queue)
+
+    if request.kind == :security and map_size(data.pending) > 0 do
+      {:ok, data}
+    else
+      dispatch_queued_request(data)
+    end
+  end
+
+  defp dispatch_queued_request(data) do
     {{:value, request}, queue} = :queue.out(data.queue)
 
     data = %{
@@ -2336,6 +2450,9 @@ defmodule S7.Connection do
       schedule_requests(data)
     end
   end
+
+  defp security_pending?(data),
+    do: Enum.any?(data.pending, fn {_reference, request} -> request.kind == :security end)
 
   defp schedule_dispatched_request(result) do
     case result do
@@ -2403,6 +2520,10 @@ defmodule S7.Connection do
 
   defp encode_batch(%Request{kind: :blocks}, [%UserData{} = message], reference),
     do: UserData.to_pdu(message, reference)
+
+  defp encode_batch(%Request{kind: kind}, [%UserData{} = message], reference)
+       when kind in [:clock, :security],
+       do: UserData.to_pdu(message, reference)
 
   defp encode_batch(%Request{kind: :transaction}, [%PDU{} = pdu], reference) do
     {:ok, put_in(pdu.header.pdu_reference, reference)}
@@ -2547,15 +2668,15 @@ defmodule S7.Connection do
   end
 
   defp validate_disconnect_references(destination, source, data, operation) do
-    if destination == data.local_reference and source == data.remote_reference do
+    if destination == data.session.local_reference and source == data.session.remote_reference do
       :ok
     else
       {:error,
        Error.new(:cotp, operation, :invalid_connection_reference,
          details: %{
-           expected_destination: data.local_reference,
+           expected_destination: data.session.local_reference,
            received_destination: destination,
-           expected_source: data.remote_reference,
+           expected_source: data.session.remote_reference,
            received_source: source
          }
        )}
@@ -2676,6 +2797,28 @@ defmodule S7.Connection do
   end
 
   defp decode_batch_response(
+         %Request{kind: :clock, current_batch: [%UserData{} = message], context: action} =
+           request,
+         pdu
+       ) do
+    case ClockProtocol.decode_response(pdu, message, request.reference, action) do
+      {:ok, result} -> {:ok, [{action, result}]}
+      {:error, %Error{} = error} -> {:error, error}
+    end
+  end
+
+  defp decode_batch_response(
+         %Request{kind: :security, current_batch: [%UserData{} = message], context: action} =
+           request,
+         pdu
+       ) do
+    case SecurityProtocol.decode_response(pdu, message, request.reference) do
+      {:ok, :ok} -> {:ok, [action]}
+      {:error, %Error{} = error} -> {:error, error}
+    end
+  end
+
+  defp decode_batch_response(
          %Request{
            kind: :szl,
            current_batch: [%UserData{} = message],
@@ -2698,6 +2841,9 @@ defmodule S7.Connection do
   end
 
   defp decode_batch_response(%Request{kind: :transaction}, %PDU{} = pdu), do: {:ok, [pdu]}
+
+  defp handle_batch_results(data, %Request{kind: :security} = request, item_results),
+    do: handle_active_batch_results(data, request, item_results)
 
   defp handle_batch_results(data, request, item_results) do
     if caller_alive?(request) and not request.cancelled do
@@ -2726,6 +2872,22 @@ defmodule S7.Connection do
   defp handle_active_batch_results(data, %Request{kind: :transaction} = request, [pdu]) do
     finish_request(request, {:ok, pdu})
     data
+  end
+
+  defp handle_active_batch_results(data, %Request{kind: :clock} = request, [{:read, clock}]) do
+    finish_request(request, {:ok, clock})
+    data
+  end
+
+  defp handle_active_batch_results(data, %Request{kind: :clock} = request, [{:set, :ok}]) do
+    finish_request(request, :ok)
+    data
+  end
+
+  defp handle_active_batch_results(data, %Request{kind: :security} = request, [action])
+       when action in [:login, :logout] do
+    finish_request(request, :ok)
+    %{data | session: %{data.session | authenticated: action == :login}}
   end
 
   defp handle_active_batch_results(data, %Request{kind: kind} = request, [
@@ -2779,7 +2941,7 @@ defmodule S7.Connection do
   end
 
   defp request_failure_reply(%Request{kind: kind, operation: operation}, error, _send_state)
-       when kind in [:read, :write, :userdata, :szl, :blocks, :transaction],
+       when kind in [:read, :write, :userdata, :szl, :blocks, :clock, :security, :transaction],
        do: {:error, with_operation(error, operation)}
 
   defp request_failure_reply(%Request{kind: :read_multi} = request, error, send_state) do
@@ -3318,10 +3480,9 @@ defmodule S7.Connection do
     %{
       data
       | socket: nil,
-        local_reference: nil,
-        remote_reference: nil,
         receive_buffer: <<>>,
-        stream: Stream.new()
+        stream: Stream.new(),
+        session: %Session{}
     }
   end
 
@@ -3356,6 +3517,10 @@ defmodule S7.Connection do
   defp operation_name({:blocks, :counts}), do: :block_counts
   defp operation_name({:blocks, :list, _type, _limits}), do: :list_blocks
   defp operation_name({:blocks, :info, _block}), do: :block_info
+  defp operation_name({:clock, :read}), do: :read_clock
+  defp operation_name({:clock, :set, _datetime}), do: :set_clock
+  defp operation_name({:security, :login, _password}), do: :authenticate
+  defp operation_name({:security, :logout}), do: :logout
 
   defp operation_name({:begin_transaction, operation, _opts}) when is_atom(operation),
     do: operation

@@ -34,6 +34,13 @@ When the configured caller queue is full, new work fails locally with
 is removed. If its PDU is already in flight, the response is still consumed and
 correlated, but no additional batch is scheduled for that caller.
 
+Login and logout are strict ordering barriers. Earlier jobs finish before the
+authorization request is sent, later jobs remain in the bounded queue, and no
+ordinary request is dispatched while the security request is in flight. A
+confirmed login updates session state even if its caller exits after sending;
+otherwise subsequent access decisions would be based on stale local state.
+Logout or any session loss clears that state.
+
 ## Retry Contract
 
 The library never automatically retries a write whose bytes may have reached
@@ -49,6 +56,11 @@ Reconnect backoff has configurable minimum, maximum, jitter, and attempt cap.
 Exhausting the cap leaves the stable client process in `:disconnected`; an
 explicit `S7.Client.reconnect/1` starts a fresh attempt series. A successful
 Setup Communication exchange resets the series.
+
+Clock writes and protected-session changes are never retried automatically.
+Clock values are timezone-free local civil time; applications own any UTC or
+daylight-saving conversion before calling `set_clock/2`. A successful reconnect
+does not reauthenticate because credentials are not retained.
 
 Graceful close is also bounded. A drain timeout returns `:drain_timeout` to the
 closing caller and every still-accepted operation, with each error's operation

@@ -10,14 +10,18 @@ security configuration.
 | --- | --- | --- | --- |
 | In-process fault server | TCP/COTP fragmentation, malformed frames, out-of-order responses, concurrency, timeout, reconnect, drain | Every commit | Passing |
 | Snap7 server | `valiot/snap7` commit `a1845454f5f16f3b127b987807f1cbc59205db70` | Every commit | Passing |
-| Wireshark/tshark | Pinned netshoot image; Setup, Read/Write Var, SZL, and block-service filters; zero malformed frames | Every commit | Passing |
+| Wireshark/tshark | Pinned netshoot image; Setup, Read/Write Var, SZL, block, clock, and security-service filters; zero malformed frames | Every commit | Passing |
 | Request soak | 20,000 mixed concurrent reads/writes with bounded memory and empty final mailbox | Weekly/manual | Automated |
 
 The Snap7 gate negotiates four jobs, exercises concurrent reads, all supported
 areas and scalar types, counted values, raw access, multi-item operations, PDU
 splitting, read-after-write, block inventory, DB listing, and DB metadata. The
-generated PCAP is retained by CI for seven days, and Wireshark must identify all
-three block functions.
+gate also sets the server clock and performs protected-session login/logout.
+Read-clock decoding uses an independently captured PLC response because the
+pinned Snap7 server emits a zero-based weekday that violates the Siemens
+timestamp codec. The generated PCAP is retained by CI for seven days, and
+Wireshark must identify all three block functions plus set-clock and password
+services.
 
 ## Release Qualification Matrix
 
