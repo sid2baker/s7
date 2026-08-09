@@ -25,10 +25,11 @@ S7.Data          S7.PLC.Status    S7.Cyclic.Subscription
 S7.Error         S7.Result        S7.TSAP
 ```
 
-Small related modules are co-located by domain. A struct is used when public
-callers or the runtime benefit from a named contract and pattern matching;
-private one-service continuation state uses typed maps instead of standalone
-modules.
+Every source file contains a primary module matching its module path. Tightly
+owned child record types may remain in that primary module's file. A struct is
+used when public callers or the runtime benefit from a named contract and
+pattern matching; private one-service continuation state uses typed maps
+instead of standalone modules.
 
 `S7.Telemetry` is a one-way observability boundary used by the runtime. Protocol,
 transport, and model modules cannot depend on it, so wire codecs remain pure.

@@ -36,9 +36,9 @@ with the public API and wire contracts documented in this repository.
 - Keep structs for stable public values, distinct wire packets, and runtime records
   whose identity is actively pattern-matched. Use maps or tagged tuples for private,
   one-service bookkeeping that does not need a module identity.
-- Co-locate small related modules in one domain file. Give substantial codecs or
-  shared runtime behavior their own file; do not create one file per tiny struct or
-  merge unrelated services merely to reduce the file count.
+- Give every source file a primary module matching its module path. Keep a
+  tightly owned child record, such as `S7.Cyclic.Event.Item`, in its parent's
+  file; do not create empty namespace modules or namespace-only bundle files.
 - Prefer the existing public facade and domain vocabulary over compatibility aliases,
   pass-through wrappers, or speculative abstractions.
 
