@@ -7,6 +7,11 @@ Keep a Changelog, and stable releases use Semantic Versioning.
 
 Changes currently targeted for `0.1.0` are listed below.
 
+### Added
+
+- Added runnable examples for typed reads, guarded writes with read-back,
+  multi-item result handling, PLC metadata inspection, and OTP supervision.
+
 ### Changed
 
 - Extended the supported BEAM matrix through Elixir 1.20.3 and Erlang/OTP

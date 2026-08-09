@@ -75,6 +75,7 @@ defmodule S7.MixProject do
       files: [
         "lib",
         "docs",
+        "examples",
         ".formatter.exs",
         "CHANGELOG.md",
         "LICENSE",
@@ -98,6 +99,7 @@ defmodule S7.MixProject do
       source_ref: "v#{@version}",
       extras: [
         "README.md",
+        "examples/usage.md",
         "CHANGELOG.md",
         "SECURITY.md",
         "docs/architecture.md",
@@ -112,6 +114,7 @@ defmodule S7.MixProject do
         "docs/telemetry.md"
       ],
       groups_for_extras: [
+        Examples: ["examples/usage.md"],
         Guides:
           ~r{docs/(architecture|classic-completion|error-and-retry-semantics|protocol-support|telemetry)\.md},
         Qualification:

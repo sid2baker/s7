@@ -21,7 +21,7 @@ fi
 
 MIX_ENV=dev mix hex.build --unpack --output "${PACKAGE_DIR}"
 
-for path in lib docs .formatter.exs CHANGELOG.md LICENSE mix.exs README.md SECURITY.md; do
+for path in lib docs examples .formatter.exs CHANGELOG.md LICENSE mix.exs README.md SECURITY.md; do
   test -e "${PACKAGE_DIR}/${path}"
 done
 

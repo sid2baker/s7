@@ -30,6 +30,9 @@ classic alarms. Alarm success paths remain subject to named physical-device qual
 
 ## Usage
 
+Runnable read, write, multi-item, metadata, and supervision workflows are in
+the [examples guide](examples/usage.md).
+
 ```elixir
 {:ok, client} =
   S7.connect("192.168.1.10",
