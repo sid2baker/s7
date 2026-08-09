@@ -32,6 +32,8 @@ The complete scope and risk policy are defined in
 | Raw SZL reads and bounded continuation | Implemented | Supported after device qualification |
 | Order code, CPU/CP info, and PLC status | Implemented | Supported after device qualification |
 | Common userdata envelope and request routing | Implemented | Supported |
+| Exclusive bidirectional service transactions | Implemented, internal typed-service boundary | Supported |
+| Bounded unsolicited userdata routing | Implemented, internal typed-service boundary | Supported |
 | Userdata diagnostics/services | Not implemented | Post-1.0 |
 | Block upload/download | Not implemented | Separate opt-in surface |
 | PLC control | Not implemented | Separate opt-in surface |
@@ -48,7 +50,10 @@ reconnect with bounded exponential backoff. Close sends COTP DR when a session
 exists, accepts DC or TCP FIN, and force-closes after the caller's timeout.
 Peer DR is acknowledged before requests fail; unexpected DC, ER, FIN, and TCP
 socket errors retain distinct structured reasons. Reconnect creates a new COTP
-and S7 session and never replays work from the failed session.
+and S7 session and never replays work from the failed session. Stateful
+services can reserve the connection for a bounded bidirectional transaction;
+unsolicited userdata indications are isolated from reference correlation and
+routed to bounded monitored subscriptions.
 
 ## Addressing And Values
 

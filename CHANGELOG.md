@@ -30,6 +30,8 @@ Changes currently targeted for `0.1.0` are listed below.
 - An explicit classic S7comm completion contract covering remaining services, safety classes, and evidence gates.
 - Complete classic S7ANY area and transport-code modeling plus integer, floating-point, string, character, and Siemens temporal codecs.
 - Bounded runtime COTP disconnect handshakes with peer DR acknowledgment and distinct DC, ER, FIN, and socket-error handling.
+- Exclusive bidirectional transactions with deterministic ownership, traffic bounds, queued-work isolation, and drain integration.
+- Bounded monitored routing for unsolicited userdata indications without weakening PDU-reference correlation.
 
 The date remains unset until the external release qualification in
 `docs/interoperability.md` is complete.

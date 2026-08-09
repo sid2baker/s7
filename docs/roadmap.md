@@ -32,7 +32,7 @@ The exact scope and evidence rules are defined in
 | 12 | Classic completion contract and service matrix | Complete |
 | 13 | Remaining S7ANY areas and value representations | Complete |
 | 14 | Runtime COTP DR/DC shutdown | Complete |
-| 15 | Exclusive, bidirectional transactions and bounded push routing | Planned |
+| 15 | Exclusive, bidirectional transactions and bounded push routing | Complete |
 | 16 | Block inventory and block information | Planned |
 | 17 | Clock and protected-session services | Planned |
 | 18 | Bounded block upload and block-image parsing | Planned |

@@ -47,12 +47,29 @@ for:
 - COTP fragment reassembly;
 - queued requests;
 - in-flight requests indexed by PDU reference;
-- request timers and caller monitors.
+- request timers and caller monitors;
+- one exclusive transaction with total, per-step, byte, message, and inbox bounds;
+- monitored userdata subscriptions with bounded pull queues.
 
 Each logical multi-item operation has at most one PDU batch in flight. Different
 callers may run concurrently up to the conservative minimum of the requested
 and peer-returned AMQ limits. The default request remains one concurrent job.
 Callers above that limit enter a bounded FIFO queue.
+
+Stateful services reserve the connection through an internal exclusive
+transaction boundary. Existing ordinary jobs finish before ownership is
+granted; later jobs remain queued until ownership is released. The owner may
+send correlated Job PDUs, receive bounded Job PDUs initiated by the PLC, and
+reply with Ack/AckData PDUs. Caller death, an overall deadline, an inbox
+overflow, or an incoming traffic-limit violation closes the session because
+the remote transaction state can no longer be established safely.
+
+Unsolicited userdata indications never enter PDU-reference correlation. They
+are routed by group, subfunction, and type to monitored subscriptions. Each
+subscription has one pull waiter and a bounded queue. Queue overflow terminates
+that subscription with a structured error but does not disturb unrelated
+requests or subscriptions. Session loss terminates all subscriptions; a new
+session requires explicit resubscription.
 
 The same connection PID may own a sequence of sessions. Opt-in reconnect uses
 bounded exponential backoff with jitter, but first fails all work belonging to
@@ -60,11 +77,12 @@ the lost session. No PDU or logical operation crosses a session boundary.
 Supervisors can start the client through `S7.Client.start_link/1`; optional
 registration uses the standard local, global, or `:via` forms.
 
-Graceful close enters `:draining`, rejects new calls, and finishes work already
-accepted by the queue. A bounded drain timeout closes the socket and returns
-structured failures rather than leaving callers blocked. Immediate and
-completed drain closes enter `:disconnecting`, send COTP DR, and wait for DC or
-TCP FIN until the close timeout forces socket closure.
+Graceful close enters `:draining`, rejects new work, and finishes work already
+accepted by the queue, including an active exclusive transaction. A bounded
+drain timeout closes the socket and returns structured failures rather than
+leaving callers blocked. Immediate and completed drain closes enter
+`:disconnecting`, send COTP DR, and wait for DC or TCP FIN until the close
+timeout forces socket closure.
 
 ## Protocol Invariants
 

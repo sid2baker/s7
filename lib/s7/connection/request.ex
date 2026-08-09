@@ -24,7 +24,7 @@ defmodule S7.Connection.Request do
     cancelled: false
   ]
 
-  @type kind :: :read | :read_multi | :write | :write_multi | :userdata
+  @type kind :: :read | :read_multi | :write | :write_multi | :userdata | :szl | :transaction
 
   @type t :: %__MODULE__{
           id: reference(),

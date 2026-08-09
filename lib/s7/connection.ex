@@ -10,7 +10,18 @@ defmodule S7.Connection do
   @behaviour :gen_statem
 
   alias S7.{Address, Error, Result, Telemetry, TSAP}
-  alias S7.Connection.{Close, Drain, Reconnect, Request, Stream}
+
+  alias S7.Connection.{
+    Close,
+    Drain,
+    Exclusive,
+    Reconnect,
+    Request,
+    Stream,
+    Subscription,
+    SubscriptionRegistry
+  }
+
   alias S7.Protocol.{PDU, PDUPlanner, ReadVar, SetupCommunication, UserData, WriteVar}
   alias S7.Protocol.SZL, as: SZLProtocol
   alias S7.Transport.{COTP, TPKT}
@@ -33,6 +44,12 @@ defmodule S7.Connection do
   @default_reconnect_min_delay 250
   @default_reconnect_max_delay 30_000
   @default_reconnect_jitter 0.2
+  @default_transaction_timeout 30_000
+  @default_transaction_message_limit 1_024
+  @default_transaction_byte_limit 1_048_576
+  @default_transaction_inbox_limit 64
+  @default_subscription_limit 16
+  @default_subscription_queue_limit 64
   @minimum_fragment_limit 64
   @maximum_fragment_limit 1024
   @maximum_tpkt_size 0xFFFF
@@ -57,6 +74,7 @@ defmodule S7.Connection do
     :reconnect_min_delay,
     :slot,
     :src_tsap,
+    :subscription_limit,
     :timeout,
     :tpdu_size
   ]
@@ -84,6 +102,9 @@ defmodule S7.Connection do
     :reconnect,
     :drain,
     :close,
+    :exclusive,
+    :exclusive_waiter,
+    :subscription_registry,
     receive_buffer: <<>>,
     max_tpkt_size: @maximum_tpkt_size,
     queue: {[], []},
@@ -158,6 +179,59 @@ defmodule S7.Connection do
           {:ok, S7.SZL.t()} | {:error, Error.t()}
   def read_szl(connection, id, index, limits, operation) do
     :gen_statem.call(connection, {:read_szl, id, index, limits, operation}, :infinity)
+  end
+
+  @doc false
+  @spec begin_transaction(pid(), atom(), keyword()) ::
+          {:ok, reference()} | {:error, Error.t()}
+  def begin_transaction(connection, operation, opts \\ []) do
+    :gen_statem.call(connection, {:begin_transaction, operation, opts}, :infinity)
+  end
+
+  @doc false
+  @spec transaction_request(pid(), reference(), PDU.t()) ::
+          {:ok, PDU.t()} | {:error, Error.t()}
+  def transaction_request(connection, token, %PDU{} = pdu) do
+    :gen_statem.call(connection, {:transaction_request, token, pdu}, :infinity)
+  end
+
+  @doc false
+  @spec transaction_receive(pid(), reference(), pos_integer()) ::
+          {:ok, PDU.t()} | {:error, Error.t()}
+  def transaction_receive(connection, token, timeout \\ @default_timeout) do
+    :gen_statem.call(connection, {:transaction_receive, token, timeout}, :infinity)
+  end
+
+  @doc false
+  @spec transaction_reply(pid(), reference(), PDU.t()) :: :ok | {:error, Error.t()}
+  def transaction_reply(connection, token, %PDU{} = pdu) do
+    :gen_statem.call(connection, {:transaction_reply, token, pdu}, :infinity)
+  end
+
+  @doc false
+  @spec end_transaction(pid(), reference()) :: :ok | {:error, Error.t()}
+  def end_transaction(connection, token) do
+    :gen_statem.call(connection, {:end_transaction, token}, :infinity)
+  end
+
+  @doc false
+  @spec subscribe_userdata(pid(), Subscription.filter(), keyword()) ::
+          {:ok, reference()} | {:error, Error.t()}
+  def subscribe_userdata(connection, filter, opts \\ []) do
+    :gen_statem.call(connection, {:subscribe_userdata, filter, opts}, :infinity)
+  end
+
+  @doc false
+  @spec next_userdata(pid(), reference(), pos_integer()) ::
+          {:ok, UserData.t()} | {:error, Error.t()}
+  def next_userdata(connection, subscription, timeout \\ @default_timeout) do
+    :gen_statem.call(connection, {:next_userdata, subscription, timeout}, :infinity)
+  end
+
+  @doc false
+  @spec unsubscribe_userdata(pid(), reference()) :: :ok | {:error, Error.t()}
+  def unsubscribe_userdata(connection, subscription) do
+    :gen_statem.call(connection, {:unsubscribe_userdata, subscription}, :infinity)
   end
 
   @doc false
@@ -314,6 +388,72 @@ defmodule S7.Connection do
       ),
       do: submit_request(from, operation, data)
 
+  def handle_event(
+        {:call, from},
+        {:begin_transaction, operation, opts},
+        :ready,
+        data
+      ) do
+    begin_exclusive(from, operation, opts, data)
+  end
+
+  def handle_event(
+        {:call, from},
+        {:transaction_request, token, %PDU{} = pdu},
+        state,
+        data
+      )
+      when state in [:ready, :draining] do
+    submit_transaction_request(from, token, pdu, state, data)
+  end
+
+  def handle_event(
+        {:call, from},
+        {:transaction_receive, token, timeout},
+        state,
+        data
+      )
+      when state in [:ready, :draining] do
+    receive_transaction_job(from, token, timeout, data)
+  end
+
+  def handle_event(
+        {:call, from},
+        {:transaction_reply, token, %PDU{} = pdu},
+        state,
+        data
+      )
+      when state in [:ready, :draining] do
+    reply_transaction_job(from, token, pdu, state, data)
+  end
+
+  def handle_event({:call, from}, {:end_transaction, token}, state, data)
+      when state in [:ready, :draining] do
+    finish_exclusive(from, token, state, data)
+  end
+
+  def handle_event(
+        {:call, from},
+        {:subscribe_userdata, filter, opts},
+        :ready,
+        data
+      ) do
+    subscribe_userdata_owner(from, filter, opts, data)
+  end
+
+  def handle_event(
+        {:call, from},
+        {:next_userdata, subscription, timeout},
+        :ready,
+        data
+      ) do
+    next_userdata_event(from, subscription, timeout, data)
+  end
+
+  def handle_event({:call, from}, {:unsubscribe_userdata, subscription}, :ready, data) do
+    unsubscribe_userdata_owner(from, subscription, data)
+  end
+
   def handle_event({:call, from}, {:close, opts}, :ready, data) do
     case close_options(opts, data.timeout) do
       {:ok, :immediate, timeout} -> close_immediately(from, data, timeout)
@@ -368,7 +508,10 @@ defmodule S7.Connection do
       socket_mode: if(data.socket, do: :active_once, else: :closed),
       reconnect: data.reconnect.enabled,
       reconnect_attempts: data.reconnect.attempts,
-      reconnect_delay: data.reconnect.delay
+      reconnect_delay: data.reconnect.delay,
+      exclusive_transaction: not is_nil(data.exclusive),
+      transaction_waiting: not is_nil(data.exclusive_waiter),
+      subscriptions: map_size(data.subscription_registry.entries)
     }
 
     {:keep_state_and_data, [{:reply, from, info}]}
@@ -418,12 +561,12 @@ defmodule S7.Connection do
 
   def handle_event(:info, {:DOWN, monitor, :process, _pid, _reason}, state, data)
       when state in [:ready, :draining] do
-    data = cancel_request(data, monitor)
+    case handle_owner_down(data, monitor) do
+      {:exclusive, error, data} ->
+        disconnect_with_error(state, data, error)
 
-    if state == :draining and requests_idle?(data) do
-      complete_drain(data)
-    else
-      {:keep_state, data}
+      {:ok, data} ->
+        continue_after_owner_down(state, data)
     end
   end
 
@@ -444,6 +587,56 @@ defmodule S7.Connection do
         %{close: %Close{token: token}} = data
       ) do
     complete_disconnect(data, Error.new(:cotp, :close, :disconnect_timeout))
+  end
+
+  def handle_event(
+        :info,
+        {:transaction_timeout, token},
+        state,
+        %{exclusive: %Exclusive{timer_token: token} = exclusive} = data
+      )
+      when state in [:ready, :draining] do
+    error = Error.new(:client, exclusive.operation, :transaction_timeout)
+    disconnect_with_error(state, data, error)
+  end
+
+  def handle_event(
+        :info,
+        {:transaction_timeout, token},
+        state,
+        %{exclusive_waiter: %Exclusive{timer_token: token} = exclusive} = data
+      )
+      when state in [:ready, :draining] do
+    error = Error.new(:client, exclusive.operation, :transaction_timeout)
+    :gen_statem.reply(exclusive.from, {:error, error})
+    data = clear_exclusive_waiter(data)
+
+    case schedule_requests(data) do
+      {:ok, data} -> after_owner_cleanup(state, data)
+      {:disconnect, schedule_error, data} -> disconnect_with_error(state, data, schedule_error)
+    end
+  end
+
+  def handle_event(
+        :info,
+        {:transaction_receive_timeout, token},
+        state,
+        %{exclusive: %Exclusive{receive_token: token} = exclusive} = data
+      )
+      when state in [:ready, :draining] do
+    error = Error.new(:client, exclusive.operation, :timeout)
+    :gen_statem.reply(exclusive.receive_from, {:error, error})
+    exclusive = clear_transaction_receiver(exclusive)
+    {:keep_state, %{data | exclusive: exclusive}}
+  end
+
+  def handle_event(
+        :info,
+        {:subscription_timeout, reference, token},
+        :ready,
+        data
+      ) do
+    timeout_subscription(reference, token, data)
   end
 
   def handle_event(:info, {:tcp_closed, socket}, :disconnecting, %{socket: socket} = data) do
@@ -504,6 +697,13 @@ defmodule S7.Connection do
              @default_queue_limit,
              @maximum_receive_buffer_size
            ),
+         {:ok, max_subscriptions} <-
+           positive_option(
+             opts,
+             :subscription_limit,
+             @default_subscription_limit,
+             @maximum_receive_buffer_size
+           ),
          {:ok, reconnect} <- reconnect_options(opts),
          {:ok, src_tsap} <- source_tsap(opts),
          {:ok, dst_tsap} <- destination_tsap(opts),
@@ -526,6 +726,7 @@ defmodule S7.Connection do
          max_jobs: max_jobs,
          max_items_per_pdu: max_items_per_pdu,
          max_queue_size: max_queue_size,
+         subscription_registry: %SubscriptionRegistry{limit: max_subscriptions},
          reference: reference,
          receive_buffer_limit: receive_buffer_limit,
          max_tpkt_size: max_tpkt_size,
@@ -1047,7 +1248,10 @@ defmodule S7.Connection do
     end
   end
 
-  defp requests_idle?(data), do: map_size(data.pending) == 0 and data.queued_count == 0
+  defp requests_idle?(data) do
+    map_size(data.pending) == 0 and data.queued_count == 0 and is_nil(data.exclusive) and
+      is_nil(data.exclusive_waiter)
+  end
 
   defp fail_all_requests(data, error) do
     Enum.each(data.pending, fn {_reference, request} ->
@@ -1061,13 +1265,15 @@ defmodule S7.Connection do
       finish_request(request, request_failure_reply(request, error, :not_sent))
     end)
 
-    %{
+    data = %{
       data
       | pending: %{},
         queue: :queue.new(),
         queued_count: 0,
         request_index: %{}
     }
+
+    fail_runtime_owners(data, error)
   end
 
   defp cancel_request(data, monitor) do
@@ -1178,6 +1384,733 @@ defmodule S7.Connection do
       {:error, %Error{} = error} -> {:error, error, data}
     end
   end
+
+  defp begin_exclusive(from, operation, opts, data) do
+    with :ok <- validate_transaction_identity(operation, opts),
+         :ok <- ensure_transaction_available(data),
+         {:ok, exclusive} <- build_exclusive(from, operation, opts, data.timeout) do
+      data = %{data | exclusive_waiter: exclusive}
+
+      case schedule_requests(data) do
+        {:ok, data} -> {:keep_state, data}
+        {:disconnect, error, data} -> disconnect_with_error(:ready, data, error)
+      end
+    else
+      {:error, %Error{} = error} ->
+        {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  defp validate_transaction_identity(operation, opts)
+       when is_atom(operation) and is_list(opts) do
+    if Keyword.keyword?(opts) do
+      :ok
+    else
+      transaction_error(operation, :invalid_options, %{options: opts})
+    end
+  end
+
+  defp validate_transaction_identity(operation, opts) do
+    operation = if is_atom(operation), do: operation, else: :transaction
+    transaction_error(operation, :invalid_options, %{options: opts})
+  end
+
+  defp ensure_transaction_available(%{exclusive: nil, exclusive_waiter: nil}), do: :ok
+
+  defp ensure_transaction_available(data) do
+    operation =
+      case data.exclusive || data.exclusive_waiter do
+        %Exclusive{operation: operation} -> operation
+        _other -> :transaction
+      end
+
+    transaction_error(operation, :transaction_busy)
+  end
+
+  defp build_exclusive({owner, _tag} = from, operation, opts, default_step_timeout) do
+    allowed = [:timeout, :step_timeout, :maximum_messages, :maximum_bytes, :inbox_limit]
+
+    with :ok <- validate_option_keys(opts, allowed, operation),
+         {:ok, timeout} <-
+           transaction_option(opts, :timeout, @default_transaction_timeout, operation),
+         {:ok, step_timeout} <-
+           transaction_option(opts, :step_timeout, default_step_timeout, operation),
+         {:ok, maximum_messages} <-
+           transaction_option(
+             opts,
+             :maximum_messages,
+             @default_transaction_message_limit,
+             operation
+           ),
+         {:ok, maximum_bytes} <-
+           transaction_option(opts, :maximum_bytes, @default_transaction_byte_limit, operation),
+         {:ok, inbox_limit} <-
+           transaction_option(opts, :inbox_limit, @default_transaction_inbox_limit, operation) do
+      token = make_ref()
+      timer_token = make_ref()
+      timer = Process.send_after(self(), {:transaction_timeout, timer_token}, timeout)
+
+      {:ok,
+       %Exclusive{
+         token: token,
+         owner: owner,
+         monitor: Process.monitor(owner),
+         from: from,
+         operation: operation,
+         timer: timer,
+         timer_token: timer_token,
+         step_timeout: step_timeout,
+         maximum_messages: maximum_messages,
+         maximum_bytes: maximum_bytes,
+         inbox_limit: inbox_limit,
+         inbox: :queue.new()
+       }}
+    end
+  end
+
+  defp validate_option_keys(opts, allowed, operation) do
+    case Enum.find(Keyword.keys(opts), &(&1 not in allowed)) do
+      nil -> :ok
+      option -> transaction_error(operation, :invalid_option, %{option: option})
+    end
+  end
+
+  defp transaction_option(opts, key, default, operation) do
+    value = Keyword.get(opts, key, default)
+
+    if is_integer(value) and value > 0 do
+      {:ok, value}
+    else
+      transaction_error(operation, :invalid_option, %{option: key, value: value})
+    end
+  end
+
+  defp submit_transaction_request(from, token, pdu, state, data) do
+    with {:ok, exclusive} <- fetch_exclusive(data, from, token),
+         :ok <- ensure_transaction_idle(data, exclusive.operation),
+         :ok <- validate_transaction_request_pdu(pdu, exclusive.operation) do
+      request =
+        from
+        |> new_request(:transaction, exclusive.operation, [[pdu]])
+        |> monitor_request()
+
+      data
+      |> dispatch_request(request)
+      |> finish_transaction_dispatch(state)
+    else
+      {:error, %Error{} = error} ->
+        {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  defp finish_transaction_dispatch({:ok, data}, _state), do: {:keep_state, data}
+
+  defp finish_transaction_dispatch({:error, %Error{} = error, request, data}, state) do
+    finish_request(request, {:error, error})
+
+    if error.reason == :transaction_limit_exceeded,
+      do: disconnect_with_error(state, data, error),
+      else: {:keep_state, data}
+  end
+
+  defp finish_transaction_dispatch({:disconnect, %Error{} = error, request, data}, state) do
+    finish_request(request, {:error, error})
+    disconnect_with_error(state, data, error)
+  end
+
+  defp validate_transaction_request_pdu(%PDU{header: %{rosctr: :job}}, _operation), do: :ok
+
+  defp validate_transaction_request_pdu(pdu, operation),
+    do: transaction_error(operation, :invalid_transaction_pdu, %{rosctr: pdu.header.rosctr})
+
+  defp receive_transaction_job(from, token, timeout, data) do
+    with {:ok, exclusive} <- fetch_exclusive(data, from, token),
+         :ok <- validate_wait_timeout(timeout, exclusive.operation) do
+      finish_transaction_receive(from, timeout, data, exclusive)
+    else
+      {:error, %Error{} = error} ->
+        {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  defp finish_transaction_receive(
+         from,
+         _timeout,
+         data,
+         %Exclusive{inbox_count: count} = exclusive
+       )
+       when count > 0 do
+    {{:value, pdu}, inbox} = :queue.out(exclusive.inbox)
+    exclusive = %{exclusive | inbox: inbox, inbox_count: count - 1}
+    {:keep_state, %{data | exclusive: exclusive}, [{:reply, from, {:ok, pdu}}]}
+  end
+
+  defp finish_transaction_receive(from, _timeout, data, %Exclusive{receive_from: waiter})
+       when not is_nil(waiter) do
+    error = Error.new(:client, data.exclusive.operation, :transaction_receive_pending)
+    {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+  end
+
+  defp finish_transaction_receive(from, timeout, data, exclusive) do
+    token = make_ref()
+    timer = Process.send_after(self(), {:transaction_receive_timeout, token}, timeout)
+
+    exclusive = %{
+      exclusive
+      | receive_from: from,
+        receive_timer: timer,
+        receive_token: token
+    }
+
+    {:keep_state, %{data | exclusive: exclusive}}
+  end
+
+  defp reply_transaction_job(from, token, pdu, state, data) do
+    with {:ok, exclusive} <- fetch_exclusive(data, from, token),
+         :ok <- validate_transaction_reply_pdu(pdu, exclusive.operation),
+         :ok <- ensure_pdu_size(pdu, data, exclusive.operation),
+         {:ok, data} <- account_exclusive_pdu(data, pdu),
+         :ok <- send_pdu(data, pdu, exclusive.operation) do
+      {:keep_state, data, [{:reply, from, :ok}]}
+    else
+      {:error, %Error{} = error} ->
+        if error.reason == :transaction_limit_exceeded do
+          :gen_statem.reply(from, {:error, error})
+          disconnect_with_error(state, data, error)
+        else
+          {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+        end
+    end
+  end
+
+  defp validate_transaction_reply_pdu(%PDU{header: %{rosctr: rosctr}}, _operation)
+       when rosctr in [:ack, :ack_data],
+       do: :ok
+
+  defp validate_transaction_reply_pdu(pdu, operation),
+    do: transaction_error(operation, :invalid_transaction_pdu, %{rosctr: pdu.header.rosctr})
+
+  defp finish_exclusive(from, token, state, data) do
+    with {:ok, exclusive} <- fetch_exclusive(data, from, token),
+         :ok <- ensure_transaction_idle(data, exclusive.operation),
+         :ok <- ensure_transaction_consumed(exclusive) do
+      data = clear_exclusive(data)
+
+      case schedule_requests(data) do
+        {:ok, data} -> finish_exclusive_reply(from, state, data)
+        {:disconnect, error, data} -> disconnect_with_error(state, data, error)
+      end
+    else
+      {:error, %Error{} = error} ->
+        {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  defp fetch_exclusive(%{exclusive: %Exclusive{} = exclusive}, {owner, _tag}, token)
+       when exclusive.token == token and exclusive.owner == owner,
+       do: {:ok, exclusive}
+
+  defp fetch_exclusive(data, _from, _token) do
+    operation = if data.exclusive, do: data.exclusive.operation, else: :transaction
+    transaction_error(operation, :invalid_transaction)
+  end
+
+  defp ensure_transaction_idle(data, _operation) when map_size(data.pending) == 0, do: :ok
+
+  defp ensure_transaction_idle(_data, operation),
+    do: transaction_error(operation, :transaction_step_pending)
+
+  defp ensure_transaction_consumed(%Exclusive{receive_from: nil, inbox_count: 0}), do: :ok
+
+  defp ensure_transaction_consumed(exclusive),
+    do:
+      transaction_error(exclusive.operation, :transaction_incomplete, %{
+        inbox_count: exclusive.inbox_count,
+        receive_pending: not is_nil(exclusive.receive_from)
+      })
+
+  defp validate_wait_timeout(timeout, _operation) when is_integer(timeout) and timeout > 0,
+    do: :ok
+
+  defp validate_wait_timeout(timeout, operation),
+    do: transaction_error(operation, :invalid_timeout, %{timeout: timeout})
+
+  defp enqueue_transaction_job(data, pdu) do
+    case account_exclusive_pdu(data, pdu) do
+      {:ok, data} -> enqueue_accounted_transaction_job(data, pdu)
+      {:error, %Error{} = error} -> {:error, error, data}
+    end
+  end
+
+  defp enqueue_accounted_transaction_job(data, pdu) do
+    exclusive = data.exclusive
+
+    cond do
+      exclusive.receive_from ->
+        :gen_statem.reply(exclusive.receive_from, {:ok, pdu})
+        {:ok, %{data | exclusive: clear_transaction_receiver(exclusive)}}
+
+      exclusive.inbox_count < exclusive.inbox_limit ->
+        exclusive = %{
+          exclusive
+          | inbox: :queue.in(pdu, exclusive.inbox),
+            inbox_count: exclusive.inbox_count + 1
+        }
+
+        {:ok, %{data | exclusive: exclusive}}
+
+      true ->
+        error =
+          Error.new(:s7, exclusive.operation, :transaction_inbox_overflow,
+            details: %{limit: exclusive.inbox_limit}
+          )
+
+        {:error, error, data}
+    end
+  end
+
+  defp account_transaction_pdu(data, %Request{kind: :transaction}, pdu),
+    do: account_exclusive_pdu(data, pdu)
+
+  defp account_transaction_pdu(data, _request, _pdu), do: {:ok, data}
+
+  defp account_incoming_transaction_pdu(%{exclusive: %Exclusive{}} = data, pdu),
+    do: account_exclusive_pdu(data, pdu)
+
+  defp account_incoming_transaction_pdu(data, _pdu), do: {:ok, data}
+
+  defp account_exclusive_pdu(%{exclusive: %Exclusive{} = exclusive} = data, pdu) do
+    message_count = exclusive.message_count + 1
+    byte_count = exclusive.byte_count + PDU.encoded_size(pdu)
+
+    if message_count <= exclusive.maximum_messages and byte_count <= exclusive.maximum_bytes do
+      exclusive = %{exclusive | message_count: message_count, byte_count: byte_count}
+      {:ok, %{data | exclusive: exclusive}}
+    else
+      error =
+        Error.new(:s7, exclusive.operation, :transaction_limit_exceeded,
+          details: %{
+            message_count: message_count,
+            maximum_messages: exclusive.maximum_messages,
+            byte_count: byte_count,
+            maximum_bytes: exclusive.maximum_bytes
+          }
+        )
+
+      {:error, error}
+    end
+  end
+
+  defp clear_transaction_receiver(exclusive) do
+    cancel_timer(exclusive.receive_timer)
+
+    %{
+      exclusive
+      | receive_from: nil,
+        receive_timer: nil,
+        receive_token: nil
+    }
+  end
+
+  defp clear_exclusive(%{exclusive: nil} = data), do: data
+
+  defp clear_exclusive(data) do
+    exclusive = data.exclusive
+    cancel_timer(exclusive.timer)
+    cancel_timer(exclusive.receive_timer)
+    Process.demonitor(exclusive.monitor, [:flush])
+    %{data | exclusive: nil}
+  end
+
+  defp clear_exclusive_waiter(%{exclusive_waiter: nil} = data), do: data
+
+  defp clear_exclusive_waiter(data) do
+    exclusive = data.exclusive_waiter
+    cancel_timer(exclusive.timer)
+    Process.demonitor(exclusive.monitor, [:flush])
+    %{data | exclusive_waiter: nil}
+  end
+
+  defp finish_exclusive_reply(from, state, data) do
+    :gen_statem.reply(from, :ok)
+    after_owner_cleanup(state, data)
+  end
+
+  defp subscribe_userdata_owner(from, filter, opts, data) do
+    with {:ok, filter} <- validate_subscription_filter(filter),
+         {:ok, queue_limit} <- validate_subscription_options(opts),
+         :ok <- ensure_subscription_capacity(data) do
+      {owner, _tag} = from
+      reference = make_ref()
+      monitor = Process.monitor(owner)
+
+      subscription = %Subscription{
+        reference: reference,
+        owner: owner,
+        monitor: monitor,
+        filter: filter,
+        queue: :queue.new(),
+        queue_limit: queue_limit
+      }
+
+      registry = data.subscription_registry
+
+      registry = %{
+        registry
+        | entries: Map.put(registry.entries, reference, subscription),
+          monitor_index: Map.put(registry.monitor_index, monitor, reference)
+      }
+
+      data = %{data | subscription_registry: registry}
+
+      {:keep_state, data, [{:reply, from, {:ok, reference}}]}
+    else
+      {:error, %Error{} = error} ->
+        {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  defp validate_subscription_filter(filter) when is_map(filter) do
+    allowed = [:function_group, :subfunction, :type]
+
+    with nil <- Enum.find(Map.keys(filter), &(&1 not in allowed)),
+         :ok <- validate_subscription_group(Map.get(filter, :function_group, :any)),
+         :ok <- validate_subscription_subfunction(Map.get(filter, :subfunction, :any)),
+         :ok <- validate_subscription_type(Map.get(filter, :type, :any)) do
+      {:ok,
+       %{
+         function_group: Map.get(filter, :function_group, :any),
+         subfunction: Map.get(filter, :subfunction, :any),
+         type: Map.get(filter, :type, :any)
+       }}
+    else
+      option when is_atom(option) ->
+        subscription_error(:subscribe_userdata, :invalid_filter, %{option: option})
+
+      {:error, %Error{} = error} ->
+        {:error, error}
+    end
+  end
+
+  defp validate_subscription_filter(filter),
+    do: subscription_error(:subscribe_userdata, :invalid_filter, %{filter: filter})
+
+  defp validate_subscription_group(group)
+       when group in [
+              :any,
+              :programmer,
+              :cyclic,
+              :blocks,
+              :cpu,
+              :security,
+              :bsend,
+              :time,
+              :data_record_routing,
+              :nc_programming
+            ],
+       do: :ok
+
+  defp validate_subscription_group(group) when group in 0..0x3F, do: :ok
+
+  defp validate_subscription_group(group),
+    do: subscription_error(:subscribe_userdata, :invalid_filter, %{function_group: group})
+
+  defp validate_subscription_subfunction(:any), do: :ok
+  defp validate_subscription_subfunction(value) when value in 0..0xFF, do: :ok
+
+  defp validate_subscription_subfunction(value),
+    do: subscription_error(:subscribe_userdata, :invalid_filter, %{subfunction: value})
+
+  defp validate_subscription_type(type) when type in [:any, :indication, :request, :response],
+    do: :ok
+
+  defp validate_subscription_type(type),
+    do: subscription_error(:subscribe_userdata, :invalid_filter, %{type: type})
+
+  defp validate_subscription_options(opts) when is_list(opts) do
+    if Keyword.keyword?(opts) and Enum.all?(Keyword.keys(opts), &(&1 == :queue_limit)) do
+      value = Keyword.get(opts, :queue_limit, @default_subscription_queue_limit)
+
+      if is_integer(value) and value > 0 do
+        {:ok, value}
+      else
+        subscription_error(:subscribe_userdata, :invalid_option, %{
+          option: :queue_limit,
+          value: value
+        })
+      end
+    else
+      subscription_error(:subscribe_userdata, :invalid_options, %{options: opts})
+    end
+  end
+
+  defp validate_subscription_options(opts),
+    do: subscription_error(:subscribe_userdata, :invalid_options, %{options: opts})
+
+  defp ensure_subscription_capacity(data) do
+    registry = data.subscription_registry
+
+    if map_size(registry.entries) < registry.limit do
+      :ok
+    else
+      subscription_error(:subscribe_userdata, :subscription_limit, %{
+        limit: registry.limit
+      })
+    end
+  end
+
+  defp next_userdata_event(from, reference, timeout, data) do
+    with {:ok, subscription} <- fetch_subscription(data, reference, from),
+         :ok <- validate_wait_timeout(timeout, :next_userdata) do
+      finish_next_userdata(from, timeout, data, subscription)
+    else
+      {:error, %Error{} = error} ->
+        {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  defp finish_next_userdata(from, _timeout, _data, %Subscription{error: %Error{} = error}),
+    do: {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+
+  defp finish_next_userdata(
+         from,
+         _timeout,
+         data,
+         %Subscription{queued_count: count} = subscription
+       )
+       when count > 0 do
+    {{:value, message}, queue} = :queue.out(subscription.queue)
+    subscription = %{subscription | queue: queue, queued_count: count - 1}
+    data = put_subscription(data, subscription)
+    {:keep_state, data, [{:reply, from, {:ok, message}}]}
+  end
+
+  defp finish_next_userdata(from, _timeout, _data, %Subscription{waiter: waiter})
+       when not is_nil(waiter) do
+    error = Error.new(:client, :next_userdata, :subscription_receive_pending)
+    {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+  end
+
+  defp finish_next_userdata(from, timeout, data, subscription) do
+    token = make_ref()
+
+    timer =
+      Process.send_after(self(), {:subscription_timeout, subscription.reference, token}, timeout)
+
+    subscription = %{subscription | waiter: from, timer: timer, timer_token: token}
+    {:keep_state, put_subscription(data, subscription)}
+  end
+
+  defp unsubscribe_userdata_owner(from, reference, data) do
+    case fetch_subscription(data, reference, from) do
+      {:ok, subscription} ->
+        data = remove_subscription(data, subscription)
+        {:keep_state, data, [{:reply, from, :ok}]}
+
+      {:error, %Error{} = error} ->
+        {:keep_state_and_data, [{:reply, from, {:error, error}}]}
+    end
+  end
+
+  defp fetch_subscription(data, reference, {owner, _tag}) do
+    case Map.get(data.subscription_registry.entries, reference) do
+      %Subscription{owner: ^owner} = subscription -> {:ok, subscription}
+      _other -> subscription_error(:next_userdata, :invalid_subscription)
+    end
+  end
+
+  defp timeout_subscription(reference, token, data) do
+    case Map.get(data.subscription_registry.entries, reference) do
+      %Subscription{timer_token: ^token} = subscription ->
+        error = Error.new(:client, :next_userdata, :timeout)
+        :gen_statem.reply(subscription.waiter, {:error, error})
+        subscription = clear_subscription_waiter(subscription)
+        {:keep_state, put_subscription(data, subscription)}
+
+      _other ->
+        :keep_state_and_data
+    end
+  end
+
+  defp route_userdata_indication(data, message, pdu) do
+    {data, matches} =
+      Enum.reduce(data.subscription_registry.entries, {data, 0}, fn
+        {_reference, subscription}, {data, matches} ->
+          if subscription_matches?(subscription, message) do
+            {deliver_subscription(data, subscription, message), matches + 1}
+          else
+            {data, matches}
+          end
+      end)
+
+    if matches == 0, do: telemetry_unhandled_userdata(message, pdu)
+    data
+  end
+
+  defp subscription_matches?(%Subscription{filter: filter}, message) do
+    parameter = message.parameter
+
+    filter_match?(filter.function_group, parameter.function_group) and
+      filter_match?(filter.subfunction, parameter.subfunction) and
+      filter_match?(filter.type, parameter.type)
+  end
+
+  defp filter_match?(:any, _value), do: true
+  defp filter_match?(expected, value), do: expected == value
+
+  defp deliver_subscription(data, %Subscription{error: %Error{}} = subscription, _message),
+    do: put_subscription(data, subscription)
+
+  defp deliver_subscription(data, %Subscription{waiter: waiter} = subscription, message)
+       when not is_nil(waiter) do
+    :gen_statem.reply(waiter, {:ok, message})
+    put_subscription(data, clear_subscription_waiter(subscription))
+  end
+
+  defp deliver_subscription(
+         data,
+         %Subscription{queued_count: count, queue_limit: limit} = subscription,
+         message
+       )
+       when count < limit do
+    subscription = %{
+      subscription
+      | queue: :queue.in(message, subscription.queue),
+        queued_count: count + 1
+    }
+
+    put_subscription(data, subscription)
+  end
+
+  defp deliver_subscription(data, subscription, _message) do
+    error =
+      Error.new(:client, :next_userdata, :subscription_overflow,
+        details: %{limit: subscription.queue_limit}
+      )
+
+    subscription = %{
+      subscription
+      | error: error,
+        queue: :queue.new(),
+        queued_count: 0
+    }
+
+    put_subscription(data, subscription)
+  end
+
+  defp put_subscription(data, subscription) do
+    registry = data.subscription_registry
+    entries = Map.put(registry.entries, subscription.reference, subscription)
+    %{data | subscription_registry: %{registry | entries: entries}}
+  end
+
+  defp clear_subscription_waiter(subscription) do
+    cancel_timer(subscription.timer)
+    %{subscription | waiter: nil, timer: nil, timer_token: nil}
+  end
+
+  defp remove_subscription(data, subscription) do
+    subscription = clear_subscription_waiter(subscription)
+    Process.demonitor(subscription.monitor, [:flush])
+
+    registry = data.subscription_registry
+
+    registry = %{
+      registry
+      | entries: Map.delete(registry.entries, subscription.reference),
+        monitor_index: Map.delete(registry.monitor_index, subscription.monitor)
+    }
+
+    %{data | subscription_registry: registry}
+  end
+
+  defp fail_runtime_owners(data, error) do
+    data = fail_exclusive_owner(data, error)
+
+    Enum.each(data.subscription_registry.entries, fn {_reference, subscription} ->
+      if subscription.waiter do
+        :gen_statem.reply(
+          subscription.waiter,
+          {:error, with_operation(error, :next_userdata)}
+        )
+      end
+
+      cancel_timer(subscription.timer)
+      Process.demonitor(subscription.monitor, [:flush])
+    end)
+
+    registry = %{data.subscription_registry | entries: %{}, monitor_index: %{}}
+    %{data | subscription_registry: registry}
+  end
+
+  defp fail_exclusive_owner(data, error) do
+    if data.exclusive && data.exclusive.receive_from do
+      :gen_statem.reply(
+        data.exclusive.receive_from,
+        {:error, with_operation(error, data.exclusive.operation)}
+      )
+    end
+
+    if data.exclusive_waiter do
+      :gen_statem.reply(
+        data.exclusive_waiter.from,
+        {:error, with_operation(error, data.exclusive_waiter.operation)}
+      )
+    end
+
+    data |> clear_exclusive() |> clear_exclusive_waiter()
+  end
+
+  defp handle_owner_down(%{exclusive: %Exclusive{monitor: monitor} = exclusive} = data, monitor) do
+    error = Error.new(:client, exclusive.operation, :transaction_owner_down)
+    {:exclusive, error, data}
+  end
+
+  defp handle_owner_down(
+         %{exclusive_waiter: %Exclusive{monitor: monitor}} = data,
+         monitor
+       ),
+       do: {:ok, clear_exclusive_waiter(data)}
+
+  defp handle_owner_down(data, monitor) do
+    registry = data.subscription_registry
+
+    case Map.pop(registry.monitor_index, monitor) do
+      {nil, _index} ->
+        {:ok, cancel_request(data, monitor)}
+
+      {reference, index} ->
+        case Map.pop(registry.entries, reference) do
+          {nil, _subscriptions} ->
+            registry = %{registry | monitor_index: index}
+            {:ok, %{data | subscription_registry: registry}}
+
+          {%Subscription{} = subscription, subscriptions} ->
+            cancel_timer(subscription.timer)
+            registry = %{registry | entries: subscriptions, monitor_index: index}
+            {:ok, %{data | subscription_registry: registry}}
+        end
+    end
+  end
+
+  defp continue_after_owner_down(state, data) do
+    case schedule_requests(data) do
+      {:ok, data} -> after_owner_cleanup(state, data)
+      {:disconnect, error, data} -> disconnect_with_error(state, data, error)
+    end
+  end
+
+  defp after_owner_cleanup(:draining, data) do
+    if requests_idle?(data), do: complete_drain(data), else: {:keep_state, data}
+  end
+
+  defp after_owner_cleanup(_state, data), do: {:keep_state, data}
+
+  defp subscription_error(operation, reason, details \\ %{}),
+    do: {:error, Error.new(:client, operation, reason, details: details)}
+
+  defp transaction_error(operation, reason, details \\ %{}),
+    do: {:error, Error.new(:client, operation, reason, details: details)}
 
   defp submit_request(from, operation, data) do
     with {:ok, request} <- build_request(from, operation, data),
@@ -1309,6 +2242,21 @@ defmodule S7.Connection do
     data
   end
 
+  defp schedule_requests(%{exclusive: %Exclusive{}} = data), do: {:ok, data}
+
+  defp schedule_requests(%{exclusive_waiter: %Exclusive{} = exclusive, pending: pending} = data)
+       when map_size(pending) == 0 do
+    if Process.alive?(exclusive.owner) do
+      :gen_statem.reply(exclusive.from, {:ok, exclusive.token})
+      exclusive = %{exclusive | from: nil}
+      {:ok, %{data | exclusive: exclusive, exclusive_waiter: nil}}
+    else
+      data |> clear_exclusive_waiter() |> schedule_requests()
+    end
+  end
+
+  defp schedule_requests(%{exclusive_waiter: %Exclusive{}} = data), do: {:ok, data}
+
   defp schedule_requests(data)
        when map_size(data.pending) >= data.max_jobs or data.queued_count == 0,
        do: {:ok, data}
@@ -1359,13 +2307,15 @@ defmodule S7.Connection do
     }
 
     with {:ok, pdu} <- encode_batch(request, batch, reference),
-         :ok <- ensure_pdu_size(pdu, data, request.operation) do
+         :ok <- ensure_pdu_size(pdu, data, request.operation),
+         {:ok, data} <- account_transaction_pdu(data, request, pdu) do
       request = telemetry_request_start(request, pdu, data)
 
       case send_pdu(data, pdu, request.operation) do
         :ok ->
           token = make_ref()
-          timer = Process.send_after(self(), {:request_timeout, reference, token}, data.timeout)
+          timeout = request_timeout(data, request)
+          timer = Process.send_after(self(), {:request_timeout, reference, token}, timeout)
           request = %{request | timer: timer, timer_token: token}
 
           pending = Map.put(data.pending, reference, request)
@@ -1393,6 +2343,15 @@ defmodule S7.Connection do
 
   defp encode_batch(%Request{kind: :szl}, [%UserData{} = message], reference),
     do: UserData.to_pdu(message, reference)
+
+  defp encode_batch(%Request{kind: :transaction}, [%PDU{} = pdu], reference) do
+    {:ok, put_in(pdu.header.pdu_reference, reference)}
+  end
+
+  defp request_timeout(%{exclusive: %Exclusive{} = exclusive}, %Request{kind: :transaction}),
+    do: exclusive.step_timeout
+
+  defp request_timeout(data, _request), do: data.timeout
 
   defp allocate_reference(data), do: allocate_reference(data, data.reference, 0)
 
@@ -1479,14 +2438,30 @@ defmodule S7.Connection do
        ) do
     case UserData.from_pdu(pdu) do
       {:ok, %UserData{parameter: %{type: :indication}} = message} ->
-        telemetry_unhandled_userdata(message, pdu)
-        handle_received_pdus(pdus, data)
+        case account_incoming_transaction_pdu(data, pdu) do
+          {:ok, data} ->
+            data = route_userdata_indication(data, message, pdu)
+            handle_received_pdus(pdus, data)
+
+          {:error, %Error{} = error} ->
+            {:disconnect, error, data}
+        end
 
       {:ok, _message} ->
         handle_correlatable_pdu(pdu, pdus, data)
 
       {:error, %Error{} = error} ->
         {:disconnect, error, data}
+    end
+  end
+
+  defp handle_received_pdus(
+         [%PDU{header: %{rosctr: :job}} = pdu | pdus],
+         %{exclusive: %Exclusive{}} = data
+       ) do
+    case enqueue_transaction_job(data, pdu) do
+      {:ok, data} -> handle_received_pdus(pdus, data)
+      {:error, %Error{} = error, data} -> {:disconnect, error, data}
     end
   end
 
@@ -1539,6 +2514,13 @@ defmodule S7.Connection do
   end
 
   defp handle_correlatable_pdu(pdu, pdus, data) do
+    case account_incoming_transaction_pdu(data, pdu) do
+      {:ok, data} -> correlate_accounted_pdu(pdu, pdus, data)
+      {:error, %Error{} = error} -> {:disconnect, error, data}
+    end
+  end
+
+  defp correlate_accounted_pdu(pdu, pdus, data) do
     reference = pdu.header.pdu_reference
 
     case take_pending(data, reference) do
@@ -1633,6 +2615,8 @@ defmodule S7.Connection do
     end
   end
 
+  defp decode_batch_response(%Request{kind: :transaction}, %PDU{} = pdu), do: {:ok, [pdu]}
+
   defp handle_batch_results(data, request, item_results) do
     if caller_alive?(request) and not request.cancelled do
       handle_active_batch_results(data, request, item_results)
@@ -1654,6 +2638,11 @@ defmodule S7.Connection do
 
   defp handle_active_batch_results(data, %Request{kind: :userdata} = request, [response]) do
     finish_request(request, {:ok, response})
+    data
+  end
+
+  defp handle_active_batch_results(data, %Request{kind: :transaction} = request, [pdu]) do
+    finish_request(request, {:ok, pdu})
     data
   end
 
@@ -1706,7 +2695,7 @@ defmodule S7.Connection do
   end
 
   defp request_failure_reply(%Request{kind: kind, operation: operation}, error, _send_state)
-       when kind in [:read, :write, :userdata, :szl],
+       when kind in [:read, :write, :userdata, :szl, :transaction],
        do: {:error, with_operation(error, operation)}
 
   defp request_failure_reply(%Request{kind: :read_multi} = request, error, send_state) do
@@ -2279,6 +3268,20 @@ defmodule S7.Connection do
 
   defp operation_name({:read_szl, _id, _index, _limits, operation}) when is_atom(operation),
     do: operation
+
+  defp operation_name({:begin_transaction, operation, _opts}) when is_atom(operation),
+    do: operation
+
+  defp operation_name({operation, _token, _value})
+       when operation in [:transaction_request, :transaction_receive, :transaction_reply],
+       do: operation
+
+  defp operation_name({operation, _value})
+       when operation in [:end_transaction, :unsubscribe_userdata],
+       do: operation
+
+  defp operation_name({:subscribe_userdata, _filter, _opts}), do: :subscribe_userdata
+  defp operation_name({:next_userdata, _subscription, _timeout}), do: :next_userdata
 
   defp operation_name({operation, _address, _value}), do: operation
   defp operation_name({operation, _items}) when operation in [:write_multi], do: operation

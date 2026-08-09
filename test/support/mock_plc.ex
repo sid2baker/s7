@@ -185,6 +185,38 @@ defmodule S7.Test.MockPLC do
   end
 
   defp handle_received(
+         {:ok, %PDU{header: %{rosctr: :job}, parameters: <<0xEE, 0x01>>} = request, state}
+       ) do
+    count = Keyword.get(state.options, :transaction_jobs, 1)
+
+    Enum.each(1..count, fn sequence ->
+      job = PDU.new(:job, 0x7000 + sequence, <<0xEE, 0x02, sequence>>, <<sequence>>)
+      :ok = send_pdu(state, job)
+    end)
+
+    response =
+      PDU.new(
+        :ack_data,
+        request.header.pdu_reference,
+        <<0xEE, 0x01>>,
+        "transaction-response"
+      )
+
+    :ok = send_pdu(state, response)
+    state |> notify_request(:transaction, request) |> serve()
+  end
+
+  defp handle_received(
+         {:ok,
+          %PDU{header: %{rosctr: rosctr, pdu_reference: reference}, parameters: <<0xEE, 0x03>>},
+          state}
+       )
+       when rosctr in [:ack, :ack_data] do
+    send(state.owner, {:mock_plc_transaction_reply, reference})
+    serve(state)
+  end
+
+  defp handle_received(
          {:ok, %PDU{parameters: <<0x04, count, item_binary::binary>>} = request, state}
        )
        when count > 0 do
@@ -270,19 +302,24 @@ defmodule S7.Test.MockPLC do
          request_pdu,
          request
        ) do
-    indication = %UserData{
-      parameter: %Parameter{
-        method: 0x12,
-        type: :indication,
-        function_group: :cpu,
-        subfunction: 3,
-        sequence: 9
-      },
-      payload: %Payload{data: "event"}
-    }
+    count = Keyword.get(state.options, :indication_count, 1)
 
-    {:ok, indication_pdu} = UserData.to_pdu(indication, 0)
-    :ok = send_pdu(state, indication_pdu)
+    Enum.each(1..count, fn sequence ->
+      indication = %UserData{
+        parameter: %Parameter{
+          method: 0x12,
+          type: :indication,
+          function_group: :cpu,
+          subfunction: 3,
+          sequence: sequence
+        },
+        payload: %Payload{data: "event#{sequence}"}
+      }
+
+      {:ok, indication_pdu} = UserData.to_pdu(indication, 0)
+      :ok = send_pdu(state, indication_pdu)
+    end)
+
     send_userdata_response(%{state | userdata_fault: nil}, request_pdu, request)
   end
 

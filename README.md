@@ -79,6 +79,7 @@ The client returned by `connect/2` is the PID that owns the socket. All public f
 | `:max_tpkt_size` | `65535` | Maximum accepted TPKT frame size |
 | `:receive_buffer_limit` | derived | Maximum buffered TCP bytes; at least `:max_tpkt_size` |
 | `:max_items_per_pdu` | `20` | Conservative peer-compatible Read/Write Var item limit |
+| `:subscription_limit` | `16` | Maximum session-local userdata indication subscriptions |
 
 The PLC may negotiate smaller PDU or job limits. `S7.Client.info/1` reports negotiated limits,
 the next reference, and current queue/in-flight counts. The default remains one job for broad PLC

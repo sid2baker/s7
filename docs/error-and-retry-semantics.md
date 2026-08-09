@@ -72,6 +72,20 @@ prevents later work from sharing a connection with an abandoned server-side
 userdata transaction. A PLC-reported SZL parameter error is complete and does
 not invalidate the session.
 
+Exclusive transactions are never replayed. A transaction has an overall
+deadline, a per-request timeout, aggregate message and byte limits, and a
+bounded inbox for PLC-initiated Jobs. An invalid owner/token or local option
+failure sends no bytes. Owner death, overall timeout, inbox overflow, or an
+incoming aggregate-limit violation closes the session because the peer may be
+waiting for a service-specific continuation. A per-receive timeout leaves the
+transaction owned and usable; the owner must either continue it or finish it.
+
+Userdata subscriptions are session-local and pull based. A waiter timeout does
+not remove its subscription. Queue overflow makes only that subscription
+terminal with `:subscription_overflow`; the connection remains usable. Caller
+death removes its subscriptions, while connection loss wakes all subscription
+waiters and requires explicit resubscription after reconnect.
+
 ## Multi-Item Contract
 
 Multi-item responses preserve input order and retain each PLC return code in
